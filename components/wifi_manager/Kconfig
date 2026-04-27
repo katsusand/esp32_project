@@ -1,0 +1,36 @@
+menu "Wi-Fi Manager"
+
+    config WIFI_MANAGER_TASK_STACK_SIZE
+        int "Wi-Fi manager task stack size"
+        default 7168
+        range 4096 32768
+        depends on ESP32_WIFI_STA_ENABLED
+        help
+            Wi-Fi manager task の stack size です。
+            English: this task manages STA state and connection requests,
+            while the foreground setup UI runs on the app_shell task.
+
+    config WIFI_MANAGER_TASK_PRIORITY
+        int "Wi-Fi manager task priority"
+        default 8
+        range 1 24
+        depends on ESP32_WIFI_STA_ENABLED
+
+    config WIFI_MANAGER_MONITOR_INTERVAL_MS
+        int "Wi-Fi manager monitor interval (ms)"
+        default 2000
+        range 500 60000
+        depends on ESP32_WIFI_STA_ENABLED
+        help
+            Interval used while connected to poll the STA status and detect
+            reconnection/setup transitions.
+
+    config WIFI_MANAGER_STACK_LOG_INTERVAL_MS
+        int "Wi-Fi manager stack log interval (ms)"
+        default 30000
+        range 1000 600000
+        depends on ESP32_WIFI_STA_ENABLED
+        help
+            Minimum interval between Wi-Fi manager stack high-water log lines.
+
+endmenu

@@ -1,0 +1,35 @@
+menu "CYD Speaker"
+
+    config CYD_SPEAKER_ENABLED
+        bool "Enable CYD speaker output"
+        default y
+
+    config CYD_SPEAKER_GPIO
+        int "CYD speaker GPIO"
+        default 26
+        range -1 48
+        depends on CYD_SPEAKER_ENABLED
+        help
+            PWM output GPIO for the CYD speaker or passive buzzer.
+
+    config CYD_SPEAKER_LEDC_TIMER
+        int "CYD speaker LEDC timer"
+        default 0
+        range 0 3
+        depends on CYD_SPEAKER_ENABLED
+
+    config CYD_SPEAKER_LEDC_CHANNEL
+        int "CYD speaker LEDC channel"
+        default 0
+        range 0 7
+        depends on CYD_SPEAKER_ENABLED
+
+    config CYD_SPEAKER_VOLUME_PERCENT
+        int "CYD speaker volume percent"
+        default 50
+        range 1 100
+        depends on CYD_SPEAKER_ENABLED
+        help
+            Approximate PWM duty scale. Passive buzzers are usually loudest near 50 percent duty.
+
+endmenu

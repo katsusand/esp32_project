@@ -1,0 +1,17 @@
+menu "CYD Clock App"
+
+    config CYD_CLOCK_APP_UPDATE_INTERVAL_MS
+        int "CYD clock app update interval (ms)"
+        default 1000
+        range 250 60000
+        help
+            時計画面を更新する間隔です。
+
+    config CYD_CLOCK_APP_STACK_LOG_INTERVAL_MS
+        int "CYD clock app stack log interval (ms)"
+        default 30000
+        range 1000 600000
+        help
+            Minimum interval between clock app stack high-water log lines.
+
+endmenu

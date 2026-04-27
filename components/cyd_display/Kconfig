@@ -1,0 +1,122 @@
+menu "CYD Display"
+
+    choice CYD_DISPLAY_PANEL_TYPE
+        prompt "CYD TFT panel type"
+        default CYD_DISPLAY_PANEL_ILI9341
+        help
+            Some CYD-compatible clone boards ship with alternate LCD controller
+            variants or init sequences despite looking identical externally.
+
+        config CYD_DISPLAY_PANEL_ILI9341
+            bool "ILI9341"
+
+        config CYD_DISPLAY_PANEL_ILI9341_2
+            bool "ILI9341 variant 2"
+
+        config CYD_DISPLAY_PANEL_ST7789
+            bool "ST7789"
+    endchoice
+
+    config CYD_DISPLAY_WIDTH
+        int "CYD display logical width"
+        default 320
+        range 1 2048
+
+    config CYD_DISPLAY_HEIGHT
+        int "CYD display logical height"
+        default 240
+        range 1 2048
+
+    config CYD_DISPLAY_ROTATION
+        int "CYD default rotation"
+        default 1
+        range 0 7
+        help
+            Standard ESP32-2432S028R boards are typically used in landscape
+            orientation with rotation set to 1.
+
+    config CYD_DISPLAY_BACKLIGHT_GPIO
+        int "CYD backlight GPIO"
+        default 21
+        range -1 48
+
+    config CYD_DISPLAY_BACKLIGHT_BRIGHTNESS
+        int "CYD backlight brightness"
+        default 192
+        range 0 255
+
+    config CYD_DISPLAY_SPI_HOST
+        int "CYD TFT SPI host"
+        default 2
+        range 2 3
+        help
+            2 = SPI2_HOST, 3 = SPI3_HOST.
+
+    config CYD_DISPLAY_PIN_SCLK
+        int "CYD TFT SCLK GPIO"
+        default 14
+        range -1 48
+
+    config CYD_DISPLAY_PIN_MOSI
+        int "CYD TFT MOSI GPIO"
+        default 13
+        range -1 48
+
+    config CYD_DISPLAY_PIN_MISO
+        int "CYD TFT MISO GPIO"
+        default 12
+        range -1 48
+
+    config CYD_DISPLAY_PIN_DC
+        int "CYD TFT DC GPIO"
+        default 2
+        range -1 48
+
+    config CYD_DISPLAY_PIN_CS
+        int "CYD TFT CS GPIO"
+        default 15
+        range -1 48
+
+    config CYD_DISPLAY_PIN_RST
+        int "CYD TFT RST GPIO"
+        default -1
+        range -1 48
+        help
+            Standard ESP32-2432S028R boards usually do not expose a dedicated
+            display reset line.
+
+    config CYD_DISPLAY_OFFSET_X
+        int "CYD TFT X offset"
+        default 0
+        range -320 320
+
+    config CYD_DISPLAY_OFFSET_Y
+        int "CYD TFT Y offset"
+        default 0
+        range -320 320
+
+    config CYD_DISPLAY_OFFSET_ROTATION
+        int "CYD TFT rotation offset"
+        default 0
+        range 0 7
+
+    config CYD_DISPLAY_RGB_ORDER
+        bool "CYD TFT uses BGR/RGB swapped color order"
+        default n
+        help
+            Enable this if red/blue colors appear swapped on your panel.
+
+    config CYD_DISPLAY_INVERT
+        bool "CYD TFT requires color inversion"
+        default n
+        help
+            Enable this if black/white or general panel colors look inverted.
+
+    config CYD_DISPLAY_READABLE
+        bool "CYD TFT supports SPI readback"
+        default y
+        help
+            Disable this on clone boards if display init works but the image is
+            unstable or corrupted.
+
+endmenu

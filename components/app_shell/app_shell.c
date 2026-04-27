@@ -1,0 +1,107 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/portmacro.h"
+#include "esp_check.h"
+#include "esp_log.h"
+#include "sdkconfig.h"
+#include "app_shell.h"
+#include "cyd_display.h"
+
+#define TAG "app_shell"
+
+static TaskHandle_t s_app_shell_task_handle;
+static portMUX_TYPE s_app_shell_lock = portMUX_INITIALIZER_UNLOCKED;
+static const app_shell_app_t *s_app_shell_active_app;
+static const app_shell_app_t *s_app_shell_pending_app;
+
+static esp_err_t app_shell_apply_pending_switch(void)
+{
+    const app_shell_app_t *next_app = NULL;
+    const app_shell_app_t *from_app = NULL;
+
+    portENTER_CRITICAL(&s_app_shell_lock);
+    if (s_app_shell_pending_app != NULL &&
+        s_app_shell_pending_app != s_app_shell_active_app) {
+        next_app = s_app_shell_pending_app;
+        s_app_shell_pending_app = NULL;
+    } else {
+        s_app_shell_pending_app = NULL;
+    }
+    portEXIT_CRITICAL(&s_app_shell_lock);
+
+    if (next_app == NULL) {
+        return ESP_OK;
+    }
+
+    from_app = s_app_shell_active_app;
+    if (s_app_shell_active_app != NULL && s_app_shell_active_app->leave != NULL) {
+        ESP_RETURN_ON_ERROR(s_app_shell_active_app->leave(s_app_shell_active_app->ctx),
+                            TAG,
+                            "active app leave failed");
+    }
+
+    s_app_shell_active_app = next_app;
+    if (s_app_shell_active_app->enter != NULL) {
+        ESP_RETURN_ON_ERROR(s_app_shell_active_app->enter(s_app_shell_active_app->ctx, from_app),
+                            TAG,
+                            "next app enter failed");
+    }
+
+    ESP_LOGI(TAG, "switched to app: %s", s_app_shell_active_app->id);
+    return ESP_OK;
+}
+
+static void app_shell_task(void *arg)
+{
+    const app_shell_app_t *initial_app = (const app_shell_app_t *)arg;
+
+    ESP_ERROR_CHECK(cyd_display_claim_owner());
+    s_app_shell_active_app = initial_app;
+
+    if (s_app_shell_active_app != NULL && s_app_shell_active_app->enter != NULL) {
+        ESP_ERROR_CHECK(s_app_shell_active_app->enter(s_app_shell_active_app->ctx, NULL));
+    }
+
+    while (true) {
+        if (s_app_shell_active_app != NULL && s_app_shell_active_app->step != NULL) {
+            ESP_ERROR_CHECK(s_app_shell_active_app->step(s_app_shell_active_app->ctx));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        ESP_ERROR_CHECK(app_shell_apply_pending_switch());
+    }
+}
+
+esp_err_t app_shell_start(const app_shell_app_t *initial_app)
+{
+    ESP_RETURN_ON_FALSE(initial_app != NULL, ESP_ERR_INVALID_ARG, TAG, "initial app required");
+
+    if (s_app_shell_task_handle != NULL) {
+        return ESP_OK;
+    }
+
+    BaseType_t task_ok = xTaskCreate(app_shell_task,
+                                     "app_shell",
+                                     CONFIG_APP_SHELL_TASK_STACK_SIZE,
+                                     (void *)initial_app,
+                                     CONFIG_APP_SHELL_TASK_PRIORITY,
+                                     &s_app_shell_task_handle);
+    ESP_RETURN_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, TAG, "task create failed");
+    return ESP_OK;
+}
+
+esp_err_t app_shell_switch_to(const app_shell_app_t *next_app)
+{
+    ESP_RETURN_ON_FALSE(next_app != NULL, ESP_ERR_INVALID_ARG, TAG, "next app required");
+
+    portENTER_CRITICAL(&s_app_shell_lock);
+    s_app_shell_pending_app = next_app;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+    return ESP_OK;
+}
+
+const app_shell_app_t *app_shell_get_active_app(void)
+{
+    return s_app_shell_active_app;
+}

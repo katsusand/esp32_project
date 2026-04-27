@@ -1,0 +1,24 @@
+menu "CYD Status LED"
+
+    config CYD_STATUS_LED_RED_GPIO
+        int "CYD RGB LED red GPIO"
+        default 4
+        range 0 48
+        help
+            GPIO used by the CYD onboard red LED channel.
+
+    config CYD_STATUS_LED_GREEN_GPIO
+        int "CYD RGB LED green GPIO"
+        default 16
+        range 0 48
+        help
+            GPIO used by the CYD onboard green LED channel.
+
+    config CYD_STATUS_LED_BLUE_GPIO
+        int "CYD RGB LED blue GPIO"
+        default 17
+        range 0 48
+        help
+            GPIO used by the CYD onboard blue LED channel.
+
+endmenu

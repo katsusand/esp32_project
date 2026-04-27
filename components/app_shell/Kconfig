@@ -1,0 +1,19 @@
+menu "App Shell"
+
+    config APP_SHELL_TASK_STACK_SIZE
+        int "App shell task stack size"
+        default 6144
+        range 3072 16384
+        help
+            `app_shell` task の stack size です。
+            English: this single owner task runs the active foreground app and
+            owns `cyd_display`, so its stack must cover the active app step.
+
+    config APP_SHELL_TASK_PRIORITY
+        int "App shell task priority"
+        default 5
+        range 1 24
+        help
+            `app_shell` task priority です。
+
+endmenu

@@ -1,0 +1,3 @@
+idf_component_register(SRCS "hello_app.c"
+                    INCLUDE_DIRS "include"
+                    REQUIRES app_shell cyd_display cyd_input cyd_ui)

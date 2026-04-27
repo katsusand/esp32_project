@@ -1,0 +1,209 @@
+menu "CYD Input"
+
+    config CYD_TOUCH_ENABLED
+        bool "Enable CYD XPT2046 touch controller"
+        default y
+
+    config CYD_TOUCH_SPI_HOST
+        int "CYD touch SPI host"
+        default 3
+        range 2 3
+        depends on CYD_TOUCH_ENABLED
+        help
+            2 = SPI2_HOST, 3 = SPI3_HOST.
+
+    config CYD_TOUCH_PIN_SCLK
+        int "CYD touch SCLK GPIO"
+        default 25
+        range -1 48
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_PIN_MOSI
+        int "CYD touch MOSI GPIO"
+        default 32
+        range -1 48
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_PIN_MISO
+        int "CYD touch MISO GPIO"
+        default 39
+        range -1 48
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_PIN_CS
+        int "CYD touch CS GPIO"
+        default 33
+        range -1 48
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_PIN_INT
+        int "CYD touch interrupt GPIO"
+        default 36
+        range -1 48
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_OFFSET_ROTATION
+        int "CYD touch rotation offset"
+        default 0
+        range 0 7
+        depends on CYD_TOUCH_ENABLED
+        help
+            Additional touch rotation/flip adjustment before calibration.
+
+    config CYD_TOUCH_X_MIN
+        int "CYD touch raw X min"
+        default 300
+        range 0 4095
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_X_MAX
+        int "CYD touch raw X max"
+        default 3900
+        range 0 4095
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_Y_MIN
+        int "CYD touch raw Y min"
+        default 400
+        range 0 4095
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_Y_MAX
+        int "CYD touch raw Y max"
+        default 3900
+        range 0 4095
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_POLL_PERIOD_MS
+        int "CYD touch polling period (ms)"
+        default 10
+        range 1 1000
+        depends on CYD_TOUCH_ENABLED
+        help
+            Polling period for touch sampling. 10 ms matches a 100 Hz RTOS tick.
+
+    config CYD_TOUCH_USE_IRQ
+        bool "Wake CYD touch polling from IRQ"
+        default y
+        depends on CYD_TOUCH_ENABLED
+        help
+            Use the XPT2046 T_IRQ line to wake the touch task when a touch
+            starts. The task still polls while pressed so release, movement,
+            long-press, and click timing remain deterministic.
+
+    config CYD_TOUCH_IDLE_POLL_PERIOD_MS
+        int "CYD touch idle fallback polling period (ms)"
+        default 250
+        range 50 5000
+        depends on CYD_TOUCH_ENABLED
+        help
+            Fallback interval used while the touch task is waiting for T_IRQ.
+            This catches missed edges or boards where the IRQ line is already
+            low before the task arms the interrupt.
+
+    config CYD_INPUT_BINARY_STABLE_COUNT
+        int "CYD input binary stable sample count"
+        default 2
+        range 1 8
+        help
+            Number of consecutive identical binary samples required before a
+            touch or switch state change is accepted.
+
+    config CYD_BOOT_BUTTON_ENABLED
+        bool "Enable BOOT button GPIO input events"
+        default y
+        help
+            GPIO0 BOOT ボタンを通常動作中の入力として扱います。
+            English supplement: GPIO0 is a boot strapping pin. Pressing it
+            during reset enters UART download mode, but after the application
+            has booted it can be sampled as an active-low GPIO button.
+
+    config CYD_BOOT_BUTTON_GPIO
+        int "CYD BOOT button GPIO"
+        default 0
+        range 0 48
+        depends on CYD_BOOT_BUTTON_ENABLED
+        help
+            BOOT ボタンに接続された GPIO 番号です。一般的な ESP32 DevKit /
+            CYD では GPIO0 です。
+
+    config CYD_BOOT_BUTTON_ENABLE_INTERNAL_PULLUP
+        bool "Enable internal pull-up for BOOT button"
+        default y
+        depends on CYD_BOOT_BUTTON_ENABLED
+        help
+            BOOT ボタンは通常 active-low なので、内部 pull-up を有効にします。
+            English supplement: Disable this only when the board already
+            provides the required external pull-up or the pin is shared in a
+            way that must not alter pull configuration.
+
+    config CYD_BOOT_BUTTON_LONG_PRESS_MAX_SECONDS
+        int "CYD BOOT button long press max seconds"
+        default 15
+        range 1 15
+        depends on CYD_BOOT_BUTTON_ENABLED
+        help
+            BOOT ボタン長押しイベントで通知する最大秒数です。
+            English supplement: Long-press events are emitted once per second
+            while held, capped at this value.
+
+    config CYD_BOOT_BUTTON_DOUBLE_CLICK_TIMEOUT_MS
+        int "CYD BOOT button double click timeout (ms)"
+        default 500
+        range 50 2000
+        depends on CYD_BOOT_BUTTON_ENABLED
+        help
+            BOOT ボタンの短押しを double click としてまとめる最大間隔です。
+            English supplement: A single click is delayed until this timeout
+            expires. A second short press/release within the timeout emits
+            DOUBLE_CLICK immediately instead.
+
+    config CYD_TOUCH_LOG_EVENTS
+        bool "Log CYD touch events to serial"
+        default y
+        depends on CYD_TOUCH_ENABLED
+        help
+            When enabled, debounced touch press/release and coordinate updates
+            are logged.
+
+    config CYD_TOUCH_LOG_IRQ_LEVEL
+        bool "Include CYD touch IRQ level in serial logs"
+        default y
+        depends on CYD_TOUCH_LOG_EVENTS
+        help
+            Useful for checking whether the interrupt line reacts while touching.
+
+    config CYD_TOUCH_USE_NVS_CALIBRATION
+        bool "Load/save CYD touch calibration in NVS"
+        default y
+        depends on CYD_TOUCH_ENABLED
+
+    config CYD_TOUCH_RUN_CALIBRATION_ON_BOOT
+        bool "Run touch calibration on boot if none is saved"
+        default n
+        depends on CYD_TOUCH_USE_NVS_CALIBRATION
+
+    config CYD_INPUT_EVENT_QUEUE_LENGTH
+        int "CYD input event queue length"
+        default 16
+        range 1 32
+        help
+            入力イベントを保持する FreeRTOS queue の長さです。
+            English supplement: When full, the oldest event is dropped so recent touch intent is preserved.
+
+    config CYD_INPUT_LONG_PRESS_MS
+        int "CYD input long press threshold (ms)"
+        default 500
+        range 10 5000
+        help
+            Hold duration required before a long-press event is emitted.
+
+    config CYD_INPUT_LONG_PRESS_REPEAT_MS
+        int "CYD input long press repeat interval (ms)"
+        default 1000
+        range 100 5000
+        help
+            Interval for repeated long-press progress events after the initial
+            long-press threshold has been reached.
+
+endmenu

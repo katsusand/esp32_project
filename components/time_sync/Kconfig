@@ -1,0 +1,96 @@
+menu "Time Sync"
+
+    config TIME_SYNC_ENABLED
+        bool "Enable NTP time synchronization"
+        default y
+        depends on ESP32_WIFI_STA_ENABLED
+        help
+            Wi-Fi 接続後に SNTP/NTP でシステム時刻を同期します。
+            English supplement: This task waits for Wi-Fi before each sync.
+
+    config TIME_SYNC_TASK_STACK_SIZE
+        int "Time sync task stack size"
+        default 4096
+        range 2048 16384
+        depends on TIME_SYNC_ENABLED
+        help
+            time_sync task の stack size です。
+            有効範囲は 2048 から 16384 bytes です。
+
+    config TIME_SYNC_TASK_PRIORITY
+        int "Time sync task priority"
+        default 5
+        range 1 24
+        depends on TIME_SYNC_ENABLED
+        help
+            time_sync task の FreeRTOS priority です。
+            有効範囲は 1 から 24 です。
+
+    config TIME_SYNC_SERVER
+        string "NTP server"
+        default "ntp.nict.jp"
+        depends on TIME_SYNC_ENABLED
+        help
+            同期に使う NTP サーバー名です。
+
+    config TIME_SYNC_INTERVAL_MINUTES
+        int "NTP sync base interval (minutes)"
+        default 60
+        range 3 1440
+        depends on TIME_SYNC_ENABLED
+        help
+            次回同期までの基準間隔です。
+            有効範囲は 3 から 1440 分です。開発中に短い間隔で確認したい場合は
+            5 分程度にし、`TIME_SYNC_JITTER_MINUTES` を 0 にすると観測しやすくなります。
+            English supplement: menuconfig may ignore values outside the Kconfig range without an obvious warning.
+
+    config TIME_SYNC_JITTER_MINUTES
+        int "NTP sync jitter range (minutes)"
+        default 5
+        range 0 60
+        depends on TIME_SYNC_ENABLED
+        help
+            基準間隔に対して加減するランダムな幅です。値は分単位で設定し、
+            実際のゆらぎは秒単位でランダム化します。
+            有効範囲は 0 から 60 分です。開発中は 0 にすると同期間隔が固定されます。
+            English supplement: The next delay is base interval +/- jitter, randomized in seconds.
+
+    config TIME_SYNC_WAIT_TIMEOUT_MS
+        int "NTP sync wait timeout (ms)"
+        default 15000
+        range 1000 120000
+        depends on TIME_SYNC_ENABLED
+        help
+            1回の SNTP 同期待ち timeout です。
+            有効範囲は 1000 から 120000 ms です。
+
+    config TIME_SYNC_RETRY_DELAY_SECONDS
+        int "NTP sync retry delay after failure (seconds)"
+        default 10
+        range 1 3600
+        depends on TIME_SYNC_ENABLED
+        help
+            同期失敗後、通常周期に戻る前に短い間隔で再試行する待ち時間です。
+            有効範囲は 1 から 3600 秒です。
+            English supplement: This delay is used only for consecutive retry attempts after a failed sync.
+
+    config TIME_SYNC_RETRY_ATTEMPTS
+        int "NTP sync retry attempts after failure"
+        default 5
+        range 0 20
+        depends on TIME_SYNC_ENABLED
+        help
+            同期失敗後、通常周期に戻る前に追加で再試行する回数です。
+            有効範囲は 0 から 20 回です。
+            0 にすると失敗時リトライを行いません。
+            English supplement: Retries are attempted before returning to the normal jittered interval.
+
+    config TIME_SYNC_TIMEZONE
+        string "POSIX timezone"
+        default "JST-9"
+        depends on TIME_SYNC_ENABLED
+        help
+            C ライブラリのローカル時刻変換に使う POSIX TZ 文字列です。
+            日本時間は JST-9 です。UTC のまま扱う場合は空文字にします。
+
+endmenu
