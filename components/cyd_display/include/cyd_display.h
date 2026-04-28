@@ -70,6 +70,9 @@ typedef struct {
 } cyd_display_screen_t;
 
 esp_err_t cyd_display_init(void);
+esp_err_t cyd_display_set_brightness(uint8_t brightness);
+esp_err_t cyd_display_save_brightness(void);
+uint8_t cyd_display_get_brightness(void);
 esp_err_t cyd_display_claim_owner(void);
 esp_err_t cyd_display_release_owner(void);
 esp_err_t cyd_display_submit_screen(const cyd_display_screen_t *screen);

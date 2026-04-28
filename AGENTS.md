@@ -193,6 +193,14 @@ English supplement guidance:
 
 - `source ~/.espressif/v5.4.3/esp-idf/export.sh` を読み込んだシェルで `idf.py` を実行する
 
+ビルド確認の実績例：
+
+- このリポジトリでは、開発用の増分ビルド確認として `source ~/.espressif/v5.4.3/esp-idf/export.sh && DEV=1 ninja -C build -v` が通った実績がある
+- `idf.py build` が既存 `build/` ディレクトリの Python / 環境差分で扱いづらい場合でも、環境を正しく読み込んだ上での `DEV=1 ninja -C build -v` は有効な切り分け手段になりうる
+- 明示的に release 相当を確認したい場合を除き、通常のローカル開発ビルド確認では `DEV=1` を優先する
+
+English supplement: For quick compile verification against an existing configured build tree, `source ~/.espressif/v5.4.3/esp-idf/export.sh && DEV=1 ninja -C build -v` is a proven command in this repository. Prefer `DEV=1` for normal local development unless release behavior is being validated on purpose.
+
 `idf.py fullclean` が失敗して `build/` の自動削除を拒否された場合：
 
 - これは異なる環境・異なる Python / ESP-IDF セットアップで作られた `build/` が原因で起きうる

@@ -54,6 +54,7 @@
 #define WIFI_ACTION_SCAN_REFRESH 0x030b
 #define WIFI_ACTION_SCAN_PREV   0x030c
 #define WIFI_ACTION_SCAN_NEXT   0x030d
+#define WIFI_IDLE_POLL_MS       250
 
 #ifndef CONFIG_ESP32_WIFI_STA_SSID
 #define CONFIG_ESP32_WIFI_STA_SSID ""
@@ -279,9 +280,9 @@ static void wifi_add_scan_control_button(cyd_display_screen_t *screen,
                                       26,
                                       12,
                                       3,
-                                      enabled ? CYD_UI_COLOR_WHITE : CYD_UI_COLOR_DARKGREY,
-                                      enabled ? CYD_UI_COLOR_BLUE : CYD_UI_COLOR_DIMGREY,
-                                      enabled ? CYD_UI_COLOR_CYAN : CYD_UI_COLOR_DARKGREY,
+                                      CYD_UI_COLOR_WHITE,
+                                      CYD_UI_COLOR_BLUE,
+                                      CYD_UI_COLOR_CYAN,
                                       action_id,
                                       enabled);
 }
@@ -709,7 +710,10 @@ static void wifi_wait_ok_dialog(const char *title, const char *message)
     ESP_ERROR_CHECK(cyd_display_show_mode_screen(title, lines, 1, buttons, 1, 0));
     while (true) {
         cyd_input_event_t event = { 0 };
-        if (cyd_input_read_event(&event, portMAX_DELAY) != ESP_OK) {
+        if (cyd_input_read_event(&event, pdMS_TO_TICKS(WIFI_IDLE_POLL_MS)) != ESP_OK) {
+            if (app_shell_request_home_if_idle()) {
+                return;
+            }
             continue;
         }
 
@@ -1021,7 +1025,10 @@ static esp_err_t cyd_wifi_setup_app_step(void *ctx)
         cyd_input_event_t event = { 0 };
         cyd_wifi_setup_password_result_t result = CYD_WIFI_SETUP_PASSWORD_CONTINUE;
 
-        if (cyd_input_read_event(&event, portMAX_DELAY) != ESP_OK) {
+        if (cyd_input_read_event(&event, pdMS_TO_TICKS(WIFI_IDLE_POLL_MS)) != ESP_OK) {
+            if (app_shell_request_home_if_idle()) {
+                return ESP_OK;
+            }
             return ESP_OK;
         }
 

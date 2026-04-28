@@ -20,6 +20,36 @@ extern "C" {
 #define CYD_UI_COLOR_LIGHTGREY 0xc618
 #define CYD_UI_COLOR_RED       0xf800
 #define CYD_UI_COLOR_GREEN     0x07e0
+#define CYD_UI_COLOR_DISABLED_FG CYD_UI_COLOR_LIGHTGREY
+#define CYD_UI_COLOR_DISABLED_BG CYD_UI_COLOR_DIMGREY
+#define CYD_UI_COLOR_DISABLED_BORDER CYD_UI_COLOR_DARKGREY
+
+typedef struct {
+    const char *label_text;
+    const char *value_text;
+    uint8_t row;
+    uint8_t label_col;
+    uint8_t label_span_cols;
+    uint8_t label_scale;
+    uint8_t value_col;
+    uint8_t value_span_cols;
+    uint8_t value_scale;
+    uint8_t button_left_col;
+    uint8_t button_right_col;
+    uint8_t button_span_cols;
+    uint8_t button_span_rows;
+    uint8_t button_scale;
+    bool has_button_fg_color;
+    uint16_t button_fg_color;
+    bool has_button_bg_color;
+    uint16_t button_bg_color;
+    bool has_button_border_color;
+    uint16_t button_border_color;
+    uint16_t decrease_action_id;
+    uint16_t increase_action_id;
+    bool can_decrease;
+    bool can_increase;
+} cyd_ui_stepper_row_t;
 
 void cyd_ui_screen_clear(cyd_display_screen_t *screen);
 bool cyd_ui_add_text(cyd_display_screen_t *screen,
@@ -71,6 +101,8 @@ bool cyd_ui_add_button_with_fg_enabled(cyd_display_screen_t *screen,
                                        uint16_t border_color,
                                        uint16_t action_id,
                                        bool enabled);
+esp_err_t cyd_ui_add_stepper_row(cyd_display_screen_t *screen,
+                                 const cyd_ui_stepper_row_t *row);
 esp_err_t cyd_ui_submit(const cyd_display_screen_t *screen);
 
 #ifdef __cplusplus

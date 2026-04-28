@@ -27,6 +27,8 @@ bool wifi_profile_store_has_profiles(void);
 esp_err_t wifi_profile_store_record_success(const char *ssid,
                                             const char *password,
                                             wifi_auth_mode_t authmode);
+esp_err_t wifi_profile_store_set_priority(const char *ssid);
+esp_err_t wifi_profile_store_remove(const char *ssid);
 
 #ifdef __cplusplus
 }

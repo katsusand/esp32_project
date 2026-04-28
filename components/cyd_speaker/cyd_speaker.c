@@ -8,6 +8,7 @@
 #include "driver/ledc.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "app_stack_monitor.h"
 #include "cyd_speaker.h"
 
@@ -22,6 +23,8 @@
 #define CYD_SPEAKER_MAX_DURATION_MS 5000
 
 static const char *TAG = "cyd_speaker";
+static const char *NVS_NAMESPACE = "cyd_speaker";
+static const char *NVS_VOLUME_KEY = "volume";
 
 typedef enum {
     CYD_SPEAKER_CMD_PLAY = 0,
@@ -36,6 +39,8 @@ typedef struct {
 
 static QueueHandle_t s_speaker_queue;
 static bool s_speaker_started;
+static bool s_speaker_tone_active;
+static uint8_t s_speaker_volume_percent = CONFIG_CYD_SPEAKER_VOLUME_PERCENT;
 
 static ledc_mode_t cyd_speaker_speed_mode(void)
 {
@@ -54,12 +59,56 @@ static ledc_channel_t cyd_speaker_channel(void)
 
 static uint32_t cyd_speaker_duty(void)
 {
-    return ((CYD_SPEAKER_DUTY_MAX / 2U) * CONFIG_CYD_SPEAKER_VOLUME_PERCENT) / 100U;
+    return ((CYD_SPEAKER_DUTY_MAX / 2U) * s_speaker_volume_percent) / 100U;
+}
+
+static uint8_t cyd_speaker_clamp_volume_percent(uint8_t volume_percent)
+{
+    if (volume_percent == 0) {
+        return 1;
+    }
+    return (volume_percent > 100) ? 100 : volume_percent;
+}
+
+static esp_err_t cyd_speaker_load_saved_volume(uint8_t *volume_percent)
+{
+    nvs_handle_t nvs_handle;
+    uint8_t stored_volume = 0;
+
+    ESP_RETURN_ON_FALSE(volume_percent != NULL, ESP_ERR_INVALID_ARG, TAG, "volume pointer is null");
+
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_get_u8(nvs_handle, NVS_VOLUME_KEY, &stored_volume);
+    nvs_close(nvs_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    *volume_percent = cyd_speaker_clamp_volume_percent(stored_volume);
+    return ESP_OK;
+}
+
+static esp_err_t cyd_speaker_write_volume(uint8_t volume_percent)
+{
+    nvs_handle_t nvs_handle;
+
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
+    esp_err_t err = nvs_set_u8(nvs_handle, NVS_VOLUME_KEY, volume_percent);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+    return err;
 }
 
 static esp_err_t cyd_speaker_apply_silence(void)
 {
 #if CONFIG_CYD_SPEAKER_ENABLED
+    s_speaker_tone_active = false;
     ESP_RETURN_ON_ERROR(ledc_set_duty(cyd_speaker_speed_mode(), cyd_speaker_channel(), 0), TAG, "set duty failed");
     return ledc_update_duty(cyd_speaker_speed_mode(), cyd_speaker_channel());
 #else
@@ -70,6 +119,7 @@ static esp_err_t cyd_speaker_apply_silence(void)
 static esp_err_t cyd_speaker_apply_tone(uint32_t frequency_hz)
 {
 #if CONFIG_CYD_SPEAKER_ENABLED
+    s_speaker_tone_active = true;
     ESP_RETURN_ON_ERROR(
         ledc_set_freq(cyd_speaker_speed_mode(), cyd_speaker_timer(), frequency_hz),
         TAG,
@@ -180,6 +230,13 @@ static esp_err_t cyd_speaker_send(const cyd_speaker_cmd_t *cmd)
 
 esp_err_t cyd_speaker_init(void)
 {
+    uint8_t volume_percent = CONFIG_CYD_SPEAKER_VOLUME_PERCENT;
+    esp_err_t volume_err = cyd_speaker_load_saved_volume(&volume_percent);
+    if (volume_err != ESP_OK && volume_err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "volume load failed: %s", esp_err_to_name(volume_err));
+    }
+    s_speaker_volume_percent = cyd_speaker_clamp_volume_percent(volume_percent);
+
 #if CONFIG_CYD_SPEAKER_ENABLED
     ledc_timer_config_t timer_conf = {
         .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -229,7 +286,7 @@ esp_err_t cyd_speaker_init(void)
              CONFIG_CYD_SPEAKER_GPIO,
              CONFIG_CYD_SPEAKER_LEDC_TIMER,
              CONFIG_CYD_SPEAKER_LEDC_CHANNEL,
-             CONFIG_CYD_SPEAKER_VOLUME_PERCENT);
+             s_speaker_volume_percent);
 #else
     if (s_speaker_started) {
         return ESP_OK;
@@ -242,6 +299,39 @@ esp_err_t cyd_speaker_init(void)
 #endif
 
     return ESP_OK;
+}
+
+esp_err_t cyd_speaker_set_volume_percent(uint8_t volume_percent)
+{
+    ESP_RETURN_ON_FALSE(s_speaker_started, ESP_ERR_INVALID_STATE, TAG, "speaker not initialized");
+
+    s_speaker_volume_percent = cyd_speaker_clamp_volume_percent(volume_percent);
+
+#if CONFIG_CYD_SPEAKER_ENABLED
+    if (s_speaker_tone_active) {
+        ESP_RETURN_ON_ERROR(ledc_set_duty(cyd_speaker_speed_mode(), cyd_speaker_channel(), cyd_speaker_duty()),
+                            TAG,
+                            "set duty failed");
+        ESP_RETURN_ON_ERROR(ledc_update_duty(cyd_speaker_speed_mode(), cyd_speaker_channel()),
+                            TAG,
+                            "update duty failed");
+    }
+#endif
+    return ESP_OK;
+}
+
+esp_err_t cyd_speaker_save_volume(void)
+{
+    ESP_RETURN_ON_FALSE(s_speaker_started, ESP_ERR_INVALID_STATE, TAG, "speaker not initialized");
+
+    esp_err_t err = cyd_speaker_write_volume(s_speaker_volume_percent);
+    ESP_RETURN_ON_ERROR(err, TAG, "save volume failed");
+    return ESP_OK;
+}
+
+uint8_t cyd_speaker_get_volume_percent(void)
+{
+    return s_speaker_volume_percent;
 }
 
 esp_err_t cyd_speaker_play_tone(uint32_t frequency_hz, uint32_t duration_ms)

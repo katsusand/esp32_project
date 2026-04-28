@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
@@ -8,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
 #include "esp_random.h"
+#include "nvs.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
 #include "time_sync.h"
@@ -45,8 +47,14 @@
 #endif
 
 #define TIME_SYNC_WIFI_WAIT_MS 60000
+#define TIME_SYNC_MIN_INTERVAL_MINUTES 1U
+#define TIME_SYNC_MAX_INTERVAL_MINUTES 1440U
 
 static const char *TAG = "time_sync";
+static const char *NVS_NAMESPACE = "time_sync";
+static const char *NVS_INTERVAL_MINUTES_KEY = "interval_min";
+static const char *NVS_TIMEZONE_KEY = "timezone";
+#define TIME_SYNC_TIMEZONE_MAX_LEN 31U
 static TaskHandle_t s_time_sync_task_handle;
 static portMUX_TYPE s_time_sync_status_lock = portMUX_INITIALIZER_UNLOCKED;
 static time_sync_state_t s_time_sync_state = TIME_SYNC_STATE_STOPPED;
@@ -54,6 +62,112 @@ static bool s_time_sync_has_last_success;
 static bool s_time_sync_has_last_attempt;
 static time_t s_time_sync_last_success_at;
 static esp_err_t s_time_sync_last_attempt_status;
+static bool s_time_sync_reschedule_requested;
+static uint16_t s_time_sync_interval_minutes = CONFIG_TIME_SYNC_INTERVAL_MINUTES;
+static char s_time_sync_timezone[TIME_SYNC_TIMEZONE_MAX_LEN + 1] = CONFIG_TIME_SYNC_TIMEZONE;
+
+static uint16_t time_sync_clamp_interval_minutes(uint16_t interval_minutes)
+{
+    if (interval_minutes < TIME_SYNC_MIN_INTERVAL_MINUTES) {
+        return TIME_SYNC_MIN_INTERVAL_MINUTES;
+    }
+    if (interval_minutes > TIME_SYNC_MAX_INTERVAL_MINUTES) {
+        return TIME_SYNC_MAX_INTERVAL_MINUTES;
+    }
+    return interval_minutes;
+}
+
+static esp_err_t time_sync_load_saved_interval_minutes(uint16_t *interval_minutes)
+{
+    nvs_handle_t nvs_handle;
+    uint16_t stored_interval_minutes = 0;
+
+    ESP_RETURN_ON_FALSE(interval_minutes != NULL, ESP_ERR_INVALID_ARG, TAG, "interval pointer is null");
+
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_get_u16(nvs_handle, NVS_INTERVAL_MINUTES_KEY, &stored_interval_minutes);
+    nvs_close(nvs_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    *interval_minutes = time_sync_clamp_interval_minutes(stored_interval_minutes);
+    return ESP_OK;
+}
+
+static esp_err_t time_sync_write_interval_minutes(uint16_t interval_minutes)
+{
+    nvs_handle_t nvs_handle;
+
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
+    esp_err_t err = nvs_set_u16(nvs_handle, NVS_INTERVAL_MINUTES_KEY, time_sync_clamp_interval_minutes(interval_minutes));
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
+
+static esp_err_t time_sync_load_saved_timezone(char *timezone, size_t timezone_size)
+{
+    nvs_handle_t nvs_handle;
+    size_t required_size = timezone_size;
+
+    ESP_RETURN_ON_FALSE(timezone != NULL, ESP_ERR_INVALID_ARG, TAG, "timezone buffer is null");
+    ESP_RETURN_ON_FALSE(timezone_size > 0, ESP_ERR_INVALID_ARG, TAG, "timezone buffer is empty");
+
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_get_str(nvs_handle, NVS_TIMEZONE_KEY, timezone, &required_size);
+    nvs_close(nvs_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    timezone[timezone_size - 1] = '\0';
+    return ESP_OK;
+}
+
+static esp_err_t time_sync_write_timezone(const char *timezone)
+{
+    nvs_handle_t nvs_handle;
+
+    ESP_RETURN_ON_FALSE(timezone != NULL, ESP_ERR_INVALID_ARG, TAG, "timezone is null");
+
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
+    esp_err_t err = nvs_set_str(nvs_handle, NVS_TIMEZONE_KEY, timezone);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
+
+static uint16_t time_sync_get_interval_minutes_locked(void)
+{
+    return s_time_sync_interval_minutes;
+}
+
+static const char *time_sync_get_timezone_locked(void)
+{
+    return s_time_sync_timezone;
+}
+
+static bool time_sync_take_reschedule_request(void)
+{
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    bool requested = s_time_sync_reschedule_requested;
+    s_time_sync_reschedule_requested = false;
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+    return requested;
+}
 
 static void time_sync_set_state(time_sync_state_t state)
 {
@@ -80,6 +194,21 @@ static void time_sync_record_attempt_status(esp_err_t status)
     portEXIT_CRITICAL(&s_time_sync_status_lock);
 }
 
+static void time_sync_set_interval_minutes_locked(uint16_t interval_minutes)
+{
+    s_time_sync_interval_minutes = time_sync_clamp_interval_minutes(interval_minutes);
+}
+
+static void time_sync_set_timezone_locked(const char *timezone)
+{
+    if (timezone == NULL) {
+        s_time_sync_timezone[0] = '\0';
+        return;
+    }
+
+    snprintf(s_time_sync_timezone, sizeof(s_time_sync_timezone), "%s", timezone);
+}
+
 static bool time_sync_has_success(void)
 {
     portENTER_CRITICAL(&s_time_sync_status_lock);
@@ -88,24 +217,30 @@ static bool time_sync_has_success(void)
     return has_last_success;
 }
 
-static void time_sync_apply_timezone_once(void)
+static void time_sync_apply_timezone(void)
 {
-    static bool s_timezone_applied;
+    char timezone[TIME_SYNC_TIMEZONE_MAX_LEN + 1] = { 0 };
 
-    if (s_timezone_applied) {
-        return;
-    }
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    snprintf(timezone, sizeof(timezone), "%s", time_sync_get_timezone_locked());
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
 
-    if (CONFIG_TIME_SYNC_TIMEZONE[0] != '\0') {
-        setenv("TZ", CONFIG_TIME_SYNC_TIMEZONE, 1);
-        tzset();
+    if (timezone[0] != '\0') {
+        setenv("TZ", timezone, 1);
+    } else {
+        unsetenv("TZ");
     }
-    s_timezone_applied = true;
+    tzset();
 }
 
 static uint32_t time_sync_next_delay_seconds(void)
 {
-    const uint32_t base_seconds = CONFIG_TIME_SYNC_INTERVAL_MINUTES * 60U;
+    uint16_t interval_minutes = 0;
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    interval_minutes = time_sync_get_interval_minutes_locked();
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+
+    const uint32_t base_seconds = (uint32_t)interval_minutes * 60U;
     const uint32_t jitter_seconds = CONFIG_TIME_SYNC_JITTER_MINUTES * 60U;
 
     if (jitter_seconds == 0) {
@@ -122,7 +257,7 @@ static uint32_t time_sync_next_delay_seconds(void)
     return base_seconds + (offset - jitter_seconds);
 }
 
-static void time_sync_delay_seconds(uint32_t seconds)
+static bool time_sync_delay_seconds(uint32_t seconds)
 {
     uint32_t remaining_ms = seconds * 1000U;
 
@@ -130,15 +265,17 @@ static void time_sync_delay_seconds(uint32_t seconds)
         APP_STACK_MONITOR_CHECK(TAG, "time_sync", 30000);
 
         if (ulTaskNotifyTake(pdTRUE, 0) > 0) {
-            return;
+            return true;
         }
 
         uint32_t chunk_ms = remaining_ms > 60000U ? 60000U : remaining_ms;
         if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(chunk_ms)) > 0) {
-            return;
+            return true;
         }
         remaining_ms -= chunk_ms;
     }
+
+    return false;
 }
 
 static esp_err_t time_sync_once(void)
@@ -208,7 +345,9 @@ static void time_sync_retry_after_failure(void)
                  (unsigned)attempt,
                  (unsigned)CONFIG_TIME_SYNC_RETRY_ATTEMPTS);
         time_sync_set_state(TIME_SYNC_STATE_RETRY_WAIT);
-        time_sync_delay_seconds(CONFIG_TIME_SYNC_RETRY_DELAY_SECONDS);
+        if (time_sync_delay_seconds(CONFIG_TIME_SYNC_RETRY_DELAY_SECONDS) && time_sync_take_reschedule_request()) {
+            ESP_LOGI(TAG, "time sync interval updated during retry wait");
+        }
 
         if (time_sync_try_when_wifi_ready() == ESP_OK) {
             return;
@@ -225,9 +364,11 @@ static void time_sync_task(void *arg)
     while (true) {
         APP_STACK_MONITOR_CHECK(TAG, "time_sync", 30000);
 
-        esp_err_t sync_err = time_sync_try_when_wifi_ready();
-        if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
-            time_sync_retry_after_failure();
+        if (!time_sync_take_reschedule_request()) {
+            esp_err_t sync_err = time_sync_try_when_wifi_ready();
+            if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
+                time_sync_retry_after_failure();
+            }
         }
 
         uint32_t delay_seconds = time_sync_next_delay_seconds();
@@ -237,14 +378,30 @@ static void time_sync_task(void *arg)
                  (unsigned)(delay_seconds / 60U),
                  (unsigned)(delay_seconds % 60U));
         time_sync_set_state(TIME_SYNC_STATE_IDLE);
-        time_sync_delay_seconds(delay_seconds);
+        if (time_sync_delay_seconds(delay_seconds) && time_sync_take_reschedule_request()) {
+            ESP_LOGI(TAG, "time sync interval updated; rescheduling next sync");
+        }
     }
 }
 
 esp_err_t time_sync_start(void)
 {
 #if CONFIG_TIME_SYNC_ENABLED
-    time_sync_apply_timezone_once();
+    uint16_t saved_interval_minutes = 0;
+    if (time_sync_load_saved_interval_minutes(&saved_interval_minutes) == ESP_OK) {
+        portENTER_CRITICAL(&s_time_sync_status_lock);
+        time_sync_set_interval_minutes_locked(saved_interval_minutes);
+        portEXIT_CRITICAL(&s_time_sync_status_lock);
+    }
+
+    char saved_timezone[TIME_SYNC_TIMEZONE_MAX_LEN + 1] = { 0 };
+    if (time_sync_load_saved_timezone(saved_timezone, sizeof(saved_timezone)) == ESP_OK) {
+        portENTER_CRITICAL(&s_time_sync_status_lock);
+        time_sync_set_timezone_locked(saved_timezone);
+        portEXIT_CRITICAL(&s_time_sync_status_lock);
+    }
+
+    time_sync_apply_timezone();
 
     if (s_time_sync_task_handle != NULL) {
         return ESP_OK;
@@ -275,6 +432,63 @@ void time_sync_request_soon(void)
         xTaskNotifyGive(s_time_sync_task_handle);
     }
 #endif
+}
+
+esp_err_t time_sync_set_interval_minutes(uint16_t interval_minutes)
+{
+    uint16_t clamped_interval_minutes = time_sync_clamp_interval_minutes(interval_minutes);
+
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    time_sync_set_interval_minutes_locked(clamped_interval_minutes);
+    s_time_sync_reschedule_requested = true;
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+
+#if CONFIG_TIME_SYNC_ENABLED
+    if (s_time_sync_task_handle != NULL) {
+        xTaskNotifyGive(s_time_sync_task_handle);
+    }
+#endif
+
+    return ESP_OK;
+}
+
+esp_err_t time_sync_save_interval_minutes(void)
+{
+    return time_sync_write_interval_minutes(time_sync_get_interval_minutes());
+}
+
+uint16_t time_sync_get_interval_minutes(void)
+{
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    uint16_t interval_minutes = time_sync_get_interval_minutes_locked();
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+    return interval_minutes;
+}
+
+esp_err_t time_sync_set_timezone(const char *timezone)
+{
+    ESP_RETURN_ON_FALSE(timezone != NULL, ESP_ERR_INVALID_ARG, TAG, "timezone is null");
+    ESP_RETURN_ON_FALSE(strlen(timezone) <= TIME_SYNC_TIMEZONE_MAX_LEN,
+                        ESP_ERR_INVALID_ARG,
+                        TAG,
+                        "timezone is too long");
+
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    time_sync_set_timezone_locked(timezone);
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+
+    time_sync_apply_timezone();
+    return ESP_OK;
+}
+
+esp_err_t time_sync_save_timezone(void)
+{
+    return time_sync_write_timezone(time_sync_get_timezone());
+}
+
+const char *time_sync_get_timezone(void)
+{
+    return s_time_sync_timezone;
 }
 
 time_sync_state_t time_sync_get_state(void)

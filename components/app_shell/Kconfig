@@ -16,4 +16,13 @@ menu "App Shell"
         help
             `app_shell` task priority です。
 
+    config APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS
+        int "Idle return timeout (seconds)"
+        default 60
+        range 0 3600
+        help
+            無操作で home app へ自動復帰するまでの秒数です。
+            0 を指定すると自動復帰を無効化します。
+            English: inactivity timeout before the shell returns to the home app.
+
 endmenu

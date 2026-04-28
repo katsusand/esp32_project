@@ -19,6 +19,12 @@ typedef enum {
 
 esp_err_t time_sync_start(void);
 void time_sync_request_soon(void);
+esp_err_t time_sync_set_interval_minutes(uint16_t interval_minutes);
+esp_err_t time_sync_save_interval_minutes(void);
+uint16_t time_sync_get_interval_minutes(void);
+esp_err_t time_sync_set_timezone(const char *timezone);
+esp_err_t time_sync_save_timezone(void);
+const char *time_sync_get_timezone(void);
 time_sync_state_t time_sync_get_state(void);
 bool time_sync_is_busy(void);
 bool time_sync_get_last_success_at(time_t *sync_time);

@@ -86,6 +86,16 @@ monitor を終了するには `Ctrl-]` を押します。
 
 `idf.py` が見つからない場合は、ESP-IDF 環境が読み込まれていない可能性があります。先に `source ~/.espressif/v5.4.3/esp-idf/export.sh` を実行してください。
 
+人間や AI / IDE Assistant が `source` を読み落としやすい場合は、`scripts/` のラッパーを優先してください。
+
+```bash
+./scripts/idf-build.sh
+./scripts/idf-menuconfig.sh
+./scripts/idf-flash-monitor.sh /dev/cu.usbserial-XXXX
+```
+
+English supplement: These wrapper scripts are the preferred execution entry points for repeatable local work because they load the pinned ESP-IDF environment and default `DEV=1` automatically.
+
 ## New Mac Setup
 
 新しい Mac でこのプロジェクトを扱うときは、まず「Codex の状態を移す」のではなく、「このリポジトリを同じ前提で扱える環境を作る」と考えてください。
@@ -182,7 +192,8 @@ AI / IDE Assistant 向け運用ルール：
 - このプロジェクトでは、通常のローカル開発は `DEV=1` を前提として案内する
 - 新しい Mac への ESP-IDF 導入は、まず EIM CLI による `eim install -i v5.4.3` を案内する
 - clone 後は `third_party/lovyangfx_upstream` の LovyanGFX submodule が取得済みか確認する
-- `idf.py` を使う前に、必ず `source ~/.espressif/v5.4.3/esp-idf/export.sh` の実行を前提にする
+- 可能なら `./scripts/idf-build.sh`、`./scripts/idf-menuconfig.sh`、`./scripts/idf-flash-monitor.sh` を優先して使う
+- `idf.py` を直接使う場合は、必ず `source ~/.espressif/v5.4.3/esp-idf/export.sh` の実行を前提にする
 - `build/` は環境依存の生成物として扱い、別の Mac で作られた `build/` の再利用を前提にしない
 - `sdkconfig` はローカル生成物として扱い、共有すべき基準値は `sdkconfig.defaults` を参照する
 
@@ -200,6 +211,13 @@ AI / IDE Assistant 向け運用ルール：
 source ~/.espressif/v5.4.3/esp-idf/export.sh
 DEV=1 idf.py build
 DEV=1 idf.py -p PORT flash monitor
+```
+
+または、ラッパースクリプトを使っても同じです。
+
+```bash
+./scripts/idf-build.sh
+./scripts/idf-flash-monitor.sh /dev/cu.usbserial-XXXX
 ```
 
 `DEV=1` が設定されている場合、ビルド時に `APP_DEV=1` が定義されます。

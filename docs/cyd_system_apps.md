@@ -49,9 +49,21 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
 
 `settings app` は設定入口です。
 
-- 現在の Wi-Fi 状態表示
-- `Wi-Fi Setup`: `wifi_setup app` へ切り替える
+- `GENERAL` page
+  `LcdBrightness`: LCD バックライトの明るさを変更する
+  `Volume`: スピーカー音量を変更する
+  `TimeSyncInterval`: NTP 同期間隔を分単位で変更する
+- `NETWORK` page
+  現在の Wi-Fi 状態表示
+  `Stored SSIDs`: 保存済みSSID一覧、優先化、削除
+  `Wi-Fi Setup`: `wifi_setup app` へ切り替える
 - `<<`: `enter()` の `from_app` として受け取った return app へ戻る
+
+ページ切り替えは画面下部の `<` / `>` ボタンで行います。これにより settings 画面は、今後 `Volume` や `TimeSyncInterval` などを追加しやすい構成になっています。
+
+`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`Volume` は `100 / 70 / 50 / 35 / 25 / 18 / 12 / 8 / 5` の 9 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。これらは `-` / `+` ボタンで変更すると、その場で反映されます。保存は `settings app` を離れるタイミングで行われます。
+
+`Stored SSIDs` は `NETWORK` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
 
 `Wi-Fi Setup` へ入ると、`wifi_setup app` は `from_app` として `settings app` を受け取ります。これにより、Wi-Fi 設定完了後は settings 画面へ戻ります。
 

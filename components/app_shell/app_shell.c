@@ -6,13 +6,46 @@
 #include "sdkconfig.h"
 #include "app_shell.h"
 #include "cyd_display.h"
+#include "cyd_input.h"
 
 #define TAG "app_shell"
-
 static TaskHandle_t s_app_shell_task_handle;
 static portMUX_TYPE s_app_shell_lock = portMUX_INITIALIZER_UNLOCKED;
 static const app_shell_app_t *s_app_shell_active_app;
 static const app_shell_app_t *s_app_shell_pending_app;
+static const app_shell_app_t *s_app_shell_home_app;
+
+static bool app_shell_idle_return_enabled(void)
+{
+    return CONFIG_APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS > 0;
+}
+
+static bool app_shell_is_home_idle_target(void)
+{
+    return s_app_shell_home_app != NULL &&
+           s_app_shell_active_app != NULL &&
+           s_app_shell_active_app != s_app_shell_home_app;
+}
+
+bool app_shell_is_idle_timeout_elapsed(void)
+{
+    TickType_t last_activity_tick = 0;
+    TickType_t now = 0;
+    TickType_t timeout_ticks = 0;
+
+    if (!app_shell_idle_return_enabled() || !app_shell_is_home_idle_target()) {
+        return false;
+    }
+
+    last_activity_tick = cyd_input_get_last_activity_tick();
+    now = xTaskGetTickCount();
+    timeout_ticks = pdMS_TO_TICKS(CONFIG_APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS * 1000U);
+    if (last_activity_tick == 0 || timeout_ticks == 0) {
+        return false;
+    }
+
+    return (now - last_activity_tick) >= timeout_ticks;
+}
 
 static esp_err_t app_shell_apply_pending_switch(void)
 {
@@ -56,6 +89,7 @@ static void app_shell_task(void *arg)
     const app_shell_app_t *initial_app = (const app_shell_app_t *)arg;
 
     ESP_ERROR_CHECK(cyd_display_claim_owner());
+    s_app_shell_home_app = initial_app;
     s_app_shell_active_app = initial_app;
 
     if (s_app_shell_active_app != NULL && s_app_shell_active_app->enter != NULL) {
@@ -70,6 +104,9 @@ static void app_shell_task(void *arg)
         }
 
         ESP_ERROR_CHECK(app_shell_apply_pending_switch());
+        if (app_shell_request_home_if_idle()) {
+            ESP_ERROR_CHECK(app_shell_apply_pending_switch());
+        }
     }
 }
 
@@ -104,4 +141,23 @@ esp_err_t app_shell_switch_to(const app_shell_app_t *next_app)
 const app_shell_app_t *app_shell_get_active_app(void)
 {
     return s_app_shell_active_app;
+}
+
+const app_shell_app_t *app_shell_get_home_app(void)
+{
+    return s_app_shell_home_app;
+}
+
+bool app_shell_request_home_if_idle(void)
+{
+    if (!app_shell_is_idle_timeout_elapsed()) {
+        return false;
+    }
+
+    ESP_LOGI(TAG,
+             "idle timeout reached (%d s), returning to home app: %s",
+             CONFIG_APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS,
+             s_app_shell_home_app->id);
+    ESP_ERROR_CHECK(app_shell_switch_to(s_app_shell_home_app));
+    return true;
 }

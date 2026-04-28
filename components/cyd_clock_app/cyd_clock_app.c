@@ -36,6 +36,7 @@
 
 #define TAG "cyd_clock_app"
 #define CYD_CLOCK_APP_INPUT_POLL_MS 50
+#define CYD_CLOCK_APP_IDLE_POLL_MS 250
 #define CYD_CLOCK_APP_TAP_SLOP_PX 24
 #define CYD_CLOCK_APP_WIFI_SETUP_LONG_PRESS_MS 10000
 #define CYD_CLOCK_APP_ACTION_SYNC_NOW 0x1001
@@ -474,9 +475,9 @@ static esp_err_t cyd_clock_app_show_clock(void)
                                       18,
                                       16,
                                       3,
-                                      sync_now_enabled ? CYD_UI_COLOR_WHITE : CYD_UI_COLOR_DARKGREY,
-                                      sync_now_enabled ? CYD_UI_COLOR_BLUE : CYD_UI_COLOR_DIMGREY,
-                                      sync_now_enabled ? CYD_UI_COLOR_CYAN : CYD_UI_COLOR_DARKGREY,
+                                      CYD_UI_COLOR_WHITE,
+                                      CYD_UI_COLOR_BLUE,
+                                      CYD_UI_COLOR_CYAN,
                                       CYD_CLOCK_APP_ACTION_SYNC_NOW,
                                       sync_now_enabled);
     cyd_ui_add_text(screen,
@@ -601,7 +602,10 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
 
     while (true) {
         cyd_input_event_t event = { 0 };
-        if (cyd_input_read_event(&event, portMAX_DELAY) != ESP_OK) {
+        if (cyd_input_read_event(&event, pdMS_TO_TICKS(CYD_CLOCK_APP_IDLE_POLL_MS)) != ESP_OK) {
+            if (app_shell_is_idle_timeout_elapsed()) {
+                return CYD_CLOCK_APP_MODE_CLOCK;
+            }
             continue;
         }
         size_t button_index = 0;

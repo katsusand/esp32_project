@@ -120,6 +120,35 @@ static esp_err_t wifi_profile_store_write_blob(const wifi_profile_store_blob_t *
     return err;
 }
 
+static esp_err_t wifi_profile_store_prepare_blob_for_write(wifi_profile_store_blob_t *blob)
+{
+    ESP_RETURN_ON_FALSE(blob != NULL, ESP_ERR_INVALID_ARG, TAG, "blob is null");
+
+    esp_err_t err = wifi_profile_store_read_blob(blob);
+    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_INVALID_LENGTH || err == ESP_ERR_INVALID_VERSION) {
+        wifi_profile_store_entry_t legacy_entry = { 0 };
+        memset(blob, 0, sizeof(*blob));
+        blob->version = WIFI_PROFILE_STORE_VERSION;
+
+        err = wifi_profile_store_load_legacy_entry(&legacy_entry);
+        if (err == ESP_OK && legacy_entry.ssid[0] != '\0') {
+            wifi_profile_store_entry_disk_t *dst = &blob->entries[0];
+            dst->authmode = (uint8_t)legacy_entry.authmode;
+            dst->last_success_seq = legacy_entry.last_success_seq;
+            strlcpy(dst->ssid, legacy_entry.ssid, sizeof(dst->ssid));
+            strlcpy(dst->password, legacy_entry.password, sizeof(dst->password));
+            blob->success_seq = legacy_entry.last_success_seq;
+            return ESP_OK;
+        }
+        if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_OK) {
+            return ESP_OK;
+        }
+        return err;
+    }
+
+    return err;
+}
+
 esp_err_t wifi_profile_store_load_entries(wifi_profile_store_entry_t *entries,
                                           size_t entry_capacity,
                                           size_t *entry_count)
@@ -189,19 +218,14 @@ esp_err_t wifi_profile_store_record_success(const char *ssid,
                                             wifi_auth_mode_t authmode)
 {
     wifi_profile_store_blob_t blob = { 0 };
-    esp_err_t err = wifi_profile_store_read_blob(&blob);
+    esp_err_t err = wifi_profile_store_prepare_blob_for_write(&blob);
     size_t target_index = WIFI_PROFILE_STORE_MAX_ENTRIES;
 
     ESP_RETURN_ON_FALSE(ssid != NULL && ssid[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "ssid is empty");
     ESP_RETURN_ON_FALSE(strlen(ssid) <= 32, ESP_ERR_INVALID_ARG, TAG, "ssid is too long");
     ESP_RETURN_ON_FALSE(password == NULL || strlen(password) <= 64, ESP_ERR_INVALID_ARG, TAG, "password is too long");
 
-    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_INVALID_LENGTH || err == ESP_ERR_INVALID_VERSION) {
-        memset(&blob, 0, sizeof(blob));
-        blob.version = WIFI_PROFILE_STORE_VERSION;
-    } else {
-        ESP_RETURN_ON_ERROR(err, TAG, "read Wi-Fi profile blob failed");
-    }
+    ESP_RETURN_ON_ERROR(err, TAG, "prepare Wi-Fi profile blob failed");
 
     for (size_t i = 0; i < WIFI_PROFILE_STORE_MAX_ENTRIES; ++i) {
         if (strncmp(blob.entries[i].ssid, ssid, sizeof(blob.entries[i].ssid)) == 0) {
@@ -237,5 +261,60 @@ esp_err_t wifi_profile_store_record_success(const char *ssid,
     err = wifi_profile_store_write_blob(&blob);
     ESP_RETURN_ON_ERROR(err, TAG, "write Wi-Fi profile blob failed");
     ESP_LOGI(TAG, "saved Wi-Fi profile for SSID \"%s\"", ssid);
+    return ESP_OK;
+}
+
+esp_err_t wifi_profile_store_set_priority(const char *ssid)
+{
+    wifi_profile_store_blob_t blob = { 0 };
+    size_t target_index = WIFI_PROFILE_STORE_MAX_ENTRIES;
+
+    ESP_RETURN_ON_FALSE(ssid != NULL && ssid[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "ssid is empty");
+    ESP_RETURN_ON_FALSE(strlen(ssid) <= 32, ESP_ERR_INVALID_ARG, TAG, "ssid is too long");
+    ESP_RETURN_ON_ERROR(wifi_profile_store_prepare_blob_for_write(&blob), TAG, "prepare Wi-Fi profile blob failed");
+
+    for (size_t i = 0; i < WIFI_PROFILE_STORE_MAX_ENTRIES; ++i) {
+        if (strncmp(blob.entries[i].ssid, ssid, sizeof(blob.entries[i].ssid)) == 0) {
+            target_index = i;
+            break;
+        }
+    }
+
+    ESP_RETURN_ON_FALSE(target_index != WIFI_PROFILE_STORE_MAX_ENTRIES, ESP_ERR_NOT_FOUND, TAG, "SSID not found");
+
+    blob.version = WIFI_PROFILE_STORE_VERSION;
+    blob.success_seq++;
+    blob.entries[target_index].last_success_seq = blob.success_seq;
+
+    esp_err_t err = wifi_profile_store_write_blob(&blob);
+    ESP_RETURN_ON_ERROR(err, TAG, "write Wi-Fi profile blob failed");
+    ESP_LOGI(TAG, "prioritized Wi-Fi profile for SSID \"%s\"", ssid);
+    return ESP_OK;
+}
+
+esp_err_t wifi_profile_store_remove(const char *ssid)
+{
+    wifi_profile_store_blob_t blob = { 0 };
+    size_t target_index = WIFI_PROFILE_STORE_MAX_ENTRIES;
+
+    ESP_RETURN_ON_FALSE(ssid != NULL && ssid[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "ssid is empty");
+    ESP_RETURN_ON_FALSE(strlen(ssid) <= 32, ESP_ERR_INVALID_ARG, TAG, "ssid is too long");
+    ESP_RETURN_ON_ERROR(wifi_profile_store_prepare_blob_for_write(&blob), TAG, "prepare Wi-Fi profile blob failed");
+
+    for (size_t i = 0; i < WIFI_PROFILE_STORE_MAX_ENTRIES; ++i) {
+        if (strncmp(blob.entries[i].ssid, ssid, sizeof(blob.entries[i].ssid)) == 0) {
+            target_index = i;
+            break;
+        }
+    }
+
+    ESP_RETURN_ON_FALSE(target_index != WIFI_PROFILE_STORE_MAX_ENTRIES, ESP_ERR_NOT_FOUND, TAG, "SSID not found");
+
+    memset(&blob.entries[target_index], 0, sizeof(blob.entries[target_index]));
+    blob.version = WIFI_PROFILE_STORE_VERSION;
+
+    esp_err_t err = wifi_profile_store_write_blob(&blob);
+    ESP_RETURN_ON_ERROR(err, TAG, "write Wi-Fi profile blob failed");
+    ESP_LOGI(TAG, "removed Wi-Fi profile for SSID \"%s\"", ssid);
     return ESP_OK;
 }

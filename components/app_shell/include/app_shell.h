@@ -1,6 +1,7 @@
 #ifndef APP_SHELL_H
 #define APP_SHELL_H
 
+#include <stdbool.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -24,6 +25,9 @@ struct app_shell_app {
 esp_err_t app_shell_start(const app_shell_app_t *initial_app);
 esp_err_t app_shell_switch_to(const app_shell_app_t *next_app);
 const app_shell_app_t *app_shell_get_active_app(void);
+const app_shell_app_t *app_shell_get_home_app(void);
+bool app_shell_is_idle_timeout_elapsed(void);
+bool app_shell_request_home_if_idle(void);
 
 #ifdef __cplusplus
 }

@@ -7,6 +7,7 @@
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
 #define LGFX_USE_V1
@@ -16,6 +17,9 @@
 namespace {
 
 static const char *TAG = "cyd_display";
+static const char *NVS_NAMESPACE = "cyd_display";
+static const char *NVS_BRIGHTNESS_KEY = "brightness";
+static constexpr uint8_t CYD_DISPLAY_MIN_SAFE_BRIGHTNESS = 13;
 static constexpr int32_t GRID_CELL_PX = CYD_DISPLAY_GRID_CELL_PX;
 static constexpr int32_t SCREEN_MARGIN_X = GRID_CELL_PX;
 static constexpr uint8_t SCREEN_TITLE_ROW = 2;
@@ -156,6 +160,7 @@ public:
 
 static LGFX_CYD s_display;
 static bool s_initialized = false;
+static uint8_t s_backlight_brightness = CONFIG_CYD_DISPLAY_BACKLIGHT_BRIGHTNESS;
 static QueueHandle_t s_display_queue = nullptr;
 static QueueHandle_t s_display_log_queue = nullptr;
 static QueueSetHandle_t s_display_queue_set = nullptr;
@@ -168,6 +173,43 @@ static cyd_display_grid_rect_t s_mode_button_rects[CYD_DISPLAY_MAX_MODE_BUTTONS]
 static size_t s_mode_button_count = 0;
 static bool s_has_previous_screen = false;
 static LGFX_Sprite s_strip_sprite(&s_display);
+
+static esp_err_t cyd_display_load_saved_brightness(uint8_t *brightness)
+{
+    nvs_handle_t nvs_handle;
+    uint8_t stored_brightness = 0;
+
+    ESP_RETURN_ON_FALSE(brightness != nullptr, ESP_ERR_INVALID_ARG, TAG, "brightness is null");
+
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_get_u8(nvs_handle, NVS_BRIGHTNESS_KEY, &stored_brightness);
+    nvs_close(nvs_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    *brightness = (stored_brightness < CYD_DISPLAY_MIN_SAFE_BRIGHTNESS)
+                      ? CYD_DISPLAY_MIN_SAFE_BRIGHTNESS
+                      : stored_brightness;
+    return ESP_OK;
+}
+
+static esp_err_t cyd_display_write_brightness(uint8_t brightness)
+{
+    nvs_handle_t nvs_handle;
+
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
+    esp_err_t err = nvs_set_u8(nvs_handle, NVS_BRIGHTNESS_KEY, brightness);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
 static bool s_strip_sprite_ready = false;
 static size_t s_strip_count = 0;
 
@@ -443,11 +485,11 @@ static void cyd_display_render_screen_to_target(TDisplay &display,
                                                x,
                                                y,
                                                widget.scale_y > 0 ? widget.scale_y : 1,
-                                               widget.fg_color != 0 ? widget.fg_color : TFT_WHITE);
+                                               widget.fg_color);
                 } else if (widget.align == CYD_DISPLAY_ALIGN_RIGHT) {
                     display.setTextDatum(lgfx::top_right);
                     display.setTextSize(widget.scale_y > 0 ? widget.scale_y : 1);
-                    display.setTextColor(widget.fg_color != 0 ? widget.fg_color : TFT_WHITE, cyd_display_resolve_bg(widget));
+                    display.setTextColor(widget.fg_color, cyd_display_resolve_bg(widget));
                     display.drawString(widget.text, x + w, y);
                 } else {
                     text_x = x + (w / 2);
@@ -457,7 +499,7 @@ static void cyd_display_render_screen_to_target(TDisplay &display,
                                                    text_x,
                                                    text_y,
                                                    widget.scale_y > 0 ? widget.scale_y : 1,
-                                                   widget.fg_color != 0 ? widget.fg_color : TFT_WHITE);
+                                                   widget.fg_color);
                 }
                 break;
 
@@ -471,7 +513,7 @@ static void cyd_display_render_screen_to_target(TDisplay &display,
                                       widget.border_color != 0 ? widget.border_color : TFT_LIGHTGREY);
                 display.setTextDatum(lgfx::middle_center);
                 display.setTextSize(widget.scale_y > 0 ? widget.scale_y : 1);
-                display.setTextColor(widget.fg_color != 0 ? widget.fg_color : TFT_WHITE, cyd_display_resolve_bg(widget));
+                display.setTextColor(widget.fg_color, cyd_display_resolve_bg(widget));
                 display.drawString(widget.text, x + (w / 2), y + (h / 2));
                 break;
 
@@ -977,9 +1019,16 @@ extern "C" esp_err_t cyd_display_init(void)
         return ESP_OK;
     }
 
+    uint8_t brightness = CONFIG_CYD_DISPLAY_BACKLIGHT_BRIGHTNESS;
+    esp_err_t brightness_err = cyd_display_load_saved_brightness(&brightness);
+    if (brightness_err != ESP_OK && brightness_err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "brightness load failed: %s", esp_err_to_name(brightness_err));
+    }
+    s_backlight_brightness = brightness;
+
     s_display.init();
     s_display.setRotation(CONFIG_CYD_DISPLAY_ROTATION);
-    s_display.setBrightness(CONFIG_CYD_DISPLAY_BACKLIGHT_BRIGHTNESS);
+    s_display.setBrightness(s_backlight_brightness);
     s_display.fillScreen(TFT_BLACK);
     cyd_display_clear_mode_button_map();
     s_has_previous_screen = false;
@@ -1045,6 +1094,29 @@ extern "C" esp_err_t cyd_display_init(void)
 #endif
 
     return ESP_OK;
+}
+
+extern "C" esp_err_t cyd_display_set_brightness(uint8_t brightness)
+{
+    ESP_RETURN_ON_FALSE(s_initialized, ESP_ERR_INVALID_STATE, TAG, "display not initialized");
+
+    s_display.setBrightness(brightness);
+    s_backlight_brightness = brightness;
+    return ESP_OK;
+}
+
+extern "C" esp_err_t cyd_display_save_brightness(void)
+{
+    ESP_RETURN_ON_FALSE(s_initialized, ESP_ERR_INVALID_STATE, TAG, "display not initialized");
+
+    esp_err_t err = cyd_display_write_brightness(s_backlight_brightness);
+    ESP_RETURN_ON_ERROR(err, TAG, "save brightness failed");
+    return ESP_OK;
+}
+
+extern "C" uint8_t cyd_display_get_brightness(void)
+{
+    return s_backlight_brightness;
 }
 
 extern "C" esp_err_t cyd_display_claim_owner(void)

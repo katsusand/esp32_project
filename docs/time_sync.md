@@ -49,6 +49,18 @@ if (time_sync_get_last_attempt_status(&status)) {
 
 English supplement: `time_sync_is_busy()` represents active work that should usually disable duplicate UI actions. `last_success_at` means the last successful synchronization time, while `last_attempt_status` means the result of the most recent synchronization attempt.
 
+同期間隔を実行時に扱う場合は、以下の API を使います。
+
+```c
+ESP_ERROR_CHECK(time_sync_set_interval_minutes(120));
+uint16_t interval_minutes = time_sync_get_interval_minutes();
+ESP_ERROR_CHECK(time_sync_save_interval_minutes());
+```
+
+`time_sync_set_interval_minutes()` は 1 から 1440 分の範囲へ丸めて現在値へ反映します。保存は `time_sync_save_interval_minutes()` を呼ぶまで行われません。
+
+English supplement: The runtime interval affects the scheduler immediately, while persistence is explicit so UI code can batch writes and commit on a screen exit.
+
 ## Runtime Behavior
 
 起動時に `CONFIG_TIME_SYNC_TIMEZONE` が空でなければ、`setenv("TZ", ...)` と `tzset()` を一度だけ実行します。
@@ -61,7 +73,11 @@ task の同期ループは以下です。
 4. 成功/失敗にかかわらず `esp_netif_sntp_deinit()` する
 5. Wi-Fi 接続要求に成功していた場合は `wifi_manager_disable()` で Wi-Fi を OFF に戻す
 6. 失敗時は `CONFIG_TIME_SYNC_RETRY_ATTEMPTS` 回まで短い間隔で再試行する
-7. 通常周期に戻り、`CONFIG_TIME_SYNC_INTERVAL_MINUTES +/- CONFIG_TIME_SYNC_JITTER_MINUTES` の秒単位ランダム delay を待つ
+7. 通常周期に戻り、現在の基準間隔 `time_sync_get_interval_minutes()` に対して `CONFIG_TIME_SYNC_JITTER_MINUTES` を加減した秒単位ランダム delay を待つ
+
+実行中に `time_sync_set_interval_minutes()` が呼ばれた場合は、待機中の通常周期を中断して次回スケジュールを組み直します。これにより、設定変更後に古い長い待ち時間を引きずりません。
+
+English supplement: Interval changes reschedule the next normal sync window instead of forcing an immediate SNTP request.
 
 English supplement: SNTP is initialized for each sync attempt and deinitialized immediately after the wait completes. The current design assumes no other concurrent Wi-Fi client is active when `time_sync` disables Wi-Fi.
 
@@ -89,6 +105,8 @@ English supplement: The jitter is symmetric around the base interval. If subtrac
 - `CONFIG_TIME_SYNC_TIMEZONE`: POSIX timezone 文字列
 
 標準 timezone は `JST-9` です。UTC のまま扱う場合は空文字にします。
+
+`CONFIG_TIME_SYNC_INTERVAL_MINUTES` は初期値です。NVS に保存済みの実行時設定があれば、起動時はこちらが優先されます。
 
 ## Dependencies
 

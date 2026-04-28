@@ -243,6 +243,30 @@ if (cyd_display_touch_to_grid(x, y, &col, &row)) {
 
 English supplement: Generic action hit testing reads button widgets from the current screen. Mode button hit testing uses the most recently rendered button map maintained by the display component.
 
+## Brightness
+
+バックライトの現在値を参照する場合は `cyd_display_get_brightness()` を使います。
+
+```c
+uint8_t brightness = cyd_display_get_brightness();
+```
+
+バックライトを変更する場合は `cyd_display_set_brightness()` を使います。
+
+```c
+ESP_ERROR_CHECK(cyd_display_set_brightness(160));
+```
+
+変更後の値を不揮発保存したい場合は `cyd_display_save_brightness()` を呼びます。
+
+```c
+ESP_ERROR_CHECK(cyd_display_save_brightness());
+```
+
+設定値は 0 から 255 の範囲で扱います。`cyd_display_init()` は、保存済みの値があれば NVS から読み込み、なければ `CONFIG_CYD_DISPLAY_BACKLIGHT_BRIGHTNESS` を初期値として使います。
+
+English supplement: `cyd_display_set_brightness()` applies the change immediately in RAM and on hardware. Persist it explicitly with `cyd_display_save_brightness()` when the UI decides the change is final.
+
 ## Calibration
 
 タッチ補正を適用する場合は `cyd_display_apply_touch_calibration()` を使います。

@@ -86,6 +86,7 @@ typedef struct {
     int16_t last_touch_x;
     int16_t last_touch_y;
     cyd_input_touch_state_t touch_state;
+    TickType_t last_activity_tick;
     SemaphoreHandle_t mutex;
     QueueHandle_t event_queue;
     TaskHandle_t task_handle;
@@ -120,6 +121,7 @@ static cyd_input_state_t s_input = {
         .y = 0,
         .tick = 0,
     },
+    .last_activity_tick = 0,
     .mutex = NULL,
     .event_queue = NULL,
     .task_handle = NULL,
@@ -784,6 +786,7 @@ esp_err_t cyd_input_init(void)
         ESP_RETURN_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, TAG, "input task create failed");
     }
 
+    s_input.last_activity_tick = xTaskGetTickCount();
     s_input.initialized = true;
     return ESP_OK;
 }
@@ -851,7 +854,18 @@ esp_err_t cyd_input_read_event(cyd_input_event_t *event, TickType_t wait_ticks)
         return ESP_ERR_TIMEOUT;
     }
 
+    s_input.last_activity_tick = event->tick;
+
     return ESP_OK;
+}
+
+TickType_t cyd_input_get_last_activity_tick(void)
+{
+    if (!s_input.initialized) {
+        return 0;
+    }
+
+    return s_input.last_activity_tick;
 }
 
 esp_err_t cyd_input_discard_pending_events(void)
