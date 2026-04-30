@@ -11,6 +11,8 @@ const app_shell_app_t *cyd_info_app_get_app(void);
 
 const app_shell_app_t *cyd_settings_app_get_app(void);
 
+const app_shell_app_t *cyd_touch_calibration_app_get_app(void);
+
 #ifdef __cplusplus
 }
 #endif

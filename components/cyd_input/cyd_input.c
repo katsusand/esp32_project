@@ -78,6 +78,7 @@ typedef struct {
     bool boot_button_last_sample_pressed;
     bool boot_button_click_pending;
     uint8_t touch_long_press_stage;
+    uint16_t touch_repeat_stage;
     uint8_t boot_button_stable_count;
     uint8_t boot_button_long_press_seconds;
     TickType_t touch_press_tick;
@@ -108,6 +109,7 @@ static cyd_input_state_t s_input = {
     .boot_button_last_sample_pressed = false,
     .boot_button_click_pending = false,
     .touch_long_press_stage = 0,
+    .touch_repeat_stage = 0,
     .boot_button_stable_count = 0,
     .boot_button_long_press_seconds = 0,
     .touch_press_tick = 0,
@@ -152,6 +154,36 @@ static bool cyd_input_touch_sampling_active(void)
            s_input.touch_stable_pressed;
 }
 
+static void cyd_input_reset_touch_runtime_state(void)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    if (xSemaphoreTake(s_input.mutex, portMAX_DELAY) == pdTRUE) {
+        s_input.touch_stable_pressed = false;
+        s_input.last_touch_sample_pressed = false;
+        s_input.touch_long_press_reported = false;
+        s_input.touch_suppress_click_on_release = false;
+        s_input.touch_long_press_stage = 0;
+        s_input.touch_repeat_stage = 0;
+        s_input.touch_press_tick = 0;
+        s_input.last_touch_x = 0;
+        s_input.last_touch_y = 0;
+        s_input.touch_state.pressed = false;
+        s_input.touch_state.x = 0;
+        s_input.touch_state.y = 0;
+        s_input.touch_state.tick = xTaskGetTickCount();
+        xSemaphoreGive(s_input.mutex);
+    }
+
+    if (cyd_input_touch_irq_enabled()) {
+        gpio_intr_disable((gpio_num_t)CONFIG_CYD_TOUCH_PIN_INT);
+    }
+
+    if (s_input.task_handle != NULL) {
+        xTaskNotifyStateClear(s_input.task_handle);
+    }
+#endif
+}
+
 static bool cyd_input_boot_button_enabled(void)
 {
     return CONFIG_CYD_BOOT_BUTTON_ENABLED && CONFIG_CYD_BOOT_BUTTON_GPIO >= 0;
@@ -192,6 +224,8 @@ static const char *cyd_input_touch_action_name(cyd_input_touch_action_t action)
         return "release";
     case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
         return "long_press";
+    case CYD_INPUT_TOUCH_ACTION_REPEAT:
+        return "repeat";
     default:
         return "unknown";
     }
@@ -424,6 +458,7 @@ static void cyd_input_handle_stable_touch_change(bool pressed, int16_t x, int16_
         s_input.touch_long_press_reported = false;
         s_input.touch_suppress_click_on_release = false;
         s_input.touch_long_press_stage = 0;
+        s_input.touch_repeat_stage = 0;
         cyd_input_emit_touch_event(CYD_INPUT_TOUCH_ACTION_PRESS, true, x, y, 0, now);
         return;
     }
@@ -436,23 +471,30 @@ static void cyd_input_handle_stable_touch_change(bool pressed, int16_t x, int16_
     s_input.touch_long_press_reported = false;
     s_input.touch_suppress_click_on_release = false;
     s_input.touch_long_press_stage = 0;
+    s_input.touch_repeat_stage = 0;
 }
 
 static void cyd_input_handle_touch_hold(TickType_t now)
 {
     TickType_t elapsed;
     TickType_t initial_ticks;
+    TickType_t long_press_repeat_ticks;
     TickType_t repeat_ticks;
-    uint8_t hold_stage;
+    uint8_t hold_stage = 0;
+    uint16_t repeat_stage = 0;
 
     if (!s_input.touch_stable_pressed) {
         return;
     }
 
     initial_ticks = pdMS_TO_TICKS(CONFIG_CYD_INPUT_LONG_PRESS_MS);
-    repeat_ticks = pdMS_TO_TICKS(CONFIG_CYD_INPUT_LONG_PRESS_REPEAT_MS);
+    long_press_repeat_ticks = pdMS_TO_TICKS(CONFIG_CYD_INPUT_LONG_PRESS_REPEAT_MS);
+    repeat_ticks = pdMS_TO_TICKS(CONFIG_CYD_INPUT_TOUCH_REPEAT_MS);
     if (initial_ticks == 0) {
         initial_ticks = 1;
+    }
+    if (long_press_repeat_ticks == 0) {
+        long_press_repeat_ticks = 1;
     }
     if (repeat_ticks == 0) {
         repeat_ticks = 1;
@@ -463,24 +505,39 @@ static void cyd_input_handle_touch_hold(TickType_t now)
         return;
     }
 
-    hold_stage = 1u + (uint8_t)((elapsed - initial_ticks) / repeat_ticks);
+    hold_stage = 1u + (uint8_t)((elapsed - initial_ticks) / long_press_repeat_ticks);
     if (hold_stage > 15u) {
         hold_stage = 15u;
     }
 
-    if (s_input.touch_long_press_stage >= hold_stage) {
-        return;
+    repeat_stage = 1u + (uint16_t)((elapsed - initial_ticks) / repeat_ticks);
+    if (repeat_stage == 0u) {
+        repeat_stage = UINT16_MAX;
     }
 
-    s_input.touch_long_press_reported = true;
-    s_input.touch_suppress_click_on_release = true;
-    s_input.touch_long_press_stage = hold_stage;
-    cyd_input_emit_touch_event(CYD_INPUT_TOUCH_ACTION_LONG_PRESS,
-                               true,
-                               s_input.last_touch_x,
-                               s_input.last_touch_y,
-                               hold_stage,
-                               now);
+    if (s_input.touch_long_press_stage < hold_stage) {
+        s_input.touch_long_press_reported = true;
+        s_input.touch_suppress_click_on_release = true;
+        s_input.touch_long_press_stage = hold_stage;
+        cyd_input_emit_touch_event(CYD_INPUT_TOUCH_ACTION_LONG_PRESS,
+                                   true,
+                                   s_input.last_touch_x,
+                                   s_input.last_touch_y,
+                                   hold_stage,
+                                   now);
+    }
+
+    if (s_input.touch_repeat_stage < repeat_stage) {
+        s_input.touch_long_press_reported = true;
+        s_input.touch_suppress_click_on_release = true;
+        s_input.touch_repeat_stage = repeat_stage;
+        cyd_input_emit_touch_event(CYD_INPUT_TOUCH_ACTION_REPEAT,
+                                   true,
+                                   s_input.last_touch_x,
+                                   s_input.last_touch_y,
+                                   0,
+                                   now);
+    }
 }
 
 static void cyd_input_handle_boot_button_sample(TickType_t now)
@@ -752,8 +809,7 @@ esp_err_t cyd_input_init(void)
 
 #if CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT
     if (!s_input.touch_calibration_loaded) {
-        ESP_LOGI(TAG, "no saved touch calibration, starting calibration flow");
-        ESP_RETURN_ON_ERROR(cyd_input_run_touch_calibration(), TAG, "touch calibration failed");
+        ESP_LOGI(TAG, "no saved touch calibration, boot flow should request calibration");
     }
 #endif
 
@@ -868,6 +924,15 @@ TickType_t cyd_input_get_last_activity_tick(void)
     return s_input.last_activity_tick;
 }
 
+bool cyd_input_has_touch_calibration(void)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    return s_input.touch_calibration_loaded;
+#else
+    return true;
+#endif
+}
+
 esp_err_t cyd_input_discard_pending_events(void)
 {
     cyd_input_event_t event = { 0 };
@@ -884,8 +949,25 @@ esp_err_t cyd_input_run_touch_calibration(void)
 {
 #if CONFIG_CYD_TOUCH_ENABLED
     uint16_t params[8] = { 0 };
-    ESP_RETURN_ON_ERROR(cyd_display_calibrate_touch(params, 8), TAG, "touch calibration failed");
-    ESP_RETURN_ON_ERROR(cyd_display_apply_touch_calibration(params, 8), TAG, "touch calibration apply failed");
+    bool task_suspended = false;
+
+    if (s_input.task_handle != NULL) {
+        vTaskSuspend(s_input.task_handle);
+        task_suspended = true;
+    }
+    if (cyd_input_touch_irq_enabled()) {
+        gpio_intr_disable((gpio_num_t)CONFIG_CYD_TOUCH_PIN_INT);
+    }
+
+    esp_err_t err = cyd_display_calibrate_touch(params, 8);
+    if (err == ESP_OK) {
+        err = cyd_display_apply_touch_calibration(params, 8);
+    }
+    cyd_input_reset_touch_runtime_state();
+    if (task_suspended) {
+        vTaskResume(s_input.task_handle);
+    }
+    ESP_RETURN_ON_ERROR(err, TAG, "touch calibration failed");
     return cyd_input_touch_calibration_save_to_nvs(params);
 #else
     return ESP_ERR_NOT_SUPPORTED;

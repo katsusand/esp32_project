@@ -347,6 +347,7 @@ static void time_sync_retry_after_failure(void)
         time_sync_set_state(TIME_SYNC_STATE_RETRY_WAIT);
         if (time_sync_delay_seconds(CONFIG_TIME_SYNC_RETRY_DELAY_SECONDS) && time_sync_take_reschedule_request()) {
             ESP_LOGI(TAG, "time sync interval updated during retry wait");
+            return;
         }
 
         if (time_sync_try_when_wifi_ready() == ESP_OK) {
@@ -360,16 +361,18 @@ static void time_sync_retry_after_failure(void)
 static void time_sync_task(void *arg)
 {
     (void)arg;
+    bool skip_sync_once = false;
 
     while (true) {
         APP_STACK_MONITOR_CHECK(TAG, "time_sync", 30000);
 
-        if (!time_sync_take_reschedule_request()) {
+        if (!skip_sync_once && !time_sync_take_reschedule_request()) {
             esp_err_t sync_err = time_sync_try_when_wifi_ready();
             if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
                 time_sync_retry_after_failure();
             }
         }
+        skip_sync_once = false;
 
         uint32_t delay_seconds = time_sync_next_delay_seconds();
         ESP_LOGI(TAG,
@@ -380,6 +383,7 @@ static void time_sync_task(void *arg)
         time_sync_set_state(TIME_SYNC_STATE_IDLE);
         if (time_sync_delay_seconds(delay_seconds) && time_sync_take_reschedule_request()) {
             ESP_LOGI(TAG, "time sync interval updated; rescheduling next sync");
+            skip_sync_once = true;
         }
     }
 }

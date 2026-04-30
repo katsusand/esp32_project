@@ -18,6 +18,7 @@
 
 typedef struct {
     bool pending;
+    bool long_pressed;
     uint16_t action_id;
 } hello_app_action_tracker_t;
 
@@ -40,6 +41,15 @@ static bool hello_app_touch_confirmed_action(const cyd_input_event_t *event,
         tracker->pending = cyd_display_hit_test_action(event->data.touch.x,
                                                        event->data.touch.y,
                                                        &tracker->action_id);
+        tracker->long_pressed = false;
+        return false;
+    }
+
+    if (event->data.touch.action == CYD_INPUT_TOUCH_ACTION_LONG_PRESS ||
+        event->data.touch.action == CYD_INPUT_TOUCH_ACTION_REPEAT) {
+        if (tracker->pending) {
+            tracker->long_pressed = true;
+        }
         return false;
     }
 
@@ -49,6 +59,7 @@ static bool hello_app_touch_confirmed_action(const cyd_input_event_t *event,
 
     uint16_t release_action_id = 0;
     bool confirmed = tracker->pending &&
+                     !tracker->long_pressed &&
                      cyd_display_hit_test_action(event->data.touch.x,
                                                  event->data.touch.y,
                                                  &release_action_id) &&
@@ -59,6 +70,7 @@ static bool hello_app_touch_confirmed_action(const cyd_input_event_t *event,
     }
 
     tracker->pending = false;
+    tracker->long_pressed = false;
     tracker->action_id = 0;
     return confirmed;
 }

@@ -206,4 +206,12 @@ menu "CYD Input"
             Interval for repeated long-press progress events after the initial
             long-press threshold has been reached.
 
+    config CYD_INPUT_TOUCH_REPEAT_MS
+        int "CYD input repeat interval (ms)"
+        default 250
+        range 100 5000
+        help
+            Interval for repeat events after the initial long-press threshold
+            has been reached. Repeat events do not carry hold_ticks.
+
 endmenu

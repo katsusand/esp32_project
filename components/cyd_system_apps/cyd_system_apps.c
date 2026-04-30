@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "app_shell.h"
+#include "cyd_alarm.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
 #include "cyd_speaker.h"
@@ -40,6 +41,25 @@
 #define CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP 0x220f
 #define CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN 0x2210
 #define CYD_SETTINGS_APP_ACTION_TIMEZONE_UP 0x2211
+#define CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE 0x2212
+#define CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB 0x2213
+#define CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CANCEL 0x2214
+#define CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CONFIRM 0x2215
+#define CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_DOWN 0x2216
+#define CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_UP 0x2217
+#define CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_DOWN 0x2218
+#define CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_UP 0x2219
+#define CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_DOWN 0x221a
+#define CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_UP 0x221b
+#define CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_DOWN 0x221c
+#define CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_UP 0x221d
+#define CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_SUN 0x221e
+#define CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_MON 0x221f
+#define CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_TUE 0x2220
+#define CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_WED 0x2221
+#define CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_THU 0x2222
+#define CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_FRI 0x2223
+#define CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_SAT 0x2224
 #define CYD_SETTINGS_APP_ACTION_STORED_SELECT_BASE 0x2300
 #define CYD_SYSTEM_APPS_BACK_COL 0
 #define CYD_SYSTEM_APPS_BACK_ROW 0
@@ -141,7 +161,10 @@ typedef struct {
 
 typedef enum {
     CYD_SETTINGS_PAGE_GENERAL = 0,
+    CYD_SETTINGS_PAGE_ALARM1,
+    CYD_SETTINGS_PAGE_ALARM2,
     CYD_SETTINGS_PAGE_NETWORK,
+    CYD_SETTINGS_PAGE_NVS,
     CYD_SETTINGS_PAGE_COUNT,
 } cyd_settings_page_t;
 
@@ -149,12 +172,14 @@ typedef enum {
     CYD_SETTINGS_VIEW_PAGES = 0,
     CYD_SETTINGS_VIEW_STORED_SSIDS,
     CYD_SETTINGS_VIEW_STORED_SSIDS_DELETE_CONFIRM,
+    CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM,
 } cyd_settings_view_t;
 
 static cyd_display_screen_t s_info_screen;
 static cyd_display_screen_t s_settings_screen;
 static const app_shell_app_t *s_info_return_app;
 static const app_shell_app_t *s_settings_return_app;
+static const app_shell_app_t *s_touch_calibration_return_app;
 static cyd_system_apps_touch_tracker_t s_info_touch_tracker;
 static cyd_system_apps_touch_tracker_t s_settings_touch_tracker;
 static cyd_settings_page_t s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
@@ -179,6 +204,7 @@ static bool cyd_system_apps_touch_confirmed_action(const cyd_input_event_t *even
         tracker->long_pressed = false;
         return false;
     case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
+    case CYD_INPUT_TOUCH_ACTION_REPEAT:
         if (tracker->pending) {
             tracker->long_pressed = true;
         }
@@ -202,6 +228,66 @@ static bool cyd_system_apps_touch_confirmed_action(const cyd_input_event_t *even
     default:
         return false;
     }
+}
+
+static bool cyd_settings_is_stepper_action(uint16_t action_id)
+{
+    switch (action_id) {
+    case CYD_SETTINGS_APP_ACTION_BRIGHTNESS_DOWN:
+    case CYD_SETTINGS_APP_ACTION_BRIGHTNESS_UP:
+    case CYD_SETTINGS_APP_ACTION_VOLUME_DOWN:
+    case CYD_SETTINGS_APP_ACTION_VOLUME_UP:
+    case CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN:
+    case CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP:
+    case CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN:
+    case CYD_SETTINGS_APP_ACTION_TIMEZONE_UP:
+    case CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_DOWN:
+    case CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_UP:
+    case CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_DOWN:
+    case CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_UP:
+    case CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_DOWN:
+    case CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_UP:
+    case CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_DOWN:
+    case CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_UP:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool cyd_settings_touch_stepper_action(const cyd_input_event_t *event, uint16_t *action_id)
+{
+    uint16_t pressed_action_id = 0;
+
+    if (event == NULL || action_id == NULL || event->type != CYD_INPUT_EVENT_TOUCH) {
+        return false;
+    }
+
+    if (s_settings_view != CYD_SETTINGS_VIEW_PAGES) {
+        return false;
+    }
+
+    if (s_settings_page != CYD_SETTINGS_PAGE_GENERAL &&
+        s_settings_page != CYD_SETTINGS_PAGE_ALARM1 &&
+        s_settings_page != CYD_SETTINGS_PAGE_ALARM2) {
+        return false;
+    }
+
+    if (event->data.touch.action != CYD_INPUT_TOUCH_ACTION_PRESS &&
+        event->data.touch.action != CYD_INPUT_TOUCH_ACTION_REPEAT) {
+        return false;
+    }
+
+    if (!cyd_display_hit_test_action(event->data.touch.x, event->data.touch.y, &pressed_action_id)) {
+        return false;
+    }
+
+    if (!cyd_settings_is_stepper_action(pressed_action_id)) {
+        return false;
+    }
+
+    *action_id = pressed_action_id;
+    return true;
 }
 
 static const char *cyd_system_apps_wifi_state_text(wifi_manager_state_t state)
@@ -337,8 +423,14 @@ static const char *cyd_settings_page_title(cyd_settings_page_t page)
     switch (page) {
     case CYD_SETTINGS_PAGE_GENERAL:
         return "GENERAL";
+    case CYD_SETTINGS_PAGE_ALARM1:
+        return "ALARM1";
+    case CYD_SETTINGS_PAGE_ALARM2:
+        return "ALARM2";
     case CYD_SETTINGS_PAGE_NETWORK:
         return "NETWORK";
+    case CYD_SETTINGS_PAGE_NVS:
+        return "NVS";
     default:
         return "SETTINGS";
     }
@@ -531,6 +623,31 @@ static esp_err_t cyd_settings_render_delete_confirm(cyd_display_screen_t *screen
     return ESP_OK;
 }
 
+static esp_err_t cyd_settings_render_clear_touch_calib_confirm(cyd_display_screen_t *screen)
+{
+    cyd_ui_add_text(screen, "Clear touch calibration?", 2, 9, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+    cyd_ui_add_text(screen, "Device will restart", 2, 12, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_YELLOW);
+    cyd_ui_add_button(screen,
+                      "Cancel",
+                      4,
+                      20,
+                      14,
+                      3,
+                      CYD_UI_COLOR_BLUE,
+                      CYD_UI_COLOR_CYAN,
+                      CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CANCEL);
+    cyd_ui_add_button(screen,
+                      "OK",
+                      22,
+                      20,
+                      14,
+                      3,
+                      CYD_UI_COLOR_RED,
+                      CYD_UI_COLOR_YELLOW,
+                      CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CONFIRM);
+    return ESP_OK;
+}
+
 static esp_err_t cyd_settings_render_general_page(cyd_display_screen_t *screen)
 {
     char brightness_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
@@ -667,6 +784,128 @@ static esp_err_t cyd_settings_render_general_page(cyd_display_screen_t *screen)
         ESP_RETURN_ON_ERROR(cyd_ui_add_stepper_row(screen, &rows[i]), TAG, "add settings row failed");
     }
 
+    cyd_ui_add_button(screen,
+                      "Touch Calib",
+                      6,
+                      22,
+                      28,
+                      3,
+                      CYD_UI_COLOR_BLUE,
+                      CYD_UI_COLOR_CYAN,
+                      CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE);
+
+    return ESP_OK;
+}
+
+static esp_err_t cyd_settings_render_alarm_page(cyd_display_screen_t *screen, cyd_alarm_id_t alarm_id)
+{
+    char hour_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    char minute_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    cyd_ui_stepper_row_t rows[2] = { 0 };
+    cyd_alarm_config_t alarm = { 0 };
+    uint16_t hour_down_action = alarm_id == CYD_ALARM_ID_1 ? CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_DOWN
+                                                           : CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_DOWN;
+    uint16_t hour_up_action = alarm_id == CYD_ALARM_ID_1 ? CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_UP
+                                                         : CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_UP;
+    uint16_t minute_down_action = alarm_id == CYD_ALARM_ID_1 ? CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_DOWN
+                                                             : CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_DOWN;
+    uint16_t minute_up_action = alarm_id == CYD_ALARM_ID_1 ? CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_UP
+                                                           : CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_UP;
+
+    ESP_RETURN_ON_ERROR(cyd_alarm_get_config(alarm_id, &alarm), TAG, "load alarm config failed");
+
+    snprintf(hour_value, sizeof(hour_value), "%02u", (unsigned)alarm.hour);
+    snprintf(minute_value, sizeof(minute_value), "%02u", (unsigned)alarm.minute);
+    if (alarm_id == CYD_ALARM_ID_1) {
+        static const struct {
+            const char *label;
+            uint8_t mask;
+            uint8_t col;
+            uint8_t span_cols;
+            uint16_t action_id;
+        } weekday_buttons[] = {
+            { "SUN", CYD_ALARM_WEEKDAY_SUNDAY, 0, 5, CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_SUN },
+            { "MON", CYD_ALARM_WEEKDAY_MONDAY, 5, 6, CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_MON },
+            { "TUE", CYD_ALARM_WEEKDAY_TUESDAY, 11, 5, CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_TUE },
+            { "WED", CYD_ALARM_WEEKDAY_WEDNESDAY, 16, 6, CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_WED },
+            { "THU", CYD_ALARM_WEEKDAY_THURSDAY, 22, 6, CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_THU },
+            { "FRI", CYD_ALARM_WEEKDAY_FRIDAY, 28, 5, CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_FRI },
+            { "SAT", CYD_ALARM_WEEKDAY_SATURDAY, 33, 5, CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_SAT },
+        };
+
+        for (size_t i = 0; i < (sizeof(weekday_buttons) / sizeof(weekday_buttons[0])); ++i) {
+            bool selected = (alarm.weekday_mask & weekday_buttons[i].mask) != 0;
+
+            cyd_ui_add_button_with_fg(screen,
+                                      weekday_buttons[i].label,
+                                      weekday_buttons[i].col,
+                                      7,
+                                      weekday_buttons[i].span_cols,
+                                      2,
+                                      CYD_UI_COLOR_WHITE,
+                                      selected ? CYD_UI_COLOR_BLUE : CYD_UI_COLOR_DIMGREY,
+                                      selected ? CYD_UI_COLOR_CYAN : CYD_UI_COLOR_LIGHTGREY,
+                                      weekday_buttons[i].action_id);
+        }
+    }
+
+    rows[0] = (cyd_ui_stepper_row_t){
+        .label_text = "Hour:",
+        .value_text = hour_value,
+        .row = alarm_id == CYD_ALARM_ID_1 ? 12 : 10,
+        .label_col = CYD_SETTINGS_ITEM_LABEL_COL,
+        .label_span_cols = CYD_SETTINGS_ITEM_LABEL_SPAN_COLS,
+        .label_scale = 1,
+        .value_col = CYD_SETTINGS_ITEM_VALUE_COL,
+        .value_span_cols = CYD_SETTINGS_ITEM_VALUE_SPAN_COLS,
+        .value_scale = 2,
+        .button_left_col = CYD_SETTINGS_ITEM_BUTTON_LEFT_COL,
+        .button_right_col = CYD_SETTINGS_ITEM_BUTTON_RIGHT_COL,
+        .button_span_cols = CYD_SETTINGS_ITEM_BUTTON_SPAN_COLS,
+        .button_span_rows = CYD_SETTINGS_ITEM_BUTTON_SPAN_ROWS,
+        .button_scale = CYD_SETTINGS_ITEM_BUTTON_SCALE,
+        .has_button_fg_color = true,
+        .button_fg_color = CYD_UI_COLOR_BLACK,
+        .has_button_bg_color = true,
+        .button_bg_color = CYD_UI_COLOR_GREEN,
+        .has_button_border_color = true,
+        .button_border_color = CYD_UI_COLOR_LIGHTGREY,
+        .decrease_action_id = hour_down_action,
+        .increase_action_id = hour_up_action,
+        .can_decrease = true,
+        .can_increase = true,
+    };
+    rows[1] = (cyd_ui_stepper_row_t){
+        .label_text = "Minute:",
+        .value_text = minute_value,
+        .row = alarm_id == CYD_ALARM_ID_1 ? 17 : 15,
+        .label_col = CYD_SETTINGS_ITEM_LABEL_COL,
+        .label_span_cols = CYD_SETTINGS_ITEM_LABEL_SPAN_COLS,
+        .label_scale = 1,
+        .value_col = CYD_SETTINGS_ITEM_VALUE_COL,
+        .value_span_cols = CYD_SETTINGS_ITEM_VALUE_SPAN_COLS,
+        .value_scale = 2,
+        .button_left_col = CYD_SETTINGS_ITEM_BUTTON_LEFT_COL,
+        .button_right_col = CYD_SETTINGS_ITEM_BUTTON_RIGHT_COL,
+        .button_span_cols = CYD_SETTINGS_ITEM_BUTTON_SPAN_COLS,
+        .button_span_rows = CYD_SETTINGS_ITEM_BUTTON_SPAN_ROWS,
+        .button_scale = CYD_SETTINGS_ITEM_BUTTON_SCALE,
+        .has_button_fg_color = true,
+        .button_fg_color = CYD_UI_COLOR_BLACK,
+        .has_button_bg_color = true,
+        .button_bg_color = CYD_UI_COLOR_GREEN,
+        .has_button_border_color = true,
+        .button_border_color = CYD_UI_COLOR_LIGHTGREY,
+        .decrease_action_id = minute_down_action,
+        .increase_action_id = minute_up_action,
+        .can_decrease = true,
+        .can_increase = true,
+    };
+
+    for (size_t i = 0; i < (sizeof(rows) / sizeof(rows[0])); ++i) {
+        ESP_RETURN_ON_ERROR(cyd_ui_add_stepper_row(screen, &rows[i]), TAG, "add alarm settings row failed");
+    }
+
     return ESP_OK;
 }
 
@@ -697,15 +936,83 @@ static esp_err_t cyd_settings_render_network_page(cyd_display_screen_t *screen)
     return ESP_OK;
 }
 
+static esp_err_t cyd_settings_render_nvs_page(cyd_display_screen_t *screen)
+{
+    cyd_ui_add_text(screen,
+                    "Maintenance actions",
+                    2,
+                    7,
+                    36,
+                    2,
+                    CYD_DISPLAY_ALIGN_LEFT,
+                    1,
+                    CYD_UI_COLOR_WHITE);
+    cyd_ui_add_button(screen,
+                      "Clear Touch Calib",
+                      4,
+                      12,
+                      32,
+                      3,
+                      CYD_UI_COLOR_DIMGREY,
+                      CYD_UI_COLOR_LIGHTGREY,
+                      CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB);
+    cyd_ui_add_text(screen,
+                    "Delete saved touch calibration only",
+                    2,
+                    17,
+                    36,
+                    2,
+                    CYD_DISPLAY_ALIGN_LEFT,
+                    1,
+                    CYD_UI_COLOR_LIGHTGREY);
+    return ESP_OK;
+}
+
 static esp_err_t cyd_settings_render_pages(cyd_display_screen_t *screen)
 {
     if (s_settings_page == CYD_SETTINGS_PAGE_GENERAL) {
         return cyd_settings_render_general_page(screen);
     }
+    if (s_settings_page == CYD_SETTINGS_PAGE_ALARM1) {
+        return cyd_settings_render_alarm_page(screen, CYD_ALARM_ID_1);
+    }
+    if (s_settings_page == CYD_SETTINGS_PAGE_ALARM2) {
+        return cyd_settings_render_alarm_page(screen, CYD_ALARM_ID_2);
+    }
     if (s_settings_page == CYD_SETTINGS_PAGE_NETWORK) {
         return cyd_settings_render_network_page(screen);
     }
+    if (s_settings_page == CYD_SETTINGS_PAGE_NVS) {
+        return cyd_settings_render_nvs_page(screen);
+    }
     return ESP_OK;
+}
+
+static esp_err_t cyd_settings_save_pending_values(void)
+{
+    ESP_RETURN_ON_ERROR(cyd_display_save_brightness(), TAG, "save brightness failed");
+    ESP_RETURN_ON_ERROR(cyd_speaker_save_volume(), TAG, "save volume failed");
+    ESP_RETURN_ON_ERROR(time_sync_save_interval_minutes(), TAG, "save time sync interval failed");
+    return time_sync_save_timezone();
+}
+
+static esp_err_t cyd_settings_show_restart_message(const char *title, const char *detail)
+{
+    cyd_display_screen_t *screen = &s_settings_screen;
+
+    cyd_ui_screen_clear(screen);
+    cyd_ui_add_text(screen,
+                    "SETTINGS",
+                    CYD_SYSTEM_APPS_TITLE_COL,
+                    CYD_SYSTEM_APPS_TITLE_ROW,
+                    CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
+                    CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
+                    CYD_DISPLAY_ALIGN_RIGHT,
+                    2,
+                    CYD_UI_COLOR_CYAN);
+    cyd_ui_add_text(screen, title, 2, 10, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+    cyd_ui_add_text(screen, detail, 2, 14, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_YELLOW);
+    return cyd_ui_submit(screen);
 }
 
 static esp_err_t cyd_settings_app_show(void)
@@ -729,6 +1036,12 @@ static esp_err_t cyd_settings_app_show(void)
     }
     if (s_settings_view == CYD_SETTINGS_VIEW_STORED_SSIDS_DELETE_CONFIRM) {
         ESP_RETURN_ON_ERROR(cyd_settings_render_delete_confirm(screen), TAG, "render delete confirm failed");
+        return cyd_ui_submit(screen);
+    }
+    if (s_settings_view == CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM) {
+        ESP_RETURN_ON_ERROR(cyd_settings_render_clear_touch_calib_confirm(screen),
+                            TAG,
+                            "render clear touch calib confirm failed");
         return cyd_ui_submit(screen);
     }
 
@@ -783,7 +1096,9 @@ static esp_err_t cyd_info_app_leave(void *ctx)
 static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_app)
 {
     (void)ctx;
-    if (from_app != NULL && from_app != cyd_wifi_setup_get_app()) {
+    if (from_app != NULL &&
+        from_app != cyd_wifi_setup_get_app() &&
+        from_app != cyd_touch_calibration_app_get_app()) {
         s_settings_return_app = from_app;
     }
     s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
@@ -993,6 +1308,179 @@ static esp_err_t cyd_settings_handle_general_page_action(uint16_t action_id, boo
         return ESP_OK;
     }
 
+    if (action_id == CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE) {
+        ESP_RETURN_ON_ERROR(app_shell_switch_to(cyd_touch_calibration_app_get_app()),
+                            TAG,
+                            "switch to touch calibration failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    return ESP_OK;
+}
+
+static uint8_t cyd_settings_wrap_u8_down(uint8_t value, uint8_t min_value, uint8_t max_value)
+{
+    return (value <= min_value) ? max_value : (uint8_t)(value - 1U);
+}
+
+static uint8_t cyd_settings_wrap_u8_up(uint8_t value, uint8_t min_value, uint8_t max_value)
+{
+    return (value >= max_value) ? min_value : (uint8_t)(value + 1U);
+}
+
+static esp_err_t cyd_settings_handle_alarm_page_action(uint16_t action_id, bool *handled)
+{
+    cyd_alarm_config_t alarm1 = { 0 };
+    cyd_alarm_config_t alarm2 = { 0 };
+
+    ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
+    *handled = false;
+
+    if ((s_settings_page != CYD_SETTINGS_PAGE_ALARM1 &&
+         s_settings_page != CYD_SETTINGS_PAGE_ALARM2) ||
+        s_settings_view != CYD_SETTINGS_VIEW_PAGES) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(cyd_alarm_get_config(CYD_ALARM_ID_1, &alarm1), TAG, "get alarm1 config failed");
+    ESP_RETURN_ON_ERROR(cyd_alarm_get_config(CYD_ALARM_ID_2, &alarm2), TAG, "get alarm2 config failed");
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_DOWN ||
+        action_id == CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_UP) {
+        alarm1.hour = (action_id == CYD_SETTINGS_APP_ACTION_ALARM1_HOUR_DOWN)
+                          ? cyd_settings_wrap_u8_down(alarm1.hour, 0, 23)
+                          : cyd_settings_wrap_u8_up(alarm1.hour, 0, 23);
+        ESP_RETURN_ON_ERROR(cyd_alarm_set_time(CYD_ALARM_ID_1, alarm1.hour, alarm1.minute),
+                            TAG,
+                            "set alarm1 hour failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_DOWN ||
+        action_id == CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_UP) {
+        alarm1.minute = (action_id == CYD_SETTINGS_APP_ACTION_ALARM1_MINUTE_DOWN)
+                            ? cyd_settings_wrap_u8_down(alarm1.minute, 0, 59)
+                            : cyd_settings_wrap_u8_up(alarm1.minute, 0, 59);
+        ESP_RETURN_ON_ERROR(cyd_alarm_set_time(CYD_ALARM_ID_1, alarm1.hour, alarm1.minute),
+                            TAG,
+                            "set alarm1 minute failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_DOWN ||
+        action_id == CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_UP) {
+        alarm2.hour = (action_id == CYD_SETTINGS_APP_ACTION_ALARM2_HOUR_DOWN)
+                          ? cyd_settings_wrap_u8_down(alarm2.hour, 0, 23)
+                          : cyd_settings_wrap_u8_up(alarm2.hour, 0, 23);
+        ESP_RETURN_ON_ERROR(cyd_alarm_set_time(CYD_ALARM_ID_2, alarm2.hour, alarm2.minute),
+                            TAG,
+                            "set alarm2 hour failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_DOWN ||
+        action_id == CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_UP) {
+        alarm2.minute = (action_id == CYD_SETTINGS_APP_ACTION_ALARM2_MINUTE_DOWN)
+                            ? cyd_settings_wrap_u8_down(alarm2.minute, 0, 59)
+                            : cyd_settings_wrap_u8_up(alarm2.minute, 0, 59);
+        ESP_RETURN_ON_ERROR(cyd_alarm_set_time(CYD_ALARM_ID_2, alarm2.hour, alarm2.minute),
+                            TAG,
+                            "set alarm2 minute failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    if (s_settings_page == CYD_SETTINGS_PAGE_ALARM1) {
+        uint8_t toggle_mask = 0;
+
+        switch (action_id) {
+        case CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_SUN:
+            toggle_mask = CYD_ALARM_WEEKDAY_SUNDAY;
+            break;
+        case CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_MON:
+            toggle_mask = CYD_ALARM_WEEKDAY_MONDAY;
+            break;
+        case CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_TUE:
+            toggle_mask = CYD_ALARM_WEEKDAY_TUESDAY;
+            break;
+        case CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_WED:
+            toggle_mask = CYD_ALARM_WEEKDAY_WEDNESDAY;
+            break;
+        case CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_THU:
+            toggle_mask = CYD_ALARM_WEEKDAY_THURSDAY;
+            break;
+        case CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_FRI:
+            toggle_mask = CYD_ALARM_WEEKDAY_FRIDAY;
+            break;
+        case CYD_SETTINGS_APP_ACTION_ALARM1_WEEKDAY_SAT:
+            toggle_mask = CYD_ALARM_WEEKDAY_SATURDAY;
+            break;
+        default:
+            break;
+        }
+
+        if (toggle_mask != 0) {
+            alarm1.weekday_mask ^= toggle_mask;
+            ESP_RETURN_ON_ERROR(cyd_alarm_set_alarm1_weekday_mask(alarm1.weekday_mask),
+                                TAG,
+                                "set alarm1 weekday mask failed");
+            ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+            *handled = true;
+            return ESP_OK;
+        }
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t cyd_settings_handle_nvs_page_action(uint16_t action_id, bool *handled)
+{
+    ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
+    *handled = false;
+
+    if (s_settings_view == CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM) {
+        if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CANCEL) {
+            s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+            ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+            *handled = true;
+            return ESP_OK;
+        }
+
+        if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CONFIRM) {
+            ESP_RETURN_ON_ERROR(cyd_input_clear_touch_calibration(), TAG, "clear touch calibration failed");
+            ESP_RETURN_ON_ERROR(cyd_input_discard_pending_events(), TAG, "discard input events failed");
+            ESP_RETURN_ON_ERROR(cyd_settings_save_pending_values(), TAG, "save settings before restart failed");
+            ESP_RETURN_ON_ERROR(cyd_settings_show_restart_message("Touch calibration cleared", "Restarting..."),
+                                TAG,
+                                "show restart message failed");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            *handled = true;
+            esp_restart();
+            return ESP_OK;
+        }
+
+        return ESP_OK;
+    }
+
+    if (s_settings_page != CYD_SETTINGS_PAGE_NVS || s_settings_view != CYD_SETTINGS_VIEW_PAGES) {
+        return ESP_OK;
+    }
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB) {
+        s_settings_view = CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM;
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
     return ESP_OK;
 }
 
@@ -1003,10 +1491,20 @@ static esp_err_t cyd_settings_app_step(void *ctx)
     cyd_input_event_t event = { 0 };
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(CYD_SYSTEM_APPS_INPUT_POLL_MS)) == ESP_OK) {
         uint16_t action_id = 0;
+        bool handled = false;
+
+        if (cyd_settings_touch_stepper_action(&event, &action_id)) {
+            ESP_RETURN_ON_ERROR(cyd_settings_handle_general_page_action(action_id, &handled), TAG, "handle general page failed");
+            if (handled) {
+                return ESP_OK;
+            }
+            ESP_RETURN_ON_ERROR(cyd_settings_handle_alarm_page_action(action_id, &handled), TAG, "handle alarm page failed");
+            return ESP_OK;
+        }
+
         if (!cyd_system_apps_touch_confirmed_action(&event, &s_settings_touch_tracker, &action_id)) {
             return ESP_OK;
         }
-        bool handled = false;
 
         ESP_RETURN_ON_ERROR(cyd_settings_handle_stored_ssids_action(action_id, &handled), TAG, "handle stored SSIDs failed");
         if (handled) {
@@ -1024,6 +1522,14 @@ static esp_err_t cyd_settings_app_step(void *ctx)
         if (handled) {
             return ESP_OK;
         }
+        ESP_RETURN_ON_ERROR(cyd_settings_handle_alarm_page_action(action_id, &handled), TAG, "handle alarm page failed");
+        if (handled) {
+            return ESP_OK;
+        }
+        ESP_RETURN_ON_ERROR(cyd_settings_handle_nvs_page_action(action_id, &handled), TAG, "handle NVS page failed");
+        if (handled) {
+            return ESP_OK;
+        }
 
         if (action_id == CYD_SETTINGS_APP_ACTION_BACK) {
             ESP_RETURN_ON_FALSE(s_settings_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "settings return app not set");
@@ -1037,10 +1543,7 @@ static esp_err_t cyd_settings_app_step(void *ctx)
 static esp_err_t cyd_settings_app_leave(void *ctx)
 {
     (void)ctx;
-    ESP_RETURN_ON_ERROR(cyd_display_save_brightness(), TAG, "save brightness failed");
-    ESP_RETURN_ON_ERROR(cyd_speaker_save_volume(), TAG, "save volume failed");
-    ESP_RETURN_ON_ERROR(time_sync_save_interval_minutes(), TAG, "save time sync interval failed");
-    return time_sync_save_timezone();
+    return cyd_settings_save_pending_values();
 }
 
 static const app_shell_app_t s_cyd_info_shell_app = {
@@ -1059,6 +1562,25 @@ static const app_shell_app_t s_cyd_settings_shell_app = {
     .leave = cyd_settings_app_leave,
 };
 
+static esp_err_t cyd_touch_calibration_app_enter(void *ctx, const app_shell_app_t *from_app)
+{
+    (void)ctx;
+
+    ESP_RETURN_ON_FALSE(from_app != NULL, ESP_ERR_INVALID_STATE, TAG, "touch calibration return app not set");
+    s_touch_calibration_return_app = from_app;
+    ESP_RETURN_ON_ERROR(cyd_input_run_touch_calibration(), TAG, "touch calibration failed");
+    ESP_RETURN_ON_ERROR(cyd_input_discard_pending_events(), TAG, "discard input events failed");
+    return app_shell_switch_to(s_touch_calibration_return_app);
+}
+
+static const app_shell_app_t s_cyd_touch_calibration_shell_app = {
+    .id = "touch_calibration",
+    .ctx = NULL,
+    .enter = cyd_touch_calibration_app_enter,
+    .step = NULL,
+    .leave = NULL,
+};
+
 const app_shell_app_t *cyd_info_app_get_app(void)
 {
     return &s_cyd_info_shell_app;
@@ -1067,4 +1589,9 @@ const app_shell_app_t *cyd_info_app_get_app(void)
 const app_shell_app_t *cyd_settings_app_get_app(void)
 {
     return &s_cyd_settings_shell_app;
+}
+
+const app_shell_app_t *cyd_touch_calibration_app_get_app(void)
+{
+    return &s_cyd_touch_calibration_shell_app;
 }

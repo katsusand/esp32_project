@@ -9,6 +9,7 @@
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
 #include "app_shell.h"
+#include "cyd_alarm.h"
 #include "cyd_clock_app.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
@@ -38,7 +39,6 @@
 #define CYD_CLOCK_APP_INPUT_POLL_MS 50
 #define CYD_CLOCK_APP_IDLE_POLL_MS 250
 #define CYD_CLOCK_APP_TAP_SLOP_PX 24
-#define CYD_CLOCK_APP_WIFI_SETUP_LONG_PRESS_MS 10000
 #define CYD_CLOCK_APP_ACTION_SYNC_NOW 0x1001
 #define CYD_CLOCK_APP_ACTION_SETTINGS 0x1002
 #define CYD_CLOCK_APP_ACTION_INFO 0x1003
@@ -50,7 +50,6 @@
 
 static cyd_display_screen_t s_clock_screen;
 static bool s_clock_use_24_hour = true;
-static bool s_clock_wifi_setup_requested;
 static bool s_clock_sync_now_pending;
 
 typedef enum {
@@ -65,9 +64,7 @@ static cyd_clock_app_mode_t s_clock_mode = CYD_CLOCK_APP_MODE_CLOCK;
 typedef struct {
     bool pending;
     bool long_pressed;
-    bool setup_requested;
     bool format_toggle_candidate;
-    TickType_t press_tick;
     int16_t x;
     int16_t y;
 } cyd_clock_touch_tracker_t;
@@ -97,6 +94,7 @@ static bool cyd_clock_app_touch_confirmed_mode_button(const cyd_input_event_t *e
         tracker->long_pressed = false;
         return false;
     case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
+    case CYD_INPUT_TOUCH_ACTION_REPEAT:
         if (tracker->pending) {
             tracker->long_pressed = true;
         }
@@ -142,6 +140,7 @@ static bool cyd_clock_app_touch_confirmed_action(const cyd_input_event_t *event,
         tracker->long_pressed = false;
         return false;
     case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
+    case CYD_INPUT_TOUCH_ACTION_REPEAT:
         if (tracker->pending) {
             tracker->long_pressed = true;
         }
@@ -303,22 +302,15 @@ static bool cyd_clock_app_touch_is_tap(const cyd_input_event_t *event)
     case CYD_INPUT_TOUCH_ACTION_PRESS:
         s_clock_touch_tracker.pending = true;
         s_clock_touch_tracker.long_pressed = false;
-        s_clock_touch_tracker.setup_requested = false;
         s_clock_touch_tracker.format_toggle_candidate =
             cyd_clock_app_touch_is_time_display(event->data.touch.x, event->data.touch.y);
-        s_clock_touch_tracker.press_tick = event->tick;
         s_clock_touch_tracker.x = event->data.touch.x;
         s_clock_touch_tracker.y = event->data.touch.y;
         return false;
     case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
+    case CYD_INPUT_TOUCH_ACTION_REPEAT:
         if (s_clock_touch_tracker.pending) {
             s_clock_touch_tracker.long_pressed = true;
-            if (!s_clock_touch_tracker.setup_requested &&
-                event->tick - s_clock_touch_tracker.press_tick >= pdMS_TO_TICKS(CYD_CLOCK_APP_WIFI_SETUP_LONG_PRESS_MS)) {
-                s_clock_touch_tracker.setup_requested = true;
-                s_clock_wifi_setup_requested = true;
-                ESP_LOGI(TAG, "Wi-Fi setup requested by 10s long press");
-            }
         }
         return false;
     case CYD_INPUT_TOUCH_ACTION_RELEASE: {
@@ -330,7 +322,6 @@ static bool cyd_clock_app_touch_is_tap(const cyd_input_event_t *event)
                       cyd_clock_app_abs_i16(event->data.touch.y - s_clock_touch_tracker.y) <= CYD_CLOCK_APP_TAP_SLOP_PX;
         s_clock_touch_tracker.pending = false;
         s_clock_touch_tracker.long_pressed = false;
-        s_clock_touch_tracker.setup_requested = false;
         s_clock_touch_tracker.format_toggle_candidate = false;
         return tapped;
     }
@@ -381,6 +372,11 @@ static bool cyd_clock_app_process_input(void)
                                     "switch to info failed");
                 continue;
             }
+            if (action_id == CYD_CLOCK_APP_ACTION_ALARM) {
+                ESP_RETURN_ON_ERROR(cyd_alarm_cycle_mode(NULL), TAG, "cycle alarm mode failed");
+                redraw = true;
+                continue;
+            }
         }
 
         if (cyd_clock_app_touch_is_tap(&event)) {
@@ -419,6 +415,8 @@ static esp_err_t cyd_clock_app_show_clock(void)
     char status_text[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     char wifi_status_text[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     cyd_display_screen_t *screen = &s_clock_screen;
+    cyd_alarm_mode_t alarm_mode = cyd_alarm_get_mode();
+    const char *alarm_label = cyd_alarm_mode_label(alarm_mode);
     bool sync_now_enabled = false;
 
     time(&now);
@@ -518,26 +516,22 @@ static esp_err_t cyd_clock_app_show_clock(void)
         CYD_UI_COLOR_CYAN,
         CYD_CLOCK_APP_ACTION_INFO
     );
-    cyd_ui_add_button(screen,
-        "ALARM",
-        27,
-        26,
-        12,
-        3,
-        CYD_UI_COLOR_BLUE,
-        CYD_UI_COLOR_CYAN,
-        CYD_CLOCK_APP_ACTION_ALARM
-    );
+    cyd_ui_add_button_with_fg(screen,
+                              alarm_label,
+                              27,
+                              26,
+                              12,
+                              3,
+                              CYD_UI_COLOR_WHITE,
+                              alarm_mode == CYD_ALARM_MODE_OFF ? CYD_UI_COLOR_DIMGREY : CYD_UI_COLOR_RED,
+                              alarm_mode == CYD_ALARM_MODE_OFF ? CYD_UI_COLOR_LIGHTGREY : CYD_UI_COLOR_YELLOW,
+                              CYD_CLOCK_APP_ACTION_ALARM);
     return cyd_ui_submit(screen);
 }
 
 static bool cyd_clock_app_should_enter_wifi_setup(void)
 {
     wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
-
-    if (s_clock_wifi_setup_requested) {
-        return true;
-    }
 
     if (wifi_manager_get_state(&state) != ESP_OK) {
         return false;
@@ -584,7 +578,6 @@ static const char *cyd_clock_app_wifi_failure_text(esp32_wifi_sta_failure_reason
 
 static void cyd_clock_app_begin_wifi_setup(void)
 {
-    s_clock_wifi_setup_requested = false;
     ESP_LOGI(TAG, "switching to Wi-Fi setup app");
     ESP_ERROR_CHECK(app_shell_switch_to(cyd_wifi_setup_get_app()));
 }
@@ -618,8 +611,6 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
                 }
                 return CYD_CLOCK_APP_MODE_WIFI_RETRYING;
             }
-
-            s_clock_wifi_setup_requested = true;
             cyd_clock_app_begin_wifi_setup();
             return CYD_CLOCK_APP_MODE_CLOCK;
         }
@@ -682,9 +673,13 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
 static esp_err_t cyd_clock_app_enter(void *ctx, const app_shell_app_t *from_app)
 {
     (void)ctx;
-    (void)from_app;
     s_clock_last_update_tick = 0;
     s_clock_mode = CYD_CLOCK_APP_MODE_CLOCK;
+    if (from_app == NULL && !cyd_input_has_touch_calibration()) {
+        ESP_LOGI(TAG, "no saved touch calibration, switching to touch calibration app");
+        return app_shell_switch_to(cyd_touch_calibration_app_get_app());
+    }
+
     return ESP_OK;
 }
 

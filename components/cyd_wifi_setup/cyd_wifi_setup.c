@@ -184,6 +184,7 @@ static bool wifi_touch_event_confirmed_action(const cyd_input_event_t *event,
             tracker->long_pressed = false;
             return false;
         case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
+        case CYD_INPUT_TOUCH_ACTION_REPEAT:
             if (tracker->pending) {
                 tracker->long_pressed = true;
             }
@@ -225,6 +226,7 @@ static bool wifi_touch_event_confirmed_mode_button(const cyd_input_event_t *even
             tracker->long_pressed = false;
             return false;
         case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
+        case CYD_INPUT_TOUCH_ACTION_REPEAT:
             if (tracker->pending) {
                 tracker->long_pressed = true;
             }

@@ -8,6 +8,7 @@
 #include "sdkconfig.h"
 #include "app_shell.h"
 #include "cyd_clock_app.h"
+#include "cyd_alarm.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
 #include "cyd_speaker.h"
@@ -99,6 +100,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(cyd_status_led_init());
     ESP_ERROR_CHECK(cyd_speaker_init());
+    ESP_ERROR_CHECK(cyd_alarm_init());
     ESP_ERROR_CHECK(cyd_display_init());
     if (!setup_requested_on_boot) {
         setup_requested_on_boot = main_touch_irq_setup_requested("post-display",

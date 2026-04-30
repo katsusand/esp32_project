@@ -53,20 +53,69 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
   `LcdBrightness`: LCD バックライトの明るさを変更する
   `Volume`: スピーカー音量を変更する
   `TimeSyncInterval`: NTP 同期間隔を分単位で変更する
+  `Touch Calib`: タッチ補正画面を任意に実行する
 - `NETWORK` page
   現在の Wi-Fi 状態表示
   `Stored SSIDs`: 保存済みSSID一覧、優先化、削除
   `Wi-Fi Setup`: `wifi_setup app` へ切り替える
+- `NVS` page
+  `Clear Touch Calib`: 保存済みタッチ補正だけ消す
 - `<<`: `enter()` の `from_app` として受け取った return app へ戻る
 
 ページ切り替えは画面下部の `<` / `>` ボタンで行います。これにより settings 画面は、今後 `Volume` や `TimeSyncInterval` などを追加しやすい構成になっています。
 
-`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`Volume` は `100 / 70 / 50 / 35 / 25 / 18 / 12 / 8 / 5` の 9 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。これらは `-` / `+` ボタンで変更すると、その場で反映されます。保存は `settings app` を離れるタイミングで行われます。
+`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`Volume` は `100 / 70 / 50 / 35 / 25 / 18 / 12 / 8 / 5` の 9 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`Touch Calib` は manual なタッチ補正画面を起動し、完了後に settings へ戻ります。保存は `settings app` を離れるタイミングで行われます。
+
+- `ALARM1` page
+  `Hour`: `ALARM1` の時を変更する
+  `Minute`: `ALARM1` の分を変更する
+- `ALARM2` page
+  `Hour`: `ALARM2` の時を変更する
+  `Minute`: `ALARM2` の分を変更する
+
+`ALARM1` は daily 想定、`ALARM2` は one-shot 想定です。
 
 `Stored SSIDs` は `NETWORK` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
+
+`NVS` page の `Clear Touch Calib` は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。
 
 `Wi-Fi Setup` へ入ると、`wifi_setup app` は `from_app` として `settings app` を受け取ります。これにより、Wi-Fi 設定完了後は settings 画面へ戻ります。
 
 settings 画面が `wifi_setup app` から戻ってきた場合は、元の return app を保持します。これにより `clock -> settings -> wifi_setup -> settings -> <<` は `clock` へ戻ります。
 
 English supplement: Settings is a menu app, not persistent configuration storage. Add storage-backed settings in dedicated components when values need to survive reboot.
+
+## Input Handling
+
+`settings app` の touch handler には、意図的に 2 系統あります。
+
+1. 通常ボタン経路
+   `cyd_system_apps_touch_confirmed_action()` が使われます。
+   これは `PRESS` 時に候補 action を記録し、`RELEASE` 時に同じボタン上で離された場合だけ確定します。
+   `<<`、`Wi-Fi Setup`、`Stored SSIDs`、ページ移動 `<` / `>` のような普通の button はこの経路です。
+
+2. ステッパー経路
+   `cyd_settings_touch_stepper_action()` が使われます。
+   これは `PRESS` と `REPEAT` をそのまま action として返します。
+   `-` / `+` の長押し連続変更を成立させるため、`RELEASE` を待ちません。
+
+実装上の入口は `cyd_settings_app_step()` です。
+最初にステッパー経路を評価し、該当しなければ通常ボタン経路へ進みます。
+
+English supplement: Stepper buttons are handled on `PRESS`/`REPEAT`, while normal buttons are handled on confirmed `RELEASE`. They are not interchangeable.
+
+### Maintenance Rule
+
+`settings` に新しい `-` / `+` ステッパー項目を追加するときは、次の 3 箇所を必ずセットで更新します。
+
+1. `cyd_settings_is_stepper_action()`
+   新しい action id をステッパー扱いとして登録する
+2. `cyd_settings_touch_stepper_action()`
+   そのページでステッパー経路を有効にする
+3. `cyd_settings_app_step()`
+   ステッパー経路で呼ぶ page-specific handler へ配線する
+
+今回の不具合は 3 が漏れていたため発生しました。
+見た目上は `-` / `+` が描画されていても、handler 配線が抜けると反応しません。
+
+English supplement: If a control should auto-repeat while held, route it through the stepper path and explicitly wire its handler in `cyd_settings_app_step()`.
