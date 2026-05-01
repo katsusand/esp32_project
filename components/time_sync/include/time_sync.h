@@ -19,6 +19,7 @@ typedef enum {
 
 esp_err_t time_sync_start(void);
 void time_sync_request_soon(void);
+void time_sync_request_soon_and_release_wifi(void);
 esp_err_t time_sync_set_interval_minutes(uint16_t interval_minutes);
 esp_err_t time_sync_save_interval_minutes(void);
 uint16_t time_sync_get_interval_minutes(void);

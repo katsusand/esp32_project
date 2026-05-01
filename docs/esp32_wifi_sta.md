@@ -90,11 +90,11 @@ English supplement: Saved credentials are fallback defaults, not a replacement f
 `idf.py menuconfig` で `ESP32 Wi-Fi STA` を開き、必要に応じて以下を設定します。
 
 - `ESP32_WIFI_STA_ENABLED`
-- `ESP32_WIFI_STA_AUTO_START`
+- `ESP32_WIFI_STA_AUTO_START`: `app_main()` で `wifi_manager` と `time_sync` を起動する
 - `ESP32_WIFI_STA_SSID`
 - `ESP32_WIFI_STA_PASSWORD`
 - `ESP32_WIFI_STA_MAX_RETRY`
-- `ESP32_WIFI_STA_WAIT_ON_BOOT`
+- `ESP32_WIFI_STA_WAIT_ON_BOOT`: 互換用の legacy option。現在の `app_main()` は Wi-Fi 接続待ちで boot をブロックしない
 - `ESP32_WIFI_STA_SCAN_LIST_SIZE`
 - `ESP32_WIFI_STA_CONNECT_TIMEOUT_MS`
 - `ESP32_WIFI_STA_WPA3_SAE_PWE_HUNT_AND_PECK`
@@ -119,8 +119,10 @@ English intent: credentials are configuration/runtime inputs, not application so
 
 SSIDが未設定の場合、`esp32_wifi_sta_init()` は `ESP_ERR_NOT_FOUND` を返します。
 また、接続リトライに失敗した場合、`esp32_wifi_sta_wait_connected()` は `ESP_FAIL` を返します。
-アプリケーション側はこれらを見て `esp32_wifi_sta_enter_scan_mode()` を呼び、近くのAPをスキャンします。
-このプロジェクトの `main_task` は、Wi-Fi未設定または接続失敗時にセンサー画面へ進まず、scan mode画面を表示します。
+上位コンポーネントはこれらを見て `esp32_wifi_sta_enter_scan_mode()` を呼び、近くのAPをスキャンできます。
+
+このプロジェクトでは、対話的な scan/password UI は `cyd_wifi_setup` の `wifi setup app` が担当します。`wifi_manager` は SSID 未設定や起動時 setup shortcut を `SETUP_REQUIRED` として表し、`clock app` や `settings app` が必要に応じて `wifi setup app` へ切り替えます。
+
 scan mode画面は、画面下部の `SCAN` ボタンを押した時だけスキャン結果を更新します。
 SSID行をタッチするとパスワード入力画面へ進みます。
 パスワード入力画面の下部には `CANCEL` と `SAVE` を表示します。
@@ -177,7 +179,7 @@ SSID は最大 32 文字、password は最大 64 文字です。password に `NU
 
 ## API Usage
 
-自動起動を使わない場合は、NVS 初期化後にアプリケーションから次の順で呼びます。
+`esp32_wifi_sta` を直接使う場合は、NVS 初期化後にアプリケーションから次の順で呼びます。
 
 ```c
 ESP_ERROR_CHECK(esp32_wifi_sta_init());
@@ -194,4 +196,6 @@ if (wait_ret == ESP_OK) {
 `esp32_wifi_sta_wait_connected()` は `ESP_OK`、`ESP_FAIL`、`ESP_ERR_TIMEOUT` を返します。
 接続が必須でない処理では、タイムアウトしてもアプリケーション全体を停止しない設計にしてください。
 
-English intent: Wi-Fi availability is a runtime condition. Sensor collection and local UI tasks should usually remain alive even when network setup fails.
+このプロジェクトの通常経路では、アプリケーションは `esp32_wifi_sta` を直接 ON/OFF せず、`wifi_manager_acquire()` / `wifi_manager_release()` を通じて Wi-Fi 利用期間を表します。`esp32_wifi_sta` は低レベル STA wrapper、`wifi_manager` は接続寿命の orchestration、`cyd_wifi_setup` はユーザー操作 UI という分担です。
+
+English intent: Wi-Fi availability is a runtime condition. Local UI tasks should usually remain alive even when network setup fails.

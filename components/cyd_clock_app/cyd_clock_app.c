@@ -343,19 +343,27 @@ static bool cyd_clock_app_process_input(void)
                 if (wifi_manager_get_state(&wifi_state) == ESP_OK) {
                     if (wifi_state == WIFI_MANAGER_STATE_CONNECTED) {
                         s_clock_sync_now_pending = false;
+                        time_sync_request_soon();
                     } else {
                         s_clock_sync_now_pending = true;
-                    }
-
-                    if (wifi_state == WIFI_MANAGER_STATE_FAILED ||
-                        wifi_state == WIFI_MANAGER_STATE_OFF ||
-                        wifi_state == WIFI_MANAGER_STATE_SETUP_REQUIRED) {
-                        if (wifi_manager_retry_connection_without_setup_async() != ESP_OK) {
-                            ESP_LOGW(TAG, "SYNC NOW failed to start Wi-Fi retry");
+                        bool retry_requested = false;
+                        if (wifi_state == WIFI_MANAGER_STATE_FAILED ||
+                            wifi_state == WIFI_MANAGER_STATE_OFF ||
+                            wifi_state == WIFI_MANAGER_STATE_SETUP_REQUIRED) {
+                            if (wifi_manager_retry_connection_without_setup_async() != ESP_OK) {
+                                ESP_LOGW(TAG, "SYNC NOW failed to start Wi-Fi retry");
+                                s_clock_sync_now_pending = false;
+                            } else {
+                                retry_requested = true;
+                            }
+                        }
+                        if (retry_requested ||
+                            wifi_state == WIFI_MANAGER_STATE_CONNECTING ||
+                            wifi_state == WIFI_MANAGER_STATE_RECONNECTING) {
+                            time_sync_request_soon_and_release_wifi();
                         }
                     }
                 }
-                time_sync_request_soon();
                 ESP_LOGI(TAG, "SYNC NOW requested");
                 redraw = true;
                 continue;
@@ -401,7 +409,6 @@ static void cyd_clock_app_service_sync_now_pending(void)
     }
     if (wifi_state == WIFI_MANAGER_STATE_CONNECTED) {
         ESP_LOGI(TAG, "SYNC NOW resumed after Wi-Fi reconnect");
-        time_sync_request_soon();
         s_clock_sync_now_pending = false;
     }
 }
@@ -609,6 +616,7 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
                     ESP_LOGW(TAG, "failed to start Wi-Fi retry");
                     return CYD_CLOCK_APP_MODE_WIFI_FAILED;
                 }
+                time_sync_request_soon_and_release_wifi();
                 return CYD_CLOCK_APP_MODE_WIFI_RETRYING;
             }
             cyd_clock_app_begin_wifi_setup();
@@ -658,7 +666,6 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
 
         if (state == WIFI_MANAGER_STATE_CONNECTED) {
             ESP_LOGI(TAG, "saved Wi-Fi retry connected");
-            time_sync_request_soon();
             return CYD_CLOCK_APP_MODE_CLOCK;
         }
         if (state == WIFI_MANAGER_STATE_FAILED ||

@@ -7,20 +7,21 @@ menu "ESP32 Wi-Fi STA"
             Enables the project Wi-Fi STA component and optional app startup hook.
 
     config ESP32_WIFI_STA_AUTO_START
-        bool "Start Wi-Fi STA during app startup"
+        bool "Start Wi-Fi manager during app startup"
         default n
         depends on ESP32_WIFI_STA_ENABLED
         help
-            When enabled, app_main initializes and starts Wi-Fi STA after NVS
-            initialization. Credentials are read from this Kconfig menu.
+            When enabled, app_main starts wifi_manager and time_sync after the
+            display/input initialization. The Wi-Fi STA/radio normally remains
+            off until a component such as time_sync acquires Wi-Fi.
 
     config ESP32_WIFI_STA_WAIT_ON_BOOT
-        bool "Wait for Wi-Fi connection during app startup"
+        bool "Legacy: wait for Wi-Fi connection during app startup"
         default n
         depends on ESP32_WIFI_STA_AUTO_START
         help
-            If enabled, app_main waits for the configured timeout after starting
-            Wi-Fi. A timeout is logged but does not stop the application.
+            Legacy option retained for compatibility. The current app_main path
+            starts wifi_manager/time_sync and does not block boot on Wi-Fi.
 
     config ESP32_WIFI_STA_SCAN_LIST_SIZE
         int "Wi-Fi scan record count"

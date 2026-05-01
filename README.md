@@ -10,8 +10,8 @@ English supplement: This project targets ESP-IDF v5.4.3 and an ESP32 CYD-class b
 
 - LovyanGFX ベースの 320x240 TFT 表示
 - XPT2046 タッチ入力とタッチ補正値の NVS 保存
-- 起動時、未同期時、長押し操作から入れる Wi-Fi scan/password setup UI
-- 保存済み Wi-Fi credential による自動接続
+- 起動時 shortcut、未同期時、設定画面から入れる Wi-Fi scan/password setup UI
+- 保存済み Wi-Fi credential によるオンデマンド接続
 - NTP/SNTP による時刻同期と POSIX timezone 設定
 - 時計画面の 24時間/12時間表示切り替え
 - RGB status LED と PWM speaker
@@ -243,9 +243,11 @@ English supplement: Avoid preserving a build directory across different machines
 
 ## Wi-Fi Setup
 
-起動時に設定済み credential がある場合、アプリは Wi-Fi 接続を試みます。
+起動時に設定済み credential がある場合でも、`wifi_manager` は通常 Wi-Fi radio を開始せず、`OFF` 状態で待機します。NTP 同期など Wi-Fi を使う処理が `wifi_manager_acquire()` した期間だけ接続し、処理完了後の `wifi_manager_release()` で利用者がいなくなると Wi-Fi を OFF に戻します。
 
-現在の UI 構造は `main -> app_shell -> clock app / wifi setup app` です。SSID が未設定、未同期状態での接続失敗、または起動時にタッチ IRQ が LOW の場合は Wi-Fi setup app に入ります。一度でも NTP 同期に成功した後は、接続失敗だけでは自動的に setup UI へ入らず、時計画面を維持します。
+現在の UI 構造は `main -> app_shell -> clock app / settings app / wifi setup app` です。SSID が未設定、未同期状態での接続失敗、または起動時にタッチ IRQ が LOW の場合は Wi-Fi setup app に入れます。同期済みの通常時計画面から Wi-Fi 設定へ入る場合は、`SETTINGS` から `Wi-Fi Setup` を選択します。
+
+一度でも NTP 同期に成功した後は、再同期の接続失敗だけでは自動的に setup UI へ入らず、時計画面を維持します。
 
 setup flow は以下です。
 
@@ -259,13 +261,13 @@ setup flow は以下です。
 
 ## Time Sync and Clock
 
-`CONFIG_ESP32_WIFI_STA_AUTO_START` が有効な場合、`main/app_main()` は `wifi_manager_start()` の後に `time_sync_start()` を呼びます。`wifi_manager_start()` は manager task を常駐させますが、通常起動では Wi-Fi radio を開始しません。NTP 同期などの通信要求時に `wifi_manager` が Wi-Fi を ON にし、処理後に `wifi_manager_disable()` で OFF に戻します。
+`CONFIG_ESP32_WIFI_STA_AUTO_START` が有効な場合、`main/app_main()` は `wifi_manager_start()` の後に `time_sync_start()` を呼びます。`wifi_manager_start()` は manager task を常駐させますが、通常起動では Wi-Fi radio を開始しません。`time_sync` は同期待ちの間だけ `WIFI_MANAGER_USER_TIME_SYNC` として `wifi_manager_acquire()` し、同期処理が終わると `wifi_manager_release()` します。
 
 一度も NTP 同期に成功していない状態では、Wi-Fi 接続失敗時に setup UI へ遷移できます。一度でも同期に成功した後は、再同期の Wi-Fi 接続失敗では setup UI に遷移せず、時計表示を維持します。
 
 時刻同期前は時計画面に `Waiting for NTP` が表示されます。年が 2024 年以上になったら同期済みとして扱い、現在時刻と日付を表示します。
 
-時刻表示部分をタップすると 24時間表示と 12時間表示が切り替わります。長押しすると Wi-Fi setup app に入ります。`SYNC NOW` ボタンを押すと、その場で time sync を前倒し要求できます。Wi-Fi が落ちている場合は再接続も試みます。
+時刻表示部分をタップすると 24時間表示と 12時間表示が切り替わります。長押しはタップ扱いをキャンセルするだけで、Wi-Fi setup app への shortcut ではありません。`SYNC NOW` ボタンを押すと、その場で time sync を前倒し要求できます。Wi-Fi が落ちている場合は再接続も試みます。
 
 timezone は `Time Sync` の `CONFIG_TIME_SYNC_TIMEZONE` で設定します。標準は `JST-9` です。
 
@@ -336,7 +338,7 @@ git submodule update --init --recursive
 
 ### Wi-Fi setup does not start
 
-タッチ IRQ GPIO、タッチ補正、`CONFIG_CYD_TOUCH_ENABLED`、`CONFIG_CYD_TOUCH_PIN_INT` を確認してください。タッチ IRQ を使った起動時 shortcut が使えない場合でも、SSID 未設定や未同期状態での接続失敗時には setup UI へ入ります。同期済みの時計画面からは長押しで setup UI に入れます。
+タッチ IRQ GPIO、タッチ補正、`CONFIG_CYD_TOUCH_ENABLED`、`CONFIG_CYD_TOUCH_PIN_INT` を確認してください。タッチ IRQ を使った起動時 shortcut が使えない場合でも、SSID 未設定や未同期状態での接続失敗時には setup UI へ入れます。同期済みの時計画面からは `SETTINGS` の `Wi-Fi Setup` で setup UI に入ります。
 
 ## License
 

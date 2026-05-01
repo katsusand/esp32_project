@@ -1040,7 +1040,7 @@ static esp_err_t cyd_wifi_setup_app_step(void *ctx)
         if (result == CYD_WIFI_SETUP_PASSWORD_CONNECTED) {
             ESP_RETURN_ON_ERROR(wifi_manager_complete_setup(true), TAG, "complete setup failed");
             s_wifi_setup_app_state.active = false;
-            time_sync_request_soon();
+            time_sync_request_soon_and_release_wifi();
             return cyd_wifi_setup_switch_back();
         }
         if (result == CYD_WIFI_SETUP_PASSWORD_CANCELLED) {

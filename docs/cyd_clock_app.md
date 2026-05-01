@@ -4,9 +4,9 @@
 
 `cyd_clock_app` は、CYD 画面に現在時刻を表示するアプリケーションコンポーネントです。
 
-現在は `app_shell` 上で動く foreground app です。周期的に `time()` / `localtime_r()` を読み、`cyd_ui` 経由で時計画面を更新します。時刻表示部分のタップで 24時間表示と 12時間表示を切り替えます。長押しすると `wifi setup app` へ切り替わります。
+現在は `app_shell` 上で動く foreground app です。周期的に `time()` / `localtime_r()` を読み、`cyd_ui` 経由で時計画面を更新します。時刻表示部分のタップで 24時間表示と 12時間表示を切り替えます。長押しはタップをキャンセルするだけで、Wi-Fi 設定への shortcut ではありません。
 
-LCD owner は `app_shell` task であり、`cyd_clock_app` 自身はその task 上で実行されます。`wifi_manager` が `SETUP_REQUIRED` になった場合、まだ一度も NTP 同期に成功していなければ自動的に Wi-Fi setup へ入ります。一度でも NTP 同期に成功した後は自動遷移せず、時計画面を維持します。
+LCD owner は `app_shell` task であり、`cyd_clock_app` 自身はその task 上で実行されます。`wifi_manager` が `SETUP_REQUIRED` になった場合、明示的な起動時 setup shortcut、またはまだ一度も NTP 同期に成功していない状態なら自動的に Wi-Fi setup へ入ります。一度でも NTP 同期に成功した後は、通常の接続失敗だけでは自動遷移せず、時計画面を維持します。
 
 English supplement: `cyd_clock_app` is no longer a standalone task. It is a shell-managed foreground app that can request transitions to other apps.
 
@@ -60,9 +60,9 @@ English supplement: Time sync detection is intentionally simple. The app treats 
 
 English supplement: The 12H/24H toggle only accepts taps whose press and release both land inside the time display grid rectangle.
 
-長押しが出た場合は tap をキャンセルし、`wifi setup app` への切り替えを要求します。
+長押しが出た場合は tap をキャンセルします。時刻表示の長押しでは 12H/24H 表示切り替えも Wi-Fi setup への遷移も行いません。
 
-English supplement: Long press and large movement cancel the tap. Long press is the manual Wi-Fi setup entry point.
+English supplement: Long press and large movement cancel the tap. Manual Wi-Fi setup is reached from Settings, not by long-pressing the clock face.
 
 ## Display Mode
 

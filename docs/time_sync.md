@@ -4,11 +4,11 @@
 
 `time_sync` は、Wi-Fi 接続後に SNTP/NTP でシステム時刻を同期するコンポーネントです。
 
-内部 task は必要時に `wifi_manager` へ Wi-Fi 接続を要求し、`esp_netif_sntp` を使って同期を行います。同期後は `wifi_manager_disable()` で Wi-Fi を OFF に戻し、基準間隔に jitter を加えた周期で再同期します。
+内部 task は必要時に `wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC)` で Wi-Fi 利用期間を開始し、接続後に `esp_netif_sntp` を使って同期を行います。同期後は `wifi_manager_release(WIFI_MANAGER_USER_TIME_SYNC)` で利用期間を終了し、基準間隔に jitter を加えた周期で再同期します。
 
-一度も同期に成功していない起動直後は、接続失敗時に Wi-Fi setup UI へ遷移できる通常要求を使います。一度でも同期に成功した後の再同期では、時計表示を奪わないように setup UI への遷移を抑止した接続要求を使います。
+起動直後は初回同期要求として Wi-Fi を acquire します。一度も同期に成功していない状態で接続に失敗した場合、`clock app` は Wi-Fi setup UI へ誘導できます。一度でも同期に成功した後の再同期では、接続失敗だけで時計表示を奪わず、通常周期へ戻ります。
 
-English supplement: After the first successful sync, background retries use a no-setup Wi-Fi request so failed resync attempts do not take over the display.
+English supplement: `time_sync` now holds Wi-Fi through the manager acquire/release API. The manager decides when STA/radio should be enabled based on active users.
 
 ## Public API
 
@@ -61,25 +61,30 @@ ESP_ERROR_CHECK(time_sync_save_interval_minutes());
 
 English supplement: The runtime interval affects the scheduler immediately, while persistence is explicit so UI code can batch writes and commit on a screen exit.
 
+即時同期を要求する場合は `time_sync_request_soon()` を使います。`time_sync_request_soon_and_release_wifi()` は互換用の別名として残っていますが、現在の実装では追加の release は行わず、内部的には `time_sync_request_soon()` と同じ動作です。
+
+English supplement: The legacy function name predates the manager acquire/release lifecycle. Callers should not infer that it releases Wi-Fi immediately.
+
 ## Runtime Behavior
 
 起動時に `CONFIG_TIME_SYNC_TIMEZONE` が空でなければ、`setenv("TZ", ...)` と `tzset()` を一度だけ実行します。
 
 task の同期ループは以下です。
 
-1. 最大 60 秒 Wi-Fi 接続を要求する。初回成功前は setup 許可、初回成功後は setup 抑止で要求する
-2. Wi-Fi が利用可能なら `esp_netif_sntp_init()` で SNTP を開始する
-3. `CONFIG_TIME_SYNC_WAIT_TIMEOUT_MS` だけ同期完了を待つ
-4. 成功/失敗にかかわらず `esp_netif_sntp_deinit()` する
-5. Wi-Fi 接続要求に成功していた場合は `wifi_manager_disable()` で Wi-Fi を OFF に戻す
+1. 同期要求が来たら `wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC)` で Wi-Fi 利用者として登録する
+2. Wi-Fi が接続済みになるまで `WAITING_WIFI` で待つ
+3. Wi-Fi が利用可能なら `esp_netif_sntp_init()` で SNTP を開始する
+4. `CONFIG_TIME_SYNC_WAIT_TIMEOUT_MS` だけ同期完了を待つ
+5. 成功/失敗にかかわらず `esp_netif_sntp_deinit()` する
 6. 失敗時は `CONFIG_TIME_SYNC_RETRY_ATTEMPTS` 回まで短い間隔で再試行する
-7. 通常周期に戻り、現在の基準間隔 `time_sync_get_interval_minutes()` に対して `CONFIG_TIME_SYNC_JITTER_MINUTES` を加減した秒単位ランダム delay を待つ
+7. 同期試行が終わったら `wifi_manager_release(WIFI_MANAGER_USER_TIME_SYNC)` を呼ぶ
+8. 通常周期に戻り、現在の基準間隔 `time_sync_get_interval_minutes()` に対して `CONFIG_TIME_SYNC_JITTER_MINUTES` を加減した秒単位ランダム delay を待つ
 
 実行中に `time_sync_set_interval_minutes()` が呼ばれた場合は、待機中の通常周期を中断して次回スケジュールを組み直します。これにより、設定変更後に古い長い待ち時間を引きずりません。
 
 English supplement: Interval changes reschedule the next normal sync window instead of forcing an immediate SNTP request.
 
-English supplement: SNTP is initialized for each sync attempt and deinitialized immediately after the wait completes. The current design assumes no other concurrent Wi-Fi client is active when `time_sync` disables Wi-Fi.
+English supplement: SNTP is initialized for each sync attempt and deinitialized immediately after the wait completes. Wi-Fi lifetime is reference-style through `wifi_manager_acquire()` / `wifi_manager_release()`, so future network clients should use their own manager user bit instead of calling disable directly.
 
 ## Retry and Jitter
 

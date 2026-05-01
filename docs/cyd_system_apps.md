@@ -41,7 +41,8 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
 - ESP-IDF version
 - chip revision / core count
 - free heap
-- Wi-Fi manager state
+- Wi-Fi manager state / active users / last user
+- Wi-Fi connected duration / max duration / warning / last failure
 
 左上の `<<` ボタンで、`enter()` の `from_app` として受け取った return app へ戻ります。
 

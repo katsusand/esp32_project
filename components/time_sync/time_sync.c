@@ -46,7 +46,7 @@
 #define CONFIG_TIME_SYNC_TIMEZONE "JST-9"
 #endif
 
-#define TIME_SYNC_WIFI_WAIT_MS 60000
+#define TIME_SYNC_WIFI_WAIT_POLL_MS 1000U
 #define TIME_SYNC_MIN_INTERVAL_MINUTES 1U
 #define TIME_SYNC_MAX_INTERVAL_MINUTES 1440U
 
@@ -63,6 +63,7 @@ static bool s_time_sync_has_last_attempt;
 static time_t s_time_sync_last_success_at;
 static esp_err_t s_time_sync_last_attempt_status;
 static bool s_time_sync_reschedule_requested;
+static bool s_time_sync_requested;
 static uint16_t s_time_sync_interval_minutes = CONFIG_TIME_SYNC_INTERVAL_MINUTES;
 static char s_time_sync_timezone[TIME_SYNC_TIMEZONE_MAX_LEN + 1] = CONFIG_TIME_SYNC_TIMEZONE;
 
@@ -169,6 +170,33 @@ static bool time_sync_take_reschedule_request(void)
     return requested;
 }
 
+static void time_sync_request_locked(void)
+{
+    s_time_sync_requested = true;
+}
+
+static bool time_sync_has_pending_request(void)
+{
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    bool requested = s_time_sync_requested;
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+    return requested;
+}
+
+static void time_sync_clear_request(void)
+{
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    s_time_sync_requested = false;
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+}
+
+static void time_sync_notify_task(void)
+{
+    if (s_time_sync_task_handle != NULL) {
+        xTaskNotifyGive(s_time_sync_task_handle);
+    }
+}
+
 static void time_sync_set_state(time_sync_state_t state)
 {
     portENTER_CRITICAL(&s_time_sync_status_lock);
@@ -209,12 +237,12 @@ static void time_sync_set_timezone_locked(const char *timezone)
     snprintf(s_time_sync_timezone, sizeof(s_time_sync_timezone), "%s", timezone);
 }
 
-static bool time_sync_has_success(void)
+static void time_sync_handle_wifi_connected(void *ctx)
 {
-    portENTER_CRITICAL(&s_time_sync_status_lock);
-    bool has_last_success = s_time_sync_has_last_success;
-    portEXIT_CRITICAL(&s_time_sync_status_lock);
-    return has_last_success;
+    (void)ctx;
+    if (time_sync_has_pending_request()) {
+        time_sync_notify_task();
+    }
 }
 
 static void time_sync_apply_timezone(void)
@@ -301,90 +329,130 @@ static esp_err_t time_sync_once(void)
     return ESP_OK;
 }
 
-static esp_err_t time_sync_try_when_wifi_ready(void)
+static bool time_sync_wifi_state_is_terminal(wifi_manager_state_t state, bool time_sync_user_active)
 {
-    time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
-
-    if (!wifi_manager_can_request_connection()) {
-        ESP_LOGI(TAG, "time sync skipped: Wi-Fi is not available for connection requests");
-        time_sync_set_state(TIME_SYNC_STATE_IDLE);
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    bool suppress_setup = time_sync_has_success();
-    esp_err_t wifi_err = suppress_setup ?
-                         wifi_manager_request_connection_without_setup(pdMS_TO_TICKS(TIME_SYNC_WIFI_WAIT_MS)) :
-                         wifi_manager_request_connection(pdMS_TO_TICKS(TIME_SYNC_WIFI_WAIT_MS));
-    if (wifi_err != ESP_OK) {
-        ESP_LOGW(TAG, "Wi-Fi not ready for time sync: %s", esp_err_to_name(wifi_err));
-        time_sync_record_attempt_status(wifi_err);
-        time_sync_set_state(TIME_SYNC_STATE_IDLE);
-        return wifi_err;
-    }
-
-    time_sync_set_state(TIME_SYNC_STATE_SYNCING);
-    esp_err_t sync_err = time_sync_once();
-    time_sync_record_attempt_status(sync_err);
-    if (sync_err != ESP_OK) {
-        ESP_LOGW(TAG, "time sync failed: %s", esp_err_to_name(sync_err));
-    }
-    esp_err_t disable_err = wifi_manager_disable();
-    if (disable_err != ESP_OK) {
-        ESP_LOGW(TAG, "Wi-Fi disable after time sync returned %s", esp_err_to_name(disable_err));
-    }
-    time_sync_set_state(TIME_SYNC_STATE_IDLE);
-    return sync_err;
+    return state == WIFI_MANAGER_STATE_STOPPED ||
+           state == WIFI_MANAGER_STATE_FAILED ||
+           state == WIFI_MANAGER_STATE_SETUP_REQUIRED ||
+           (state == WIFI_MANAGER_STATE_OFF && !time_sync_user_active);
 }
 
-static void time_sync_retry_after_failure(void)
+static void time_sync_release_wifi_user(void)
 {
-    for (uint32_t attempt = 1; attempt <= CONFIG_TIME_SYNC_RETRY_ATTEMPTS; ++attempt) {
-        ESP_LOGI(TAG,
-                 "retry time sync in %u seconds (attempt %u/%u)",
-                 (unsigned)CONFIG_TIME_SYNC_RETRY_DELAY_SECONDS,
-                 (unsigned)attempt,
-                 (unsigned)CONFIG_TIME_SYNC_RETRY_ATTEMPTS);
-        time_sync_set_state(TIME_SYNC_STATE_RETRY_WAIT);
-        if (time_sync_delay_seconds(CONFIG_TIME_SYNC_RETRY_DELAY_SECONDS) && time_sync_take_reschedule_request()) {
-            ESP_LOGI(TAG, "time sync interval updated during retry wait");
-            return;
+    if ((wifi_manager_get_active_users() & WIFI_MANAGER_USER_TIME_SYNC) == 0) {
+        return;
+    }
+
+    esp_err_t release_err = wifi_manager_release(WIFI_MANAGER_USER_TIME_SYNC);
+    if (release_err != ESP_OK) {
+        ESP_LOGW(TAG, "time sync release failed: %s", esp_err_to_name(release_err));
+    }
+}
+
+static esp_err_t time_sync_sync_with_connected_wifi(void)
+{
+    esp_err_t sync_err = ESP_FAIL;
+
+    for (uint32_t attempt = 0; attempt <= CONFIG_TIME_SYNC_RETRY_ATTEMPTS; ++attempt) {
+        if (attempt > 0) {
+            ESP_LOGI(TAG,
+                     "retry time sync in %u seconds (attempt %u/%u)",
+                     (unsigned)CONFIG_TIME_SYNC_RETRY_DELAY_SECONDS,
+                     (unsigned)attempt,
+                     (unsigned)CONFIG_TIME_SYNC_RETRY_ATTEMPTS);
+            time_sync_set_state(TIME_SYNC_STATE_RETRY_WAIT);
+            if (time_sync_delay_seconds(CONFIG_TIME_SYNC_RETRY_DELAY_SECONDS) &&
+                time_sync_take_reschedule_request()) {
+                ESP_LOGI(TAG, "time sync interval updated during retry wait");
+                return sync_err;
+            }
         }
 
-        if (time_sync_try_when_wifi_ready() == ESP_OK) {
-            return;
+        time_sync_set_state(TIME_SYNC_STATE_SYNCING);
+        sync_err = time_sync_once();
+        time_sync_record_attempt_status(sync_err);
+        if (sync_err == ESP_OK) {
+            return ESP_OK;
         }
+        ESP_LOGW(TAG, "time sync failed: %s", esp_err_to_name(sync_err));
     }
 
     ESP_LOGW(TAG, "time sync retry limit reached; returning to normal interval");
+    return sync_err;
 }
 
 static void time_sync_task(void *arg)
 {
     (void)arg;
-    bool skip_sync_once = false;
 
     while (true) {
         APP_STACK_MONITOR_CHECK(TAG, "time_sync", 30000);
 
-        if (!skip_sync_once && !time_sync_take_reschedule_request()) {
-            esp_err_t sync_err = time_sync_try_when_wifi_ready();
-            if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
-                time_sync_retry_after_failure();
+        if (!time_sync_has_pending_request()) {
+            if (time_sync_take_reschedule_request()) {
+                ESP_LOGI(TAG, "time sync interval updated; rescheduling next sync");
+                continue;
             }
-        }
-        skip_sync_once = false;
 
-        uint32_t delay_seconds = time_sync_next_delay_seconds();
-        ESP_LOGI(TAG,
-                 "next time sync in %u seconds (%u min %u sec)",
-                 (unsigned)delay_seconds,
-                 (unsigned)(delay_seconds / 60U),
-                 (unsigned)(delay_seconds % 60U));
-        time_sync_set_state(TIME_SYNC_STATE_IDLE);
-        if (time_sync_delay_seconds(delay_seconds) && time_sync_take_reschedule_request()) {
-            ESP_LOGI(TAG, "time sync interval updated; rescheduling next sync");
-            skip_sync_once = true;
+            uint32_t delay_seconds = time_sync_next_delay_seconds();
+            ESP_LOGI(TAG,
+                     "next time sync in %u seconds (%u min %u sec)",
+                     (unsigned)delay_seconds,
+                     (unsigned)(delay_seconds / 60U),
+                     (unsigned)(delay_seconds % 60U));
+            time_sync_set_state(TIME_SYNC_STATE_IDLE);
+            if (time_sync_delay_seconds(delay_seconds)) {
+                if (time_sync_take_reschedule_request()) {
+                    ESP_LOGI(TAG, "time sync interval updated; rescheduling next sync");
+                    continue;
+                }
+                if (time_sync_has_pending_request()) {
+                    continue;
+                }
+            }
+
+            portENTER_CRITICAL(&s_time_sync_status_lock);
+            time_sync_request_locked();
+            portEXIT_CRITICAL(&s_time_sync_status_lock);
+            esp_err_t acquire_err = wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC);
+            if (acquire_err != ESP_OK) {
+                ESP_LOGW(TAG, "time sync acquire failed: %s", esp_err_to_name(acquire_err));
+            }
+            ESP_LOGI(TAG, "time sync due; waiting for Wi-Fi connection");
+            continue;
         }
+
+        wifi_manager_state_t wifi_state = WIFI_MANAGER_STATE_STOPPED;
+        if (wifi_manager_get_state(&wifi_state) != ESP_OK) {
+            ESP_LOGW(TAG, "time sync cannot read Wi-Fi state");
+            time_sync_record_attempt_status(ESP_ERR_INVALID_STATE);
+            time_sync_clear_request();
+            time_sync_release_wifi_user();
+            time_sync_set_state(TIME_SYNC_STATE_IDLE);
+            continue;
+        }
+
+        if (wifi_state != WIFI_MANAGER_STATE_CONNECTED) {
+            bool time_sync_user_active =
+                (wifi_manager_get_active_users() & WIFI_MANAGER_USER_TIME_SYNC) != 0;
+            if (time_sync_wifi_state_is_terminal(wifi_state, time_sync_user_active)) {
+                ESP_LOGW(TAG, "time sync Wi-Fi unavailable: state=%d", (int)wifi_state);
+                time_sync_record_attempt_status(ESP_FAIL);
+                time_sync_clear_request();
+                time_sync_release_wifi_user();
+                time_sync_set_state(TIME_SYNC_STATE_IDLE);
+                continue;
+            }
+
+            time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
+            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(TIME_SYNC_WIFI_WAIT_POLL_MS));
+            continue;
+        }
+
+        (void)time_sync_sync_with_connected_wifi();
+        time_sync_clear_request();
+        time_sync_release_wifi_user();
+        time_sync_set_state(TIME_SYNC_STATE_IDLE);
     }
 }
 
@@ -422,6 +490,15 @@ esp_err_t time_sync_start(void)
         time_sync_set_state(TIME_SYNC_STATE_STOPPED);
         ESP_RETURN_ON_FALSE(false, ESP_ERR_NO_MEM, TAG, "task create failed");
     }
+
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    time_sync_request_locked();
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+    time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
+    ESP_RETURN_ON_ERROR(wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC), TAG, "initial time sync acquire failed");
+
+    wifi_manager_set_connected_callback(time_sync_handle_wifi_connected, NULL);
+    time_sync_notify_task();
     return ESP_OK;
 #else
     return ESP_OK;
@@ -431,11 +508,21 @@ esp_err_t time_sync_start(void)
 void time_sync_request_soon(void)
 {
 #if CONFIG_TIME_SYNC_ENABLED
-    if (s_time_sync_task_handle != NULL) {
-        time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
-        xTaskNotifyGive(s_time_sync_task_handle);
+    portENTER_CRITICAL(&s_time_sync_status_lock);
+    time_sync_request_locked();
+    portEXIT_CRITICAL(&s_time_sync_status_lock);
+    time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
+    esp_err_t acquire_err = wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC);
+    if (acquire_err != ESP_OK) {
+        ESP_LOGW(TAG, "time sync acquire failed: %s", esp_err_to_name(acquire_err));
     }
+    time_sync_notify_task();
 #endif
+}
+
+void time_sync_request_soon_and_release_wifi(void)
+{
+    time_sync_request_soon();
 }
 
 esp_err_t time_sync_set_interval_minutes(uint16_t interval_minutes)

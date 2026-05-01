@@ -33,4 +33,22 @@ menu "Wi-Fi Manager"
         help
             Minimum interval between Wi-Fi manager stack high-water log lines.
 
+    config WIFI_MANAGER_SCAN_RETRY_ATTEMPTS
+        int "Wi-Fi scan retry attempts for saved SSIDs"
+        default 5
+        range 1 20
+        depends on ESP32_WIFI_STA_ENABLED
+        help
+            保存済み SSID が見つからない場合に再スキャンする最大回数です。
+            English supplement: Used only when saved SSIDs are not visible in scan results.
+
+    config WIFI_MANAGER_SCAN_RETRY_DELAY_MS
+        int "Wi-Fi scan retry delay (ms)"
+        default 3000
+        range 0 60000
+        depends on ESP32_WIFI_STA_ENABLED
+        help
+            再スキャンまでの待ち時間です。
+            English supplement: This delay is inserted between scan attempts for transient radio conditions.
+
 endmenu
