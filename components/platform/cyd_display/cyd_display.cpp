@@ -269,8 +269,6 @@ static void cyd_display_draw_left_line(TDisplay &display,
 static void cyd_display_clear_mode_button_map(void);
 static int32_t cyd_display_col_to_px(uint8_t col);
 static int32_t cyd_display_row_to_px(uint8_t row);
-static int32_t cyd_display_center_x_for_rect(const cyd_display_grid_rect_t &rect);
-static int32_t cyd_display_center_y_for_rect(const cyd_display_grid_rect_t &rect);
 static bool cyd_display_mode_button_rect_for_count(size_t button_count, size_t index, cyd_display_grid_rect_t *rect);
 static void cyd_display_update_button_map_from_screen(const cyd_display_screen_t &screen);
 static void cyd_display_copy_text(char *dst, size_t dst_size, const char *src);
@@ -373,16 +371,6 @@ static int32_t cyd_display_col_to_px(uint8_t col)
 static int32_t cyd_display_row_to_px(uint8_t row)
 {
     return static_cast<int32_t>(row) * GRID_CELL_PX;
-}
-
-static int32_t cyd_display_center_x_for_rect(const cyd_display_grid_rect_t &rect)
-{
-    return cyd_display_col_to_px(rect.col) + (static_cast<int32_t>(rect.width) * GRID_CELL_PX) / 2;
-}
-
-static int32_t cyd_display_center_y_for_rect(const cyd_display_grid_rect_t &rect)
-{
-    return cyd_display_row_to_px(rect.row) + (static_cast<int32_t>(rect.height) * GRID_CELL_PX) / 2;
 }
 
 static bool cyd_display_mode_button_rect_for_count(size_t button_count, size_t index, cyd_display_grid_rect_t *rect)

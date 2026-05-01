@@ -10,14 +10,14 @@ English supplement: Treat this component as a build integration layer for Lovyan
 
 ## Build Role
 
-`components/lovyangfx_wrapper/CMakeLists.txt` は、`third_party/lovyangfx_upstream/src` 以下から LovyanGFX の C/C++ ソースを `GLOB` で集め、ESP-IDF component として登録します。
+`components/support/lovyangfx_wrapper/CMakeLists.txt` は、`third_party/lovyangfx_upstream/src` 以下から LovyanGFX の C/C++ ソースを `GLOB` で集め、ESP-IDF component として登録します。
 
 登録される include path は以下です。
 
-- `components/lovyangfx_wrapper/include`
+- `components/support/lovyangfx_wrapper/include`
 - `third_party/lovyangfx_upstream/src`
 
-`components/lovyangfx_wrapper/include/driver/i2s.h` は、古い include path を期待する LovyanGFX 側コード向けに、ESP-IDF v5 系の `driver/i2s_std.h` と `driver/i2s_types.h` を include する互換ヘッダです。
+`components/support/lovyangfx_wrapper/include/driver/i2s.h` は、古い include path を期待する LovyanGFX 側コード向けに、ESP-IDF v5 系の `driver/i2s_std.h` と `driver/i2s_types.h` を include する互換ヘッダです。
 
 English supplement: The local `driver/i2s.h` shim is compatibility glue for ESP-IDF v5 header layout.
 
@@ -45,4 +45,3 @@ English supplement: The local `driver/i2s.h` shim is compatibility glue for ESP-
 - `esp_timer`
 
 `cyd_display` はこの component に依存し、プロジェクト側の画面 API を提供します。通常のアプリケーションコードでは `lovyangfx_wrapper` ではなく `cyd_display` を利用してください。
-

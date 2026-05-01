@@ -109,15 +109,15 @@ loop:
 現時点で shell に載っているアプリは以下です。
 
 - `clock`: `cyd_clock_app_get_app()`
-- `info`: `cyd_info_app_get_app()`
-- `settings`: `cyd_settings_app_get_app()`
+- `info`: `system_info_app_get_app()`
+- `settings`: `system_settings_app_get_app()`
 - `wifi_setup`: `cyd_wifi_setup_get_app()`
 
 `clock app` は通常時の時計表示、`SYNC NOW`、Wi-Fi failed 画面、retry progress を担当します。`info app` は firmware / chip / heap / Wi-Fi 状態などの参照情報を表示します。`settings app` は設定系画面への入口で、現在は Wi-Fi setup への遷移と戻る操作を担当します。`wifi setup app` は scan / password / setup completion を担当します。
 
 English supplement: `info` and `settings` are regular shell apps. They use the `from_app` passed to `enter()` as their return target, keeping them independent from `clock`.
 
-学習用の `hello app` は、`components/app_shell/sample/hello_app/` にサンプルコードとして置いています。通常ビルドには含めません。1 秒ごとに `hello world` をログ出力し、画面下部の `info` ボタンで `info app` に切り替えます。`info app` はアプリ情報を表示し、`OK` ボタンで `hello app` に戻ります。
+学習用の `hello app` は、`components/framework/app_shell/sample/hello_app/` にサンプルコードとして置いています。通常ビルドには含めません。1 秒ごとに `hello world` をログ出力し、画面下部の `info` ボタンで `info app` に切り替えます。`info app` はアプリ情報を表示し、`OK` ボタンで `hello app` に戻ります。
 
 English supplement: `hello` is a learning app for observing app switching without involving clock or Wi-Fi setup behavior.
 

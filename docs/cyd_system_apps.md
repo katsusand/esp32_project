@@ -22,13 +22,13 @@ English supplement: These apps are intentionally lightweight shell apps. They sh
 `info app` へは `app_shell_switch_to()` で遷移します。
 
 ```c
-ESP_ERROR_CHECK(app_shell_switch_to(cyd_info_app_get_app()));
+ESP_ERROR_CHECK(app_shell_switch_to(system_info_app_get_app()));
 ```
 
 `settings app` も同様です。
 
 ```c
-ESP_ERROR_CHECK(app_shell_switch_to(cyd_settings_app_get_app()));
+ESP_ERROR_CHECK(app_shell_switch_to(system_settings_app_get_app()));
 ```
 
 English supplement: Return apps come from the `from_app` pointer passed to `enter()`, avoiding compile-time dependency from system apps back to the clock app.
@@ -55,6 +55,7 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
   `Volume`: スピーカー音量を変更する
   `TimeSyncInterval`: NTP 同期間隔を分単位で変更する
   `Touch Calib`: タッチ補正画面を任意に実行する
+  optional extension button: app 固有設定 app への導線を表示できる
 - `NETWORK` page
   現在の Wi-Fi 状態表示
   `Stored SSIDs`: 保存済みSSID一覧、優先化、削除
@@ -67,20 +68,13 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
 
 `LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`Volume` は `100 / 70 / 50 / 35 / 25 / 18 / 12 / 8 / 5` の 9 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`Touch Calib` は manual なタッチ補正画面を起動し、完了後に settings へ戻ります。保存は `settings app` を離れるタイミングで行われます。
 
-- `ALARM1` page
-  `Hour`: `ALARM1` の時を変更する
-  `Minute`: `ALARM1` の分を変更する
-- `ALARM2` page
-  `Hour`: `ALARM2` の時を変更する
-  `Minute`: `ALARM2` の分を変更する
-
-`ALARM1` は daily 想定、`ALARM2` は one-shot 想定です。
-
 `Stored SSIDs` は `NETWORK` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
 
 `NVS` page の `Clear Touch Calib` は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。
 
 `Wi-Fi Setup` へ入ると、`wifi_setup app` は `from_app` として `settings app` を受け取ります。これにより、Wi-Fi 設定完了後は settings 画面へ戻ります。
+
+app 固有設定がある場合は、`system_settings_set_extension()` で `label + app_shell_app_t` を差し込めます。現在の時計アプリでは `Clock Settings` への導線がこれで追加されます。
 
 settings 画面が `wifi_setup app` から戻ってきた場合は、元の return app を保持します。これにより `clock -> settings -> wifi_setup -> settings -> <<` は `clock` へ戻ります。
 

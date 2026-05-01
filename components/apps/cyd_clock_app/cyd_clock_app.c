@@ -11,6 +11,7 @@
 #include "app_shell.h"
 #include "cyd_alarm.h"
 #include "cyd_clock_app.h"
+#include "cyd_clock_settings_app.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
 #include "cyd_system_apps.h"
@@ -20,7 +21,7 @@
 #include "wifi_manager.h"
 
 #ifndef CONFIG_CYD_CLOCK_APP_TASK_STACK_SIZE
-#define CONFIG_CYD_CLOCK_APP_TASK_STACK_SIZE 6144
+#define CONFIG_CYD_CLOCK_APP_TASK_STACK_SIZE 8192
 #endif
 #ifndef CONFIG_CYD_CLOCK_APP_TASK_PRIORITY
 #define CONFIG_CYD_CLOCK_APP_TASK_PRIORITY 5
@@ -51,6 +52,7 @@
 static cyd_display_screen_t s_clock_screen;
 static bool s_clock_use_24_hour = true;
 static bool s_clock_sync_now_pending;
+static system_settings_extension_t s_clock_settings_extension;
 
 typedef enum {
     CYD_CLOCK_APP_MODE_CLOCK = 0,
@@ -77,6 +79,13 @@ typedef struct {
 
 static cyd_clock_touch_tracker_t s_clock_touch_tracker;
 static cyd_clock_mode_button_tracker_t s_clock_action_tracker;
+
+static void cyd_clock_app_prepare_settings_extension(void)
+{
+    s_clock_settings_extension.label = "Clock Settings";
+    s_clock_settings_extension.app = cyd_clock_settings_app_get_app();
+    system_settings_set_extension(&s_clock_settings_extension);
+}
 
 static bool cyd_clock_app_touch_confirmed_mode_button(const cyd_input_event_t *event,
                                                       cyd_clock_mode_button_tracker_t *tracker,
@@ -286,8 +295,7 @@ static bool cyd_clock_app_touch_is_time_display(int16_t x, int16_t y)
         return false;
     }
 
-    return col >= CYD_CLOCK_APP_TIME_COL &&
-           col < (CYD_CLOCK_APP_TIME_COL + CYD_CLOCK_APP_TIME_SPAN_COLS) &&
+    return col < (CYD_CLOCK_APP_TIME_COL + CYD_CLOCK_APP_TIME_SPAN_COLS) &&
            row >= CYD_CLOCK_APP_TIME_ROW &&
            row < (CYD_CLOCK_APP_TIME_ROW + CYD_CLOCK_APP_TIME_SPAN_ROWS);
 }
@@ -369,13 +377,14 @@ static bool cyd_clock_app_process_input(void)
                 continue;
             }
             if (action_id == CYD_CLOCK_APP_ACTION_SETTINGS) {
-                ESP_RETURN_ON_ERROR(app_shell_switch_to(cyd_settings_app_get_app()),
+                cyd_clock_app_prepare_settings_extension();
+                ESP_RETURN_ON_ERROR(app_shell_switch_to(system_settings_app_get_app()),
                                     TAG,
                                     "switch to settings failed");
                 continue;
             }
             if (action_id == CYD_CLOCK_APP_ACTION_INFO) {
-                ESP_RETURN_ON_ERROR(app_shell_switch_to(cyd_info_app_get_app()),
+                ESP_RETURN_ON_ERROR(app_shell_switch_to(system_info_app_get_app()),
                                     TAG,
                                     "switch to info failed");
                 continue;
@@ -682,9 +691,10 @@ static esp_err_t cyd_clock_app_enter(void *ctx, const app_shell_app_t *from_app)
     (void)ctx;
     s_clock_last_update_tick = 0;
     s_clock_mode = CYD_CLOCK_APP_MODE_CLOCK;
+    cyd_clock_app_prepare_settings_extension();
     if (from_app == NULL && !cyd_input_has_touch_calibration()) {
         ESP_LOGI(TAG, "no saved touch calibration, switching to touch calibration app");
-        return app_shell_switch_to(cyd_touch_calibration_app_get_app());
+        return app_shell_switch_to(system_touch_calibration_app_get_app());
     }
 
     return ESP_OK;

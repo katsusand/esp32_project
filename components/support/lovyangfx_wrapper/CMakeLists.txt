@@ -1,4 +1,4 @@
-set(LGFX_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../third_party/lovyangfx_upstream)
+set(LGFX_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../third_party/lovyangfx_upstream)
 
 file(GLOB SRCS
      ${LGFX_ROOT}/src/lgfx/Fonts/efont/*.c

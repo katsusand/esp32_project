@@ -40,18 +40,23 @@ English supplement: CYD clone boards often look identical but use different LCD 
 ## Project Structure
 
 - `main/`: `app_main()` と起動順
-- `components/cyd_display/`: TFT 表示、画面モデル、ログビュー、タッチ低レベルアクセス
-- `components/cyd_input/`: タッチ/BOOT ボタン入力イベント、タッチ補正保存
-- `components/app_shell/`: foreground UI アプリの実行基盤
-- `components/cyd_wifi_setup/`: Wi-Fi scan/password setup app と helper
-- `components/esp32_wifi_sta/`: ESP-IDF Wi-Fi STA wrapper と credential 保存
-- `components/wifi_manager/`: Wi-Fi 接続状態と接続要求の orchestration
-- `components/time_sync/`: SNTP/NTP 時刻同期
-- `components/cyd_clock_app/`: clock app
-- `components/cyd_status_led/`: RGB status LED
-- `components/cyd_speaker/`: PWM speaker
-- `components/lovyangfx_wrapper/`: LovyanGFX を ESP-IDF component として組み込む wrapper
+- `components/framework/system_boot/`: 起動 orchestration と各 subsystem の初期化順
+- `components/platform/cyd_display/`: TFT 表示、画面モデル、ログビュー、タッチ低レベルアクセス
+- `components/platform/cyd_input/`: タッチ/BOOT ボタン入力イベント、タッチ補正保存
+- `components/framework/app_shell/`: foreground UI アプリの実行基盤
+- `components/services/cyd_wifi_setup/`: Wi-Fi scan/password setup app と helper
+- `components/services/esp32_wifi_sta/`: ESP-IDF Wi-Fi STA wrapper と credential 保存
+- `components/services/wifi_manager/`: Wi-Fi 接続状態と接続要求の orchestration
+- `components/services/time_sync/`: SNTP/NTP 時刻同期
+- `components/apps/cyd_clock_app/`: clock app
+- `components/apps/cyd_clock_settings_app/`: clock-specific settings app
+- `components/apps/cyd_system_apps/`: reusable `INFO` / `SETTINGS` / touch calibration apps
+- `components/platform/cyd_status_led/`: RGB status LED
+- `components/platform/cyd_speaker/`: PWM speaker
+- `components/support/lovyangfx_wrapper/`: LovyanGFX を ESP-IDF component として組み込む wrapper
 - `docs/`: コンポーネントごとの詳細ドキュメント
+- `docs/components_reorg_plan.md`: `components/` 再編 TODO と今後の見通し
+- `docs/system_apps_split_plan.md`: 共通 `INFO/SETTINGS` と clock-specific settings 分離 TODO
 - `third_party/lovyangfx_upstream/`: LovyanGFX upstream source
 
 ## Setup
@@ -185,7 +190,7 @@ git clone --recurse-submodules REPOSITORY_URL
 git submodule update --init --recursive
 ```
 
-English supplement: `components/lovyangfx_wrapper` builds LovyanGFX from `third_party/lovyangfx_upstream/src`, so an empty submodule directory is not a valid build state.
+English supplement: `components/support/lovyangfx_wrapper` builds LovyanGFX from `third_party/lovyangfx_upstream/src`, so an empty submodule directory is not a valid build state.
 
 AI / IDE Assistant 向け運用ルール：
 
@@ -221,6 +226,16 @@ DEV=1 idf.py -p PORT flash monitor
 ```
 
 `DEV=1` が設定されている場合、ビルド時に `APP_DEV=1` が定義されます。
+
+VS Code の ESP-IDF 拡張からビルドする場合も、`DEV=1` が漏れないように `.vscode/settings.json` に以下を入れておきます。
+
+```json
+"idf.customExtraVars": {
+    "DEV": "1"
+}
+```
+
+このリポジトリの `.vscode/settings.json` には、上記設定を入れておくことを前提とします。
 
 English supplement: Unless there is a specific reason to validate a non-development build, assume `DEV=1` for normal firmware iteration and device flashing.
 
@@ -334,7 +349,7 @@ idf.py reconfigure
 git submodule update --init --recursive
 ```
 
-`third_party/lovyangfx_upstream` が空のままでは `components/lovyangfx_wrapper` をビルドできません。
+`third_party/lovyangfx_upstream` が空のままでは `components/support/lovyangfx_wrapper` をビルドできません。
 
 ### Wi-Fi setup does not start
 

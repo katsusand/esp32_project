@@ -2,6 +2,13 @@
 # in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.22)
 
+set(EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_LIST_DIR}/components/apps"
+    "${CMAKE_CURRENT_LIST_DIR}/components/framework"
+    "${CMAKE_CURRENT_LIST_DIR}/components/platform"
+    "${CMAKE_CURRENT_LIST_DIR}/components/services"
+    "${CMAKE_CURRENT_LIST_DIR}/components/support")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # "Trim" the build. Include the minimal set of components, main, and anything it depends on.
 idf_build_set_property(MINIMAL_BUILD ON)

@@ -4,7 +4,7 @@
 
 このディレクトリは通常ビルドには含めません。実験するときだけ、`main/app_main()` の初期 app を `hello_app_get_app()` に差し替え、`main/CMakeLists.txt` からこのサンプルを component として参照できる位置へ移すか、別途 component 登録してください。
 
-English supplement: This sample is intentionally stored under `components/app_shell/sample/` so it remains close to the shell implementation but outside the normal ESP-IDF component build.
+English supplement: This sample is intentionally stored under `components/framework/app_shell/sample/` so it remains close to the shell implementation but outside the normal ESP-IDF component build.
 
 ## Behavior
 

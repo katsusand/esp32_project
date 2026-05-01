@@ -2,8 +2,8 @@ menu "App Shell"
 
     config APP_SHELL_TASK_STACK_SIZE
         int "App shell task stack size"
-        default 6144
-        range 3072 16384
+        default 8192
+        range 6144 16384
         help
             `app_shell` task の stack size です。
             English: this single owner task runs the active foreground app and
