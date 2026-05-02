@@ -20,9 +20,6 @@
 #include "time_sync.h"
 #include "wifi_manager.h"
 
-#ifndef CONFIG_CYD_CLOCK_APP_TASK_STACK_SIZE
-#define CONFIG_CYD_CLOCK_APP_TASK_STACK_SIZE 8192
-#endif
 #ifndef CONFIG_CYD_CLOCK_APP_TASK_PRIORITY
 #define CONFIG_CYD_CLOCK_APP_TASK_PRIORITY 5
 #endif
@@ -177,7 +174,6 @@ static bool cyd_clock_app_touch_confirmed_action(const cyd_input_event_t *event,
 
 static void cyd_clock_app_log_stack_usage(void)
 {
-    APP_STACK_MONITOR_CHECK(TAG, "cyd_clock_app", CONFIG_CYD_CLOCK_APP_STACK_LOG_INTERVAL_MS);
     APP_HEAP_MONITOR_CHECK(TAG, CONFIG_CYD_CLOCK_APP_STACK_LOG_INTERVAL_MS);
 }
 

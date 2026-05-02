@@ -4,6 +4,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
+#include "app_stack_monitor.h"
 #include "app_shell.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
@@ -97,6 +98,8 @@ static void app_shell_task(void *arg)
     }
 
     while (true) {
+        APP_STACK_MONITOR_CHECK(TAG, "app_shell", 30000);
+
         if (s_app_shell_active_app != NULL && s_app_shell_active_app->step != NULL) {
             ESP_ERROR_CHECK(s_app_shell_active_app->step(s_app_shell_active_app->ctx));
         } else {

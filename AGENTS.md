@@ -85,18 +85,33 @@
 そのため、通常のシェルでは `idf.py` にパスが通っていない前提で扱うこと。
 
 `idf.py` を用いた設定・ビルド・書き込み・モニタ実行の前には、  
-必ず以下を実行して ESP-IDF 環境をロードすること：
+EIM 管理環境ではまず以下を実行して ESP-IDF 環境をロードすること：
 
 ```bash
-source ~/.espressif/v5.4.3/esp-idf/export.sh
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
 ```
 
 その後、同じシェル環境で `idf.py build`、`idf.py flash`、`idf.py menuconfig` などを実行すること。
 
+補足:
+
+- EIM により ESP-IDF を管理している環境では、実際の Python venv が `~/.espressif/python_env/...` ではなく `~/.espressif/tools/python/v5.4.3/venv` に配置される場合がある
+- そのため、EIM 前提の運用では `source ~/.espressif/tools/activate_idf_v5.4.3.sh` を優先する
+- `~/.espressif/python_env/...` が存在する環境では `source ~/.espressif/v5.4.3/esp-idf/export.sh` がそのまま動くことがある
+- 一方で `python_env` が無く、EIM の `tools/python/.../venv` だけが存在する環境では `source ~/.espressif/v5.4.3/esp-idf/export.sh` が単独では失敗する場合がある
+- そのような環境では、`export.sh` より `activate_idf_v5.4.3.sh` を優先する
+
+```bash
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
+```
+
+English supplement: In EIM-managed environments, prefer the generated activation script under `~/.espressif/tools/`. Plain `export.sh` may still work when a compatible `python_env` directory exists, but `activate_idf_v5.4.3.sh` is the primary entry point for EIM-based setups.
+
 AI / IDE Assistant は以下を遵守すること：
 
 - `idf.py` が常に利用可能だと仮定しない
-- ビルド手順を案内・自動化する際は、まず上記 `export.sh` の読み込みを前提にする
+- ビルド手順を案内・自動化する際は、EIM 前提ならまず `source ~/.espressif/tools/activate_idf_v5.4.3.sh` の読み込みを前提にする
+- `export.sh` が `python_env` 不在または `python_env` 不一致で失敗した場合は、`source ~/.espressif/tools/activate_idf_v5.4.3.sh` を優先候補として案内する
 - ビルド失敗時は、ソース不備だけでなく ESP-IDF 環境未読込の可能性も確認する
 - `idf.py fullclean` が「別の環境で作られた build directory のため自動削除できない」旨で失敗した場合は、AI が勝手に削除せず、ユーザーに `build/` ディレクトリを手動で削除してもらうよう案内する
 
@@ -191,15 +206,18 @@ English supplement guidance:
 
 実行前提：
 
-- `source ~/.espressif/v5.4.3/esp-idf/export.sh` を読み込んだシェルで `idf.py` を実行する
+- EIM 管理環境では `source ~/.espressif/tools/activate_idf_v5.4.3.sh` を読み込んだシェルで `idf.py` を実行する
+- `python_env` が存在する環境では `source ~/.espressif/v5.4.3/esp-idf/export.sh` でも動作することがある
 
 ビルド確認の実績例：
 
-- このリポジトリでは、開発用の増分ビルド確認として `source ~/.espressif/v5.4.3/esp-idf/export.sh && DEV=1 ninja -C build -v` が通った実績がある
+- このリポジトリでは、EIM 前提の増分ビルド確認として `source ~/.espressif/tools/activate_idf_v5.4.3.sh && DEV=1 ninja -C build -v` が有効である
+- EIM 管理かつ `python_env` が存在しない環境では、`source ~/.espressif/tools/activate_idf_v5.4.3.sh || true && python "$IDF_PATH/tools/idf.py" fullclean && python "$IDF_PATH/tools/idf.py" build` でフルクリーン後の再ビルド完走を確認している
+- `python_env` が存在する環境では、`source ~/.espressif/v5.4.3/esp-idf/export.sh && DEV=1 ninja -C build -v` でも動作することがある
 - `idf.py build` が既存 `build/` ディレクトリの Python / 環境差分で扱いづらい場合でも、環境を正しく読み込んだ上での `DEV=1 ninja -C build -v` は有効な切り分け手段になりうる
 - 明示的に release 相当を確認したい場合を除き、通常のローカル開発ビルド確認では `DEV=1` を優先する
 
-English supplement: For quick compile verification against an existing configured build tree, `source ~/.espressif/v5.4.3/esp-idf/export.sh && DEV=1 ninja -C build -v` is a proven command in this repository. Prefer `DEV=1` for normal local development unless release behavior is being validated on purpose.
+English supplement: For EIM-based setups, `source ~/.espressif/tools/activate_idf_v5.4.3.sh && DEV=1 ninja -C build -v` is the preferred quick compile verification flow. Prefer `DEV=1` for normal local development unless release behavior is being validated on purpose.
 
 `idf.py fullclean` が失敗して `build/` の自動削除を拒否された場合：
 

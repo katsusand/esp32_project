@@ -61,16 +61,22 @@ English supplement: CYD clone boards often look identical but use different LCD 
 
 ## Setup
 
-ESP-IDF v5.4.3 の環境を読み込んでから操作します。
+EIM 管理の ESP-IDF v5.4.3 環境を読み込んでから操作します。
 
 ```bash
-source ~/.espressif/v5.4.3/esp-idf/export.sh
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
 ```
+
+`python_env` が存在する環境では `source ~/.espressif/v5.4.3/esp-idf/export.sh` でも動作することがありますが、このリポジトリでは EIM 前提のため `activate_idf_v5.4.3.sh` を優先します。
+
+VS Code の ESP-IDF 拡張を使っている場合は、通常これらを手で意識しなくても拡張側が環境を扱います。
+
+English supplement: For CLI usage in this repository, prefer the EIM-generated activation script. VS Code ESP-IDF extension users usually do not need to source it manually.
 
 初回または設定変更時は menuconfig を開きます。
 
 ```bash
-idf.py menuconfig
+python "$IDF_PATH/tools/idf.py" menuconfig
 ```
 
 Wi-Fi をビルド時に固定したい場合は、`ESP32 Wi-Fi STA` の `Wi-Fi SSID` と `Wi-Fi password` を設定します。
@@ -82,14 +88,14 @@ English supplement: Credentials are runtime/local configuration. Do not commit r
 ## Build and Flash
 
 ```bash
-source ~/.espressif/v5.4.3/esp-idf/export.sh
-idf.py build
-idf.py -p PORT flash monitor
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
+python "$IDF_PATH/tools/idf.py" build
+python "$IDF_PATH/tools/idf.py" -p PORT flash monitor
 ```
 
 monitor を終了するには `Ctrl-]` を押します。
 
-`idf.py` が見つからない場合は、ESP-IDF 環境が読み込まれていない可能性があります。先に `source ~/.espressif/v5.4.3/esp-idf/export.sh` を実行してください。
+`idf.py` が見つからない場合は、ESP-IDF 環境が読み込まれていない可能性があります。先に `source ~/.espressif/tools/activate_idf_v5.4.3.sh` を実行してください。
 
 人間や AI / IDE Assistant が `source` を読み落としやすい場合は、`scripts/` のラッパーを優先してください。
 
@@ -159,10 +165,10 @@ exec zsh
 eim install -i v5.4.3
 ```
 
-インストール後、`~/.espressif/v5.4.3/esp-idf/export.sh` が存在することを確認します。
+インストール後、`~/.espressif/tools/activate_idf_v5.4.3.sh` が存在することを確認します。
 
 ```bash
-test -f ~/.espressif/v5.4.3/esp-idf/export.sh
+test -f ~/.espressif/tools/activate_idf_v5.4.3.sh
 ```
 
 基本手順は以下です。
@@ -171,10 +177,10 @@ test -f ~/.espressif/v5.4.3/esp-idf/export.sh
 2. Homebrew がなければインストールする
 3. EIM CLI で ESP-IDF v5.4.3 を導入する
 4. LovyanGFX submodule を取得する
-5. `~/.espressif/v5.4.3/esp-idf/export.sh` が存在することを確認する
-6. このリポジトリ直下で `source ~/.espressif/v5.4.3/esp-idf/export.sh` を実行する
+5. `~/.espressif/tools/activate_idf_v5.4.3.sh` が存在することを確認する
+6. このリポジトリ直下で `source ~/.espressif/tools/activate_idf_v5.4.3.sh` を実行する
 7. 必要に応じて `idf.py menuconfig` を開く
-8. `DEV=1 idf.py build` で開発用ビルドを行う
+8. `DEV=1 python "$IDF_PATH/tools/idf.py" build` で開発用ビルドを行う
 
 English supplement: Treat this repository as the source of truth for project intent and workflow. A new Mac should recreate the same ESP-IDF environment rather than trying to reuse another machine's generated build outputs.
 
@@ -198,7 +204,7 @@ AI / IDE Assistant 向け運用ルール：
 - 新しい Mac への ESP-IDF 導入は、まず EIM CLI による `eim install -i v5.4.3` を案内する
 - clone 後は `third_party/lovyangfx_upstream` の LovyanGFX submodule が取得済みか確認する
 - 可能なら `./scripts/idf-build.sh`、`./scripts/idf-menuconfig.sh`、`./scripts/idf-flash-monitor.sh` を優先して使う
-- `idf.py` を直接使う場合は、必ず `source ~/.espressif/v5.4.3/esp-idf/export.sh` の実行を前提にする
+- `idf.py` を直接使う場合は、EIM 前提として `source ~/.espressif/tools/activate_idf_v5.4.3.sh` の実行を前提にする
 - `build/` は環境依存の生成物として扱い、別の Mac で作られた `build/` の再利用を前提にしない
 - `sdkconfig` はローカル生成物として扱い、共有すべき基準値は `sdkconfig.defaults` を参照する
 
@@ -213,9 +219,9 @@ AI / IDE Assistant 向け運用ルール：
 このプロジェクトでは、通常の組み込み開発フローとして `DEV=1` を付けた開発用ビルドを標準とします。
 
 ```bash
-source ~/.espressif/v5.4.3/esp-idf/export.sh
-DEV=1 idf.py build
-DEV=1 idf.py -p PORT flash monitor
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
+DEV=1 python "$IDF_PATH/tools/idf.py" build
+DEV=1 python "$IDF_PATH/tools/idf.py" -p PORT flash monitor
 ```
 
 または、ラッパースクリプトを使っても同じです。
