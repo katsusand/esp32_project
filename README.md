@@ -107,6 +107,12 @@ monitor を終了するには `Ctrl-]` を押します。
 
 English supplement: These wrapper scripts are the preferred execution entry points for repeatable local work because they load the pinned ESP-IDF environment and default `DEV=1` automatically.
 
+## Troubleshooting
+
+まずは `./scripts/idf-build.sh`、`./scripts/idf-menuconfig.sh`、`./scripts/idf-flash-monitor.sh` のラッパーを優先してください。`source` の読み忘れや `DEV=1` の付け忘れを避けやすくなります。
+
+### activate_idf_v5.4.3.sh が非ゼロ終了する
+
 注意:
 
 - EIM が生成する `activate_idf_v5.4.3.sh` は、環境変数の設定自体は成功していても、シェルや呼び出し方によっては非ゼロ終了になることがある
@@ -114,6 +120,20 @@ English supplement: These wrapper scripts are the preferred execution entry poin
 - そのような環境では、`source ~/.espressif/tools/activate_idf_v5.4.3.sh || true` のように activation script の返り値だけ吸収してから `python "$IDF_PATH/tools/idf.py" ...` を実行すると切り分けしやすい
 
 English supplement: On some macOS/EIM setups, `activate_idf_v5.4.3.sh` may populate the environment correctly but still return a non-zero status. Automation that assumes `set -e` semantics should account for this.
+
+### psutil の PermissionError が出る
+
+以下のようなエラーが出る場合があります。
+
+```text
+PermissionError: [Errno 1] Operation not permitted
+```
+
+- これは `idf_component_manager` が `psutil` 経由でプロセス列挙を行う際に、macOS の sandbox / 権限制限へ当たっている可能性がある
+- 少なくともこのプロジェクトでは、ソースコード不備よりも先に「実行環境の制限」を疑う方が切り分けしやすい
+- Codex など sandbox 付き環境では、ビルドコマンドを権限付きで再実行すると通ることがある
+
+English supplement: If `idf_component_manager` fails inside `psutil` with `PermissionError`, prioritize checking sandbox or process-enumeration restrictions before investigating source changes.
 
 ## New Mac Setup
 
