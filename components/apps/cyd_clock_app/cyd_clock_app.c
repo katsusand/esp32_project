@@ -37,7 +37,6 @@
 #define CYD_CLOCK_APP_INPUT_POLL_MS 50
 #define CYD_CLOCK_APP_IDLE_POLL_MS 250
 #define CYD_CLOCK_APP_TAP_SLOP_PX 24
-#define CYD_CLOCK_APP_ACTION_SYNC_NOW 0x1001
 #define CYD_CLOCK_APP_ACTION_SETTINGS 0x1002
 #define CYD_CLOCK_APP_ACTION_INFO 0x1003
 #define CYD_CLOCK_APP_ACTION_ALARM 0x1004
@@ -48,7 +47,6 @@
 
 static cyd_display_screen_t s_clock_screen;
 static bool s_clock_use_24_hour = true;
-static bool s_clock_sync_now_pending;
 static system_settings_extension_t s_clock_settings_extension;
 
 typedef enum {
@@ -259,24 +257,6 @@ static void cyd_clock_app_format_wifi_status(char *status_text, size_t status_si
     snprintf(status_text, status_size, "%s", cyd_clock_app_wifi_state_text(state));
 }
 
-static bool cyd_clock_app_sync_now_enabled(void)
-{
-    wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
-
-    if (time_sync_is_busy()) {
-        return false;
-    }
-
-    if (wifi_manager_get_state(&state) != ESP_OK) {
-        return false;
-    }
-
-    return state == WIFI_MANAGER_STATE_CONNECTED ||
-           state == WIFI_MANAGER_STATE_FAILED ||
-           state == WIFI_MANAGER_STATE_OFF ||
-           state == WIFI_MANAGER_STATE_SETUP_REQUIRED;
-}
-
 static int16_t cyd_clock_app_abs_i16(int16_t value)
 {
     return value < 0 ? (int16_t)-value : value;
@@ -342,36 +322,6 @@ static bool cyd_clock_app_process_input(void)
     while (cyd_input_read_event(&event, 0) == ESP_OK) {
         uint16_t action_id = 0;
         if (cyd_clock_app_touch_confirmed_action(&event, &s_clock_action_tracker, &action_id)) {
-            if (action_id == CYD_CLOCK_APP_ACTION_SYNC_NOW) {
-                wifi_manager_state_t wifi_state = WIFI_MANAGER_STATE_STOPPED;
-                if (wifi_manager_get_state(&wifi_state) == ESP_OK) {
-                    if (wifi_state == WIFI_MANAGER_STATE_CONNECTED) {
-                        s_clock_sync_now_pending = false;
-                        time_sync_request_soon();
-                    } else {
-                        s_clock_sync_now_pending = true;
-                        bool retry_requested = false;
-                        if (wifi_state == WIFI_MANAGER_STATE_FAILED ||
-                            wifi_state == WIFI_MANAGER_STATE_OFF ||
-                            wifi_state == WIFI_MANAGER_STATE_SETUP_REQUIRED) {
-                            if (wifi_manager_retry_connection_without_setup_async() != ESP_OK) {
-                                ESP_LOGW(TAG, "SYNC NOW failed to start Wi-Fi retry");
-                                s_clock_sync_now_pending = false;
-                            } else {
-                                retry_requested = true;
-                            }
-                        }
-                        if (retry_requested ||
-                            wifi_state == WIFI_MANAGER_STATE_CONNECTING ||
-                            wifi_state == WIFI_MANAGER_STATE_RECONNECTING) {
-                            time_sync_request_soon_and_release_wifi();
-                        }
-                    }
-                }
-                ESP_LOGI(TAG, "SYNC NOW requested");
-                redraw = true;
-                continue;
-            }
             if (action_id == CYD_CLOCK_APP_ACTION_SETTINGS) {
                 cyd_clock_app_prepare_settings_extension();
                 ESP_RETURN_ON_ERROR(app_shell_switch_to(system_settings_app_get_app()),
@@ -402,22 +352,6 @@ static bool cyd_clock_app_process_input(void)
     return redraw;
 }
 
-static void cyd_clock_app_service_sync_now_pending(void)
-{
-    wifi_manager_state_t wifi_state = WIFI_MANAGER_STATE_STOPPED;
-
-    if (!s_clock_sync_now_pending) {
-        return;
-    }
-    if (wifi_manager_get_state(&wifi_state) != ESP_OK) {
-        return;
-    }
-    if (wifi_state == WIFI_MANAGER_STATE_CONNECTED) {
-        ESP_LOGI(TAG, "SYNC NOW resumed after Wi-Fi reconnect");
-        s_clock_sync_now_pending = false;
-    }
-}
-
 static esp_err_t cyd_clock_app_show_clock(void)
 {
     time_t now = 0;
@@ -429,7 +363,6 @@ static esp_err_t cyd_clock_app_show_clock(void)
     cyd_display_screen_t *screen = &s_clock_screen;
     cyd_alarm_mode_t alarm_mode = cyd_alarm_get_mode();
     const char *alarm_label = cyd_alarm_mode_label(alarm_mode);
-    bool sync_now_enabled = false;
 
     time(&now);
     localtime_r(&now, &local_time);
@@ -448,8 +381,6 @@ static esp_err_t cyd_clock_app_show_clock(void)
         cyd_clock_app_format_sync_status(status_text, sizeof(status_text));
         cyd_clock_app_format_wifi_status(wifi_status_text, sizeof(wifi_status_text));
     }
-    sync_now_enabled = cyd_clock_app_sync_now_enabled();
-
     cyd_ui_screen_clear(screen);
 
     cyd_ui_add_text(screen,
@@ -479,21 +410,10 @@ static esp_err_t cyd_clock_app_show_clock(void)
                     CYD_DISPLAY_ALIGN_CENTER,
                     4,
                     CYD_UI_COLOR_CYAN);
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      "SYNC NOW",
-                                      12,
-                                      18,
-                                      16,
-                                      3,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      CYD_CLOCK_APP_ACTION_SYNC_NOW,
-                                      sync_now_enabled);
     cyd_ui_add_text(screen,
                     status_text,
                     0,
-                    22,
+                    20,
                     CYD_DISPLAY_GRID_COLS,
                     2,
                     CYD_DISPLAY_ALIGN_CENTER,
@@ -502,7 +422,7 @@ static esp_err_t cyd_clock_app_show_clock(void)
     cyd_ui_add_text(screen,
                     wifi_status_text,
                     0,
-                    24,
+                    22,
                     CYD_DISPLAY_GRID_COLS,
                     2,
                     CYD_DISPLAY_ALIGN_CENTER,
@@ -720,7 +640,6 @@ static esp_err_t cyd_clock_app_step(void *ctx)
     }
 
     bool redraw = cyd_clock_app_process_input();
-    cyd_clock_app_service_sync_now_pending();
     TickType_t now = xTaskGetTickCount();
 
     if (cyd_clock_app_should_enter_wifi_setup()) {
