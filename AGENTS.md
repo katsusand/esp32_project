@@ -112,7 +112,10 @@ AI / IDE Assistant は以下を遵守すること：
 - `idf.py` が常に利用可能だと仮定しない
 - ビルド手順を案内・自動化する際は、EIM 前提ならまず `source ~/.espressif/tools/activate_idf_v5.4.3.sh` の読み込みを前提にする
 - `export.sh` が `python_env` 不在または `python_env` 不一致で失敗した場合は、`source ~/.espressif/tools/activate_idf_v5.4.3.sh` を優先候補として案内する
+- `activate_idf_v5.4.3.sh` が環境設定後に非ゼロ終了する環境があるため、`set -e` 前提の自動化では `source ~/.espressif/tools/activate_idf_v5.4.3.sh && ...` を無条件に連結しない
+- そのような環境で切り分けが必要な場合は、`source ~/.espressif/tools/activate_idf_v5.4.3.sh || true` のように activation script の返り値だけを吸収してから `python "$IDF_PATH/tools/idf.py" ...` を試してよい
 - ビルド失敗時は、ソース不備だけでなく ESP-IDF 環境未読込の可能性も確認する
+- macOS 上で AI / IDE Assistant が sandbox 付きで実行している場合、`idf_component_manager` 内の `psutil` が `PermissionError: [Errno 1] Operation not permitted` で止まることがある。この場合はソース不備より先に実行権限制限を疑う
 - `idf.py fullclean` が「別の環境で作られた build directory のため自動削除できない」旨で失敗した場合は、AI が勝手に削除せず、ユーザーに `build/` ディレクトリを手動で削除してもらうよう案内する
 
 ---
@@ -213,6 +216,7 @@ English supplement guidance:
 
 - このリポジトリでは、EIM 前提の増分ビルド確認として `source ~/.espressif/tools/activate_idf_v5.4.3.sh && DEV=1 ninja -C build -v` が有効である
 - EIM 管理かつ `python_env` が存在しない環境では、`source ~/.espressif/tools/activate_idf_v5.4.3.sh || true && python "$IDF_PATH/tools/idf.py" fullclean && python "$IDF_PATH/tools/idf.py" build` でフルクリーン後の再ビルド完走を確認している
+- macOS の sandbox 制限下では、`idf.py build` / `idf.py fullclean` が `idf_component_manager` 内の `psutil` で `PermissionError: [Errno 1] Operation not permitted` を返しうる。この場合は権限付きで同じコマンドを再実行して純粋なビルド成否を確認する
 - `python_env` が存在する環境では、`source ~/.espressif/v5.4.3/esp-idf/export.sh && DEV=1 ninja -C build -v` でも動作することがある
 - `idf.py build` が既存 `build/` ディレクトリの Python / 環境差分で扱いづらい場合でも、環境を正しく読み込んだ上での `DEV=1 ninja -C build -v` は有効な切り分け手段になりうる
 - 明示的に release 相当を確認したい場合を除き、通常のローカル開発ビルド確認では `DEV=1` を優先する

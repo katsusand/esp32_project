@@ -107,6 +107,14 @@ monitor を終了するには `Ctrl-]` を押します。
 
 English supplement: These wrapper scripts are the preferred execution entry points for repeatable local work because they load the pinned ESP-IDF environment and default `DEV=1` automatically.
 
+注意:
+
+- EIM が生成する `activate_idf_v5.4.3.sh` は、環境変数の設定自体は成功していても、シェルや呼び出し方によっては非ゼロ終了になることがある
+- そのため、AI / IDE Assistant や自動化が `set -e` 前提で `source ~/.espressif/tools/activate_idf_v5.4.3.sh && ...` のように書くと、実際には `idf.py` 実行前に止まることがある
+- そのような環境では、`source ~/.espressif/tools/activate_idf_v5.4.3.sh || true` のように activation script の返り値だけ吸収してから `python "$IDF_PATH/tools/idf.py" ...` を実行すると切り分けしやすい
+
+English supplement: On some macOS/EIM setups, `activate_idf_v5.4.3.sh` may populate the environment correctly but still return a non-zero status. Automation that assumes `set -e` semantics should account for this.
+
 ## New Mac Setup
 
 新しい Mac でこのプロジェクトを扱うときは、まず「Codex の状態を移す」のではなく、「このリポジトリを同じ前提で扱える環境を作る」と考えてください。
@@ -205,6 +213,8 @@ AI / IDE Assistant 向け運用ルール：
 - clone 後は `third_party/lovyangfx_upstream` の LovyanGFX submodule が取得済みか確認する
 - 可能なら `./scripts/idf-build.sh`、`./scripts/idf-menuconfig.sh`、`./scripts/idf-flash-monitor.sh` を優先して使う
 - `idf.py` を直接使う場合は、EIM 前提として `source ~/.espressif/tools/activate_idf_v5.4.3.sh` の実行を前提にする
+- `activate_idf_v5.4.3.sh` が環境設定後に非ゼロ終了する環境では、`set -e` 前提の自動化でそのまま連結しない
+- macOS 上の sandbox / 権限制限で `psutil` が `PermissionError: [Errno 1] Operation not permitted` を返す場合、これはソース不備ではなくプロセス列挙制限の可能性を優先して確認する
 - `build/` は環境依存の生成物として扱い、別の Mac で作られた `build/` の再利用を前提にしない
 - `sdkconfig` はローカル生成物として扱い、共有すべき基準値は `sdkconfig.defaults` を参照する
 
@@ -346,6 +356,18 @@ idf.py reconfigure
 ### Fullclean cannot remove build
 
 別環境で生成された `build/` のため `idf.py fullclean` が削除を拒否する場合があります。その場合、このプロジェクトでは自動削除せず、内容を確認した上で手動で `build/` を削除してください。
+
+### AI build stops at psutil PermissionError
+
+特に macOS 上で AI / IDE Assistant が sandbox 付きで `idf.py build` や `idf.py fullclean` を実行すると、`idf_component_manager` 内の `psutil` がプロセス列挙で失敗し、`PermissionError: [Errno 1] Operation not permitted` で止まることがあります。
+
+この場合は、まずソースエラーではなく実行権限の制限を疑ってください。
+
+- `activate_idf_v5.4.3.sh` で環境を読み込んでも止まる場合がある
+- まず activation script の返り値で止まっていないか確認する
+- その上で `psutil` の `PermissionError` が出ているなら、権限付きで同じビルドを再実行して純粋なビルド成否を確認する
+
+English supplement: On macOS, sandboxed AI-driven builds may fail before real compilation because `psutil` in `idf_component_manager` cannot enumerate processes. Treat this as an execution-environment issue first, not a firmware source regression.
 
 ### LovyanGFX is missing
 
