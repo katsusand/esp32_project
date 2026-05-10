@@ -13,6 +13,7 @@ English supplement: This project targets ESP-IDF v5.4.3 and an ESP32 CYD-class b
 - 起動時 shortcut、未同期時、設定画面から入れる Wi-Fi scan/password setup UI
 - 保存済み Wi-Fi credential によるオンデマンド接続
 - NTP/SNTP による時刻同期と POSIX timezone 設定
+- アプリ共通の時刻スケジューラー
 - 時計画面の 24時間/12時間表示切り替え
 - RGB status LED と PWM speaker
 - `sdkconfig.defaults` による CYD ボード設定と 4 MB flash 設定の固定
@@ -48,6 +49,7 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `components/services/esp32_wifi_sta/`: ESP-IDF Wi-Fi STA wrapper と credential 保存
 - `components/services/wifi_manager/`: Wi-Fi 接続状態と接続要求の orchestration
 - `components/services/time_sync/`: SNTP/NTP 時刻同期
+- `components/services/app_scheduler/`: アプリ共通の時刻スケジューラー
 - `components/apps/cyd_clock_app/`: clock app
 - `components/apps/cyd_clock_settings_app/`: clock-specific settings app
 - `components/apps/cyd_system_apps/`: reusable `INFO` / `SETTINGS` / touch calibration apps

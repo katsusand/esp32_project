@@ -10,8 +10,10 @@
 #include "cyd_alarm.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
+#include "app_scheduler.h"
 #include "cyd_speaker.h"
 #include "cyd_status_led.h"
+#include "time_tick.h"
 #include "system_boot.h"
 #if CONFIG_ESP32_WIFI_STA_ENABLED
 #include "time_sync.h"
@@ -116,6 +118,8 @@ esp_err_t system_boot_start(const app_shell_app_t *home_app)
     ESP_RETURN_ON_ERROR(system_boot_init_nvs(), TAG, "NVS init failed");
     ESP_RETURN_ON_ERROR(cyd_status_led_init(), TAG, "status LED init failed");
     ESP_RETURN_ON_ERROR(cyd_speaker_init(), TAG, "speaker init failed");
+    ESP_RETURN_ON_ERROR(time_tick_start(), TAG, "time tick start failed");
+    ESP_RETURN_ON_ERROR(app_scheduler_init(), TAG, "scheduler init failed");
     ESP_RETURN_ON_ERROR(cyd_alarm_init(), TAG, "alarm init failed");
     ESP_RETURN_ON_ERROR(cyd_display_init(), TAG, "display init failed");
 

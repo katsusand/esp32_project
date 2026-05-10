@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -17,14 +18,12 @@
 #include "cyd_system_apps.h"
 #include "cyd_ui.h"
 #include "cyd_wifi_setup.h"
+#include "time_tick.h"
 #include "time_sync.h"
 #include "wifi_manager.h"
 
 #ifndef CONFIG_CYD_CLOCK_APP_TASK_PRIORITY
 #define CONFIG_CYD_CLOCK_APP_TASK_PRIORITY 5
-#endif
-#ifndef CONFIG_CYD_CLOCK_APP_UPDATE_INTERVAL_MS
-#define CONFIG_CYD_CLOCK_APP_UPDATE_INTERVAL_MS 1000
 #endif
 #ifndef CONFIG_CYD_CLOCK_APP_STACK_LOG_INTERVAL_MS
 #define CONFIG_CYD_CLOCK_APP_STACK_LOG_INTERVAL_MS 30000
@@ -55,8 +54,9 @@ typedef enum {
     CYD_CLOCK_APP_MODE_WIFI_RETRYING,
 } cyd_clock_app_mode_t;
 
-static TickType_t s_clock_last_update_tick;
 static cyd_clock_app_mode_t s_clock_mode = CYD_CLOCK_APP_MODE_CLOCK;
+static QueueHandle_t s_clock_tick_queue;
+static bool s_clock_needs_redraw;
 
 typedef struct {
     bool pending;
@@ -352,6 +352,22 @@ static bool cyd_clock_app_process_input(void)
     return redraw;
 }
 
+static bool cyd_clock_app_process_time_ticks(void)
+{
+    bool redraw = false;
+    time_tick_event_t tick = { 0 };
+
+    if (s_clock_tick_queue == NULL) {
+        return false;
+    }
+
+    while (xQueueReceive(s_clock_tick_queue, &tick, 0) == pdTRUE) {
+        redraw = true;
+    }
+
+    return redraw;
+}
+
 static esp_err_t cyd_clock_app_show_clock(void)
 {
     time_t now = 0;
@@ -605,9 +621,12 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
 static esp_err_t cyd_clock_app_enter(void *ctx, const app_shell_app_t *from_app)
 {
     (void)ctx;
-    s_clock_last_update_tick = 0;
     s_clock_mode = CYD_CLOCK_APP_MODE_CLOCK;
+    s_clock_needs_redraw = true;
     cyd_clock_app_prepare_settings_extension();
+    if (s_clock_tick_queue == NULL) {
+        ESP_RETURN_ON_ERROR(time_tick_subscribe(&s_clock_tick_queue), TAG, "time tick subscribe failed");
+    }
     if (from_app == NULL && !cyd_input_has_touch_calibration()) {
         ESP_LOGI(TAG, "no saved touch calibration, switching to touch calibration app");
         return app_shell_switch_to(system_touch_calibration_app_get_app());
@@ -630,17 +649,18 @@ static esp_err_t cyd_clock_app_step(void *ctx)
 
     if (s_clock_mode == CYD_CLOCK_APP_MODE_WIFI_FAILED) {
         s_clock_mode = cyd_clock_app_run_wifi_failed();
-        s_clock_last_update_tick = 0;
+        s_clock_needs_redraw = true;
         return ESP_OK;
     }
     if (s_clock_mode == CYD_CLOCK_APP_MODE_WIFI_RETRYING) {
         s_clock_mode = cyd_clock_app_run_wifi_retrying();
-        s_clock_last_update_tick = 0;
+        s_clock_needs_redraw = true;
         return ESP_OK;
     }
 
-    bool redraw = cyd_clock_app_process_input();
-    TickType_t now = xTaskGetTickCount();
+    bool redraw = s_clock_needs_redraw;
+    redraw |= cyd_clock_app_process_input();
+    redraw |= cyd_clock_app_process_time_ticks();
 
     if (cyd_clock_app_should_enter_wifi_setup()) {
         cyd_clock_app_begin_wifi_setup();
@@ -652,11 +672,9 @@ static esp_err_t cyd_clock_app_step(void *ctx)
         return ESP_OK;
     }
 
-    if (redraw ||
-        s_clock_last_update_tick == 0 ||
-        now - s_clock_last_update_tick >= pdMS_TO_TICKS(CONFIG_CYD_CLOCK_APP_UPDATE_INTERVAL_MS)) {
+    if (redraw) {
         ESP_RETURN_ON_ERROR(cyd_clock_app_show_clock(), TAG, "show clock failed");
-        s_clock_last_update_tick = now;
+        s_clock_needs_redraw = false;
     }
 
     vTaskDelay(pdMS_TO_TICKS(CYD_CLOCK_APP_INPUT_POLL_MS));

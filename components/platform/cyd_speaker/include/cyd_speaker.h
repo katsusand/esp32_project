@@ -29,7 +29,6 @@ typedef struct {
 
 esp_err_t cyd_speaker_init(void);
 esp_err_t cyd_speaker_set_volume_percent(uint8_t volume_percent);
-esp_err_t cyd_speaker_save_volume(void);
 uint8_t cyd_speaker_get_volume_percent(void);
 esp_err_t cyd_speaker_play_tone(uint32_t frequency_hz, uint32_t duration_ms);
 esp_err_t cyd_speaker_play_sequence(const cyd_speaker_note_t *notes, size_t note_count);

@@ -57,11 +57,10 @@ cyd_speaker_play_tone(1200, 80);
 ESP_ERROR_CHECK(cyd_speaker_set_volume_percent(35));
 ```
 
-現在の音量を参照する場合は `cyd_speaker_get_volume_percent()`、保存する場合は `cyd_speaker_save_volume()` を使います。
+現在の音量を参照する場合は `cyd_speaker_get_volume_percent()` を使います。
 
 ```c
 uint8_t volume = cyd_speaker_get_volume_percent();
-ESP_ERROR_CHECK(cyd_speaker_save_volume());
 ```
 
 複数の音を順番に鳴らす場合は `cyd_speaker_play_sequence()` を使います。
@@ -81,7 +80,7 @@ cyd_speaker_play_sequence(notes, sizeof(notes) / sizeof(notes[0]));
 cyd_speaker_stop();
 ```
 
-English supplement: Playback APIs enqueue commands and return quickly. They do not wait until the sound has finished playing. Volume changes are runtime-configurable and persistence is explicit, matching the display brightness model.
+English supplement: Playback APIs enqueue commands and return quickly. They do not wait until the sound has finished playing. Volume changes are runtime-only; the default duty level comes from `CONFIG_CYD_SPEAKER_VOLUME_PERCENT`.
 
 ## Queue Model
 
