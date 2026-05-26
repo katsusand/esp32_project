@@ -166,9 +166,9 @@ static QueueHandle_t s_display_log_queue = nullptr;
 static QueueSetHandle_t s_display_queue_set = nullptr;
 static TaskHandle_t s_display_task_handle = nullptr;
 static TaskHandle_t s_display_owner_task_handle = nullptr;
-static cyd_display_screen_t s_current_screen = { 0 };
-static cyd_display_screen_t s_previous_screen = { 0 };
-static cyd_display_screen_t s_log_screen = { 0 };
+static cyd_display_screen_t s_current_screen = {};
+static cyd_display_screen_t s_previous_screen = {};
+static cyd_display_screen_t s_log_screen = {};
 static cyd_display_grid_rect_t s_mode_button_rects[CYD_DISPLAY_MAX_MODE_BUTTONS];
 static size_t s_mode_button_count = 0;
 static bool s_has_previous_screen = false;
@@ -250,6 +250,7 @@ static cyd_display_log_state_t s_log_state = {
     .count = 0,
     .scroll_offset = 0,
     .title = "Log",
+    .lines = {{ 0 }},
 };
 
 template <typename TDisplay>
@@ -295,6 +296,11 @@ static void cyd_display_render_log_screen(void);
 static const char *cyd_display_log_line_at(size_t logical_index);
 static esp_err_t cyd_display_submit_log_cmd(const cyd_display_log_cmd_t *cmd);
 static void cyd_display_log_stack_usage(void);
+static cyd_display_screen_t cyd_display_make_empty_screen(void);
+static cyd_display_widget_t cyd_display_make_widget(cyd_display_widget_type_t type);
+static cyd_display_dirty_rect_t cyd_display_make_empty_dirty_rect(void);
+static cyd_display_grid_rect_t cyd_display_make_empty_grid_rect(void);
+static cyd_display_log_cmd_t cyd_display_make_log_cmd(cyd_display_log_cmd_id_t id, int scroll_delta);
 
 static const char *cyd_display_panel_name(void)
 {
@@ -307,6 +313,36 @@ static const char *cyd_display_panel_name(void)
 #else
     return "unknown";
 #endif
+}
+
+static cyd_display_screen_t cyd_display_make_empty_screen(void)
+{
+    return {};
+}
+
+static cyd_display_widget_t cyd_display_make_widget(cyd_display_widget_type_t type)
+{
+    cyd_display_widget_t widget = {};
+    widget.type = type;
+    return widget;
+}
+
+static cyd_display_dirty_rect_t cyd_display_make_empty_dirty_rect(void)
+{
+    return {};
+}
+
+static cyd_display_grid_rect_t cyd_display_make_empty_grid_rect(void)
+{
+    return {};
+}
+
+static cyd_display_log_cmd_t cyd_display_make_log_cmd(cyd_display_log_cmd_id_t id, int scroll_delta)
+{
+    cyd_display_log_cmd_t cmd = {};
+    cmd.id = id;
+    cmd.scroll_delta = scroll_delta;
+    return cmd;
 }
 
 static esp_err_t cyd_display_check_ready(void)
@@ -556,7 +592,7 @@ static bool cyd_display_widget_bounds_px(const cyd_display_widget_t &widget, cyd
 
 static bool cyd_display_widget_intersects_rect(const cyd_display_widget_t &widget, const cyd_display_dirty_rect_t &rect)
 {
-    cyd_display_dirty_rect_t widget_rect = { 0 };
+    cyd_display_dirty_rect_t widget_rect = cyd_display_make_empty_dirty_rect();
     if (!cyd_display_widget_bounds_px(widget, &widget_rect)) {
         return false;
     }
@@ -620,7 +656,7 @@ static void cyd_display_collect_dirty_rects(cyd_display_dirty_rect_t *rects, siz
             continue;
         }
 
-        cyd_display_dirty_rect_t rect = { 0 };
+        cyd_display_dirty_rect_t rect = cyd_display_make_empty_dirty_rect();
         if (previous_widget != nullptr && cyd_display_widget_bounds_px(*previous_widget, &rect)) {
             cyd_display_append_dirty_rect(rects, rect_count, rect);
         }
@@ -728,18 +764,16 @@ static void cyd_display_render_log_screen(void)
 {
     memset(&s_log_screen, 0, sizeof(s_log_screen));
 
-    cyd_display_widget_t title_widget = {
-        .type = CYD_DISPLAY_WIDGET_TEXT,
-        .col = 0,
-        .row = LOG_TITLE_ROW,
-        .span_cols = CYD_DISPLAY_GRID_COLS,
-        .span_rows = 2,
-        .align = CYD_DISPLAY_ALIGN_CENTER,
-        .scale_x = 1,
-        .scale_y = 1,
-        .fg_color = TFT_YELLOW,
-        .bg_color = TFT_BLACK,
-    };
+    cyd_display_widget_t title_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+    title_widget.col = 0;
+    title_widget.row = LOG_TITLE_ROW;
+    title_widget.span_cols = CYD_DISPLAY_GRID_COLS;
+    title_widget.span_rows = 2;
+    title_widget.align = CYD_DISPLAY_ALIGN_CENTER;
+    title_widget.scale_x = 1;
+    title_widget.scale_y = 1;
+    title_widget.fg_color = TFT_YELLOW;
+    title_widget.bg_color = TFT_BLACK;
     cyd_display_copy_text(title_widget.text, sizeof(title_widget.text), s_log_state.title);
     cyd_display_add_widget(&s_log_screen, &title_widget);
 
@@ -761,18 +795,16 @@ static void cyd_display_render_log_screen(void)
                             : 0;
 
     for (size_t i = 0; i < visible_rows; ++i) {
-        cyd_display_widget_t line_widget = {
-            .type = CYD_DISPLAY_WIDGET_TEXT,
-            .col = 1,
-            .row = static_cast<uint8_t>(LOG_FIRST_LINE_ROW + i),
-            .span_cols = static_cast<uint8_t>(CYD_DISPLAY_GRID_COLS - 2),
-            .span_rows = 1,
-            .align = CYD_DISPLAY_ALIGN_LEFT,
-            .scale_x = 1,
-            .scale_y = 1,
-            .fg_color = TFT_WHITE,
-            .bg_color = TFT_BLACK,
-        };
+        cyd_display_widget_t line_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+        line_widget.col = 1;
+        line_widget.row = static_cast<uint8_t>(LOG_FIRST_LINE_ROW + i);
+        line_widget.span_cols = static_cast<uint8_t>(CYD_DISPLAY_GRID_COLS - 2);
+        line_widget.span_rows = 1;
+        line_widget.align = CYD_DISPLAY_ALIGN_LEFT;
+        line_widget.scale_x = 1;
+        line_widget.scale_y = 1;
+        line_widget.fg_color = TFT_WHITE;
+        line_widget.bg_color = TFT_BLACK;
         cyd_display_copy_text(line_widget.text, sizeof(line_widget.text), cyd_display_log_line_at(first_line + i));
         cyd_display_add_widget(&s_log_screen, &line_widget);
     }
@@ -980,7 +1012,7 @@ extern "C" bool cyd_display_get_mode_button_bounds(size_t button_count,
                                                    int32_t *w,
                                                    int32_t *h)
 {
-    cyd_display_grid_rect_t rect = { 0 };
+    cyd_display_grid_rect_t rect = cyd_display_make_empty_grid_rect();
     if (!cyd_display_mode_button_rect_for_count(button_count, index, &rect)) {
         return false;
     }
@@ -1161,49 +1193,34 @@ extern "C" esp_err_t cyd_display_submit_screen(const cyd_display_screen_t *scree
 
 extern "C" esp_err_t cyd_display_log_show(const char *title)
 {
-    cyd_display_log_cmd_t cmd = {
-        .id = CYD_DISPLAY_LOG_CMD_SHOW,
-        .scroll_delta = 0,
-    };
+    cyd_display_log_cmd_t cmd = cyd_display_make_log_cmd(CYD_DISPLAY_LOG_CMD_SHOW, 0);
     cyd_display_copy_text(cmd.text, sizeof(cmd.text), title != nullptr ? title : "Log");
     return cyd_display_submit_log_cmd(&cmd);
 }
 
 extern "C" esp_err_t cyd_display_log_hide(void)
 {
-    cyd_display_log_cmd_t cmd = {
-        .id = CYD_DISPLAY_LOG_CMD_HIDE,
-        .scroll_delta = 0,
-    };
+    cyd_display_log_cmd_t cmd = cyd_display_make_log_cmd(CYD_DISPLAY_LOG_CMD_HIDE, 0);
     return cyd_display_submit_log_cmd(&cmd);
 }
 
 extern "C" esp_err_t cyd_display_log_clear(void)
 {
-    cyd_display_log_cmd_t cmd = {
-        .id = CYD_DISPLAY_LOG_CMD_CLEAR,
-        .scroll_delta = 0,
-    };
+    cyd_display_log_cmd_t cmd = cyd_display_make_log_cmd(CYD_DISPLAY_LOG_CMD_CLEAR, 0);
     return cyd_display_submit_log_cmd(&cmd);
 }
 
 extern "C" esp_err_t cyd_display_log_push(const char *line)
 {
     ESP_RETURN_ON_FALSE(line != nullptr, ESP_ERR_INVALID_ARG, TAG, "log line required");
-    cyd_display_log_cmd_t cmd = {
-        .id = CYD_DISPLAY_LOG_CMD_PUSH,
-        .scroll_delta = 0,
-    };
+    cyd_display_log_cmd_t cmd = cyd_display_make_log_cmd(CYD_DISPLAY_LOG_CMD_PUSH, 0);
     cyd_display_copy_text(cmd.text, sizeof(cmd.text), line);
     return cyd_display_submit_log_cmd(&cmd);
 }
 
 extern "C" esp_err_t cyd_display_log_scroll(int delta)
 {
-    cyd_display_log_cmd_t cmd = {
-        .id = CYD_DISPLAY_LOG_CMD_SCROLL,
-        .scroll_delta = delta,
-    };
+    cyd_display_log_cmd_t cmd = cyd_display_make_log_cmd(CYD_DISPLAY_LOG_CMD_SCROLL, delta);
     return cyd_display_submit_log_cmd(&cmd);
 }
 
@@ -1281,31 +1298,27 @@ extern "C" esp_err_t cyd_display_calibrate_touch(uint16_t *params, size_t param_
 extern "C" esp_err_t cyd_display_show_text(const char *title, const char *message)
 {
     ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
-    cyd_display_screen_t screen = { 0 };
-    cyd_display_widget_t title_widget = {
-        .type = CYD_DISPLAY_WIDGET_TEXT,
-        .col = 0,
-        .row = 11,
-        .span_cols = CYD_DISPLAY_GRID_COLS,
-        .span_rows = 2,
-        .align = CYD_DISPLAY_ALIGN_CENTER,
-        .scale_x = 2,
-        .scale_y = 2,
-        .fg_color = TFT_YELLOW,
-        .bg_color = TFT_BLACK,
-    };
-    cyd_display_widget_t message_widget = {
-        .type = CYD_DISPLAY_WIDGET_TEXT,
-        .col = 0,
-        .row = 17,
-        .span_cols = CYD_DISPLAY_GRID_COLS,
-        .span_rows = 1,
-        .align = CYD_DISPLAY_ALIGN_CENTER,
-        .scale_x = 1,
-        .scale_y = 1,
-        .fg_color = TFT_WHITE,
-        .bg_color = TFT_BLACK,
-    };
+    cyd_display_screen_t screen = cyd_display_make_empty_screen();
+    cyd_display_widget_t title_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+    title_widget.col = 0;
+    title_widget.row = 11;
+    title_widget.span_cols = CYD_DISPLAY_GRID_COLS;
+    title_widget.span_rows = 2;
+    title_widget.align = CYD_DISPLAY_ALIGN_CENTER;
+    title_widget.scale_x = 2;
+    title_widget.scale_y = 2;
+    title_widget.fg_color = TFT_YELLOW;
+    title_widget.bg_color = TFT_BLACK;
+    cyd_display_widget_t message_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+    message_widget.col = 0;
+    message_widget.row = 17;
+    message_widget.span_cols = CYD_DISPLAY_GRID_COLS;
+    message_widget.span_rows = 1;
+    message_widget.align = CYD_DISPLAY_ALIGN_CENTER;
+    message_widget.scale_x = 1;
+    message_widget.scale_y = 1;
+    message_widget.fg_color = TFT_WHITE;
+    message_widget.bg_color = TFT_BLACK;
 
     cyd_display_copy_text(title_widget.text, sizeof(title_widget.text), title);
     cyd_display_copy_text(message_widget.text, sizeof(message_widget.text), message);
@@ -1317,54 +1330,48 @@ extern "C" esp_err_t cyd_display_show_text(const char *title, const char *messag
 extern "C" esp_err_t cyd_display_show_lines(const char *title, const char *const *lines, size_t line_count)
 {
     ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
-    cyd_display_screen_t screen = { 0 };
-    cyd_display_widget_t title_widget = {
-        .type = CYD_DISPLAY_WIDGET_TEXT,
-        .col = 0,
-        .row = SCREEN_TITLE_ROW,
-        .span_cols = CYD_DISPLAY_GRID_COLS,
-        .span_rows = 2,
-        .align = CYD_DISPLAY_ALIGN_CENTER,
-        .scale_x = 2,
-        .scale_y = 2,
-        .fg_color = TFT_YELLOW,
-        .bg_color = TFT_BLACK,
-    };
+    cyd_display_screen_t screen = cyd_display_make_empty_screen();
+    cyd_display_widget_t title_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+    title_widget.col = 0;
+    title_widget.row = SCREEN_TITLE_ROW;
+    title_widget.span_cols = CYD_DISPLAY_GRID_COLS;
+    title_widget.span_rows = 2;
+    title_widget.align = CYD_DISPLAY_ALIGN_CENTER;
+    title_widget.scale_x = 2;
+    title_widget.scale_y = 2;
+    title_widget.fg_color = TFT_YELLOW;
+    title_widget.bg_color = TFT_BLACK;
     cyd_display_copy_text(title_widget.text, sizeof(title_widget.text), title);
     cyd_display_add_widget(&screen, &title_widget);
 
     size_t visible_count = line_count > SCREEN_MAX_LINE_COUNT ? SCREEN_MAX_LINE_COUNT : line_count;
     if (visible_count == 0 || lines == nullptr) {
-        cyd_display_widget_t empty_widget = {
-            .type = CYD_DISPLAY_WIDGET_TEXT,
-            .col = 0,
-            .row = 17,
-            .span_cols = CYD_DISPLAY_GRID_COLS,
-            .span_rows = 1,
-            .align = CYD_DISPLAY_ALIGN_CENTER,
-            .scale_x = 1,
-            .scale_y = 1,
-            .fg_color = TFT_WHITE,
-            .bg_color = TFT_BLACK,
-        };
+        cyd_display_widget_t empty_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+        empty_widget.col = 0;
+        empty_widget.row = 17;
+        empty_widget.span_cols = CYD_DISPLAY_GRID_COLS;
+        empty_widget.span_rows = 1;
+        empty_widget.align = CYD_DISPLAY_ALIGN_CENTER;
+        empty_widget.scale_x = 1;
+        empty_widget.scale_y = 1;
+        empty_widget.fg_color = TFT_WHITE;
+        empty_widget.bg_color = TFT_BLACK;
         cyd_display_copy_text(empty_widget.text, sizeof(empty_widget.text), "No data");
         cyd_display_add_widget(&screen, &empty_widget);
         return cyd_display_submit_screen(&screen);
     }
 
     for (size_t i = 0; i < visible_count; ++i) {
-        cyd_display_widget_t line_widget = {
-            .type = CYD_DISPLAY_WIDGET_TEXT,
-            .col = 1,
-            .row = static_cast<uint8_t>(SCREEN_FIRST_LINE_ROW + i * SCREEN_LINE_HEIGHT_ROWS),
-            .span_cols = static_cast<uint8_t>(CYD_DISPLAY_GRID_COLS - 2),
-            .span_rows = 1,
-            .align = CYD_DISPLAY_ALIGN_LEFT,
-            .scale_x = 1,
-            .scale_y = 1,
-            .fg_color = TFT_WHITE,
-            .bg_color = TFT_BLACK,
-        };
+        cyd_display_widget_t line_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+        line_widget.col = 1;
+        line_widget.row = static_cast<uint8_t>(SCREEN_FIRST_LINE_ROW + i * SCREEN_LINE_HEIGHT_ROWS);
+        line_widget.span_cols = static_cast<uint8_t>(CYD_DISPLAY_GRID_COLS - 2);
+        line_widget.span_rows = 1;
+        line_widget.align = CYD_DISPLAY_ALIGN_LEFT;
+        line_widget.scale_x = 1;
+        line_widget.scale_y = 1;
+        line_widget.fg_color = TFT_WHITE;
+        line_widget.bg_color = TFT_BLACK;
         cyd_display_copy_text(line_widget.text, sizeof(line_widget.text), lines[i]);
         cyd_display_add_widget(&screen, &line_widget);
     }
@@ -1380,52 +1387,46 @@ extern "C" esp_err_t cyd_display_show_mode_screen(const char *title,
                                                   size_t selected_idx)
 {
     ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
-    cyd_display_screen_t screen = { 0 };
-    cyd_display_widget_t title_widget = {
-        .type = CYD_DISPLAY_WIDGET_TEXT,
-        .col = 0,
-        .row = SCREEN_TITLE_ROW,
-        .span_cols = CYD_DISPLAY_GRID_COLS,
-        .span_rows = 2,
-        .align = CYD_DISPLAY_ALIGN_CENTER,
-        .scale_x = 2,
-        .scale_y = 2,
-        .fg_color = TFT_YELLOW,
-        .bg_color = TFT_BLACK,
-    };
+    cyd_display_screen_t screen = cyd_display_make_empty_screen();
+    cyd_display_widget_t title_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+    title_widget.col = 0;
+    title_widget.row = SCREEN_TITLE_ROW;
+    title_widget.span_cols = CYD_DISPLAY_GRID_COLS;
+    title_widget.span_rows = 2;
+    title_widget.align = CYD_DISPLAY_ALIGN_CENTER;
+    title_widget.scale_x = 2;
+    title_widget.scale_y = 2;
+    title_widget.fg_color = TFT_YELLOW;
+    title_widget.bg_color = TFT_BLACK;
     cyd_display_copy_text(title_widget.text, sizeof(title_widget.text), title);
     cyd_display_add_widget(&screen, &title_widget);
 
     size_t visible_line_count = line_count > CYD_DISPLAY_MAX_STATUS_LINES ? CYD_DISPLAY_MAX_STATUS_LINES : line_count;
     if (visible_line_count == 0 || lines == nullptr) {
-        cyd_display_widget_t empty_widget = {
-            .type = CYD_DISPLAY_WIDGET_TEXT,
-            .col = 0,
-            .row = 14,
-            .span_cols = CYD_DISPLAY_GRID_COLS,
-            .span_rows = 1,
-            .align = CYD_DISPLAY_ALIGN_CENTER,
-            .scale_x = 1,
-            .scale_y = 1,
-            .fg_color = TFT_WHITE,
-            .bg_color = TFT_BLACK,
-        };
+        cyd_display_widget_t empty_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+        empty_widget.col = 0;
+        empty_widget.row = 14;
+        empty_widget.span_cols = CYD_DISPLAY_GRID_COLS;
+        empty_widget.span_rows = 1;
+        empty_widget.align = CYD_DISPLAY_ALIGN_CENTER;
+        empty_widget.scale_x = 1;
+        empty_widget.scale_y = 1;
+        empty_widget.fg_color = TFT_WHITE;
+        empty_widget.bg_color = TFT_BLACK;
         cyd_display_copy_text(empty_widget.text, sizeof(empty_widget.text), "No data");
         cyd_display_add_widget(&screen, &empty_widget);
     } else {
         for (size_t i = 0; i < visible_line_count; ++i) {
-            cyd_display_widget_t line_widget = {
-                .type = CYD_DISPLAY_WIDGET_TEXT,
-                .col = 1,
-                .row = static_cast<uint8_t>(SCREEN_FIRST_LINE_ROW + i * SCREEN_LINE_HEIGHT_ROWS),
-                .span_cols = static_cast<uint8_t>(CYD_DISPLAY_GRID_COLS - 2),
-                .span_rows = 1,
-                .align = CYD_DISPLAY_ALIGN_LEFT,
-                .scale_x = 1,
-                .scale_y = 1,
-                .fg_color = TFT_WHITE,
-                .bg_color = TFT_BLACK,
-            };
+            cyd_display_widget_t line_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
+            line_widget.col = 1;
+            line_widget.row = static_cast<uint8_t>(SCREEN_FIRST_LINE_ROW + i * SCREEN_LINE_HEIGHT_ROWS);
+            line_widget.span_cols = static_cast<uint8_t>(CYD_DISPLAY_GRID_COLS - 2);
+            line_widget.span_rows = 1;
+            line_widget.align = CYD_DISPLAY_ALIGN_LEFT;
+            line_widget.scale_x = 1;
+            line_widget.scale_y = 1;
+            line_widget.fg_color = TFT_WHITE;
+            line_widget.bg_color = TFT_BLACK;
             cyd_display_copy_text(line_widget.text, sizeof(line_widget.text), lines[i]);
             cyd_display_add_widget(&screen, &line_widget);
         }
@@ -1433,26 +1434,24 @@ extern "C" esp_err_t cyd_display_show_mode_screen(const char *title,
 
     size_t visible_button_count = button_count > CYD_DISPLAY_MAX_MODE_BUTTONS ? CYD_DISPLAY_MAX_MODE_BUTTONS : button_count;
     for (size_t i = 0; i < visible_button_count; ++i) {
-        cyd_display_grid_rect_t rect = { 0 };
+        cyd_display_grid_rect_t rect = cyd_display_make_empty_grid_rect();
         if (!cyd_display_mode_button_rect_for_count(visible_button_count, i, &rect)) {
             continue;
         }
 
-        cyd_display_widget_t button_widget = {
-            .type = CYD_DISPLAY_WIDGET_BUTTON,
-            .col = rect.col,
-            .row = rect.row,
-            .span_cols = rect.width,
-            .span_rows = rect.height,
-            .align = CYD_DISPLAY_ALIGN_CENTER,
-            .scale_x = 1,
-            .scale_y = 1,
-            .fg_color = TFT_WHITE,
-            .bg_color = static_cast<uint16_t>((i == selected_idx) ? TFT_BLUE : TFT_DARKGREY),
-            .border_color = static_cast<uint16_t>((i == selected_idx) ? TFT_CYAN : TFT_LIGHTGREY),
-            .action_id = static_cast<uint16_t>(i),
-            .enabled = true,
-        };
+        cyd_display_widget_t button_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_BUTTON);
+        button_widget.col = rect.col;
+        button_widget.row = rect.row;
+        button_widget.span_cols = rect.width;
+        button_widget.span_rows = rect.height;
+        button_widget.align = CYD_DISPLAY_ALIGN_CENTER;
+        button_widget.scale_x = 1;
+        button_widget.scale_y = 1;
+        button_widget.fg_color = TFT_WHITE;
+        button_widget.bg_color = static_cast<uint16_t>((i == selected_idx) ? TFT_BLUE : TFT_DARKGREY);
+        button_widget.border_color = static_cast<uint16_t>((i == selected_idx) ? TFT_CYAN : TFT_LIGHTGREY);
+        button_widget.action_id = static_cast<uint16_t>(i);
+        button_widget.enabled = true;
         cyd_display_copy_text(button_widget.text, sizeof(button_widget.text), buttons != nullptr ? buttons[i] : "");
         cyd_display_add_widget(&screen, &button_widget);
     }

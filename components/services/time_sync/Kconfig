@@ -93,4 +93,22 @@ menu "Time Sync"
             C ライブラリのローカル時刻変換に使う POSIX TZ 文字列です。
             日本時間は JST-9 です。UTC のまま扱う場合は空文字にします。
 
+    config TIME_SYNC_RADIO_WAIT_TIMEOUT_MS
+        int "Radio lease wait timeout (ms)"
+        default 30000
+        range 1000 300000
+        depends on TIME_SYNC_ENABLED
+        help
+            time_sync が radio_manager から通信利用権を受け取るまで待つ timeout です。
+            English supplement: This is the lease acquisition timeout, not the SNTP response timeout.
+
+    config TIME_SYNC_RADIO_MAX_HOLD_MS
+        int "Radio lease max hold time (ms)"
+        default 180000
+        range 10000 600000
+        depends on TIME_SYNC_ENABLED
+        help
+            time_sync が radio lease を保持できる最大時間です。
+            release 漏れや長時間停止を検出するための上限です。
+
 endmenu

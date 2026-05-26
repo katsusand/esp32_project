@@ -4,7 +4,7 @@
 
 `app_shell` は、CYD の foreground UI アプリを実行するための最小ランタイムです。
 
-通常構成では、`main/app_main()` は `app_shell_start(cyd_clock_app_get_app())` を呼び、`app_shell` task が LCD owner として常駐します。その task 上で `clock app` や `wifi setup app` が 1 つずつ実行されます。
+通常構成では、`main/app_main()` は `system_boot_start(cyd_clock_app_get_app())` を呼びます。`system_boot` が各 subsystem を初期化したあと、`app_shell_start()` により `app_shell` task が LCD owner として常駐します。その task 上で `clock app` や `wifi setup app` が 1 つずつ実行されます。
 
 学習用・実験用に初期アプリを差し替える場合も、考え方は同じです。たとえば `hello_app` から `info_app` に切り替える場合でも、新しい FreeRTOS task を作るのではなく、`app_shell` task が「次に呼ぶ app」を差し替えます。
 
@@ -113,7 +113,7 @@ loop:
 - `settings`: `system_settings_app_get_app()`
 - `wifi_setup`: `cyd_wifi_setup_get_app()`
 
-`clock app` は通常時の時計表示、`SYNC NOW`、Wi-Fi failed 画面、retry progress を担当します。`info app` は firmware / chip / heap / Wi-Fi 状態などの参照情報を表示します。`settings app` は設定系画面への入口で、現在は Wi-Fi setup への遷移と戻る操作を担当します。`wifi setup app` は scan / password / setup completion を担当します。
+`clock app` は通常時の時計表示、`SYNC NOW`、Wi-Fi failed 画面、retry progress を担当します。`info app` は firmware / chip / heap / Wi-Fi 状態などの参照情報を表示します。`settings app` は system-level settings UI で、brightness、volume、time sync interval、timezone、stored SSIDs、Wi-Fi setup、touch calibration、NVS maintenance、app-specific extension entry を扱います。`wifi setup app` は scan / password / setup completion を担当します。
 
 English supplement: `info` and `settings` are regular shell apps. They use the `from_app` passed to `enter()` as their return target, keeping them independent from `clock`.
 

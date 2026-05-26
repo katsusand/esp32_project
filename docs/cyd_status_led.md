@@ -16,7 +16,7 @@ English supplement: This component owns the LED pattern queue and update task. A
 #include "cyd_status_led.h"
 ```
 
-初期化は、通常 `app_main()` の起動処理で一度だけ呼びます。
+初期化は、通常 `main/app_main()` から入る `system_boot_start()` の起動処理で一度だけ呼びます。
 
 ```c
 ESP_ERROR_CHECK(cyd_status_led_init());

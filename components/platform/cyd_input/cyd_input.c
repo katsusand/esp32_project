@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -7,6 +8,7 @@
 #include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "nvs.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
@@ -70,6 +72,7 @@ typedef struct {
 typedef struct {
     bool initialized;
     bool touch_calibration_loaded;
+    bool touch_calibration_saved;
     bool touch_stable_pressed;
     bool last_touch_sample_pressed;
     bool touch_long_press_reported;
@@ -97,10 +100,14 @@ static const char *TAG = "cyd_input";
 static const char *NVS_NAMESPACE = "cyd_display";
 static const char *NVS_TOUCH_CAL_KEY = "touch_cal";
 static const uint32_t TOUCH_CAL_MAGIC = 0x43594454;
+static const uint16_t TOUCH_CAL_RAW_MAX = 4095;
+static const uint16_t TOUCH_CAL_MIN_SPAN = 100;
+static const int32_t TOUCH_CAL_MIN_AREA = 10000;
 
 static cyd_input_state_t s_input = {
     .initialized = false,
     .touch_calibration_loaded = false,
+    .touch_calibration_saved = false,
     .touch_stable_pressed = false,
     .last_touch_sample_pressed = false,
     .touch_long_press_reported = false,
@@ -133,6 +140,146 @@ static esp_err_t cyd_input_check_ready(void)
 {
     ESP_RETURN_ON_FALSE(s_input.initialized, ESP_ERR_INVALID_STATE, TAG, "input not initialized");
     return ESP_OK;
+}
+
+static uint16_t cyd_input_u16_min(uint16_t lhs, uint16_t rhs)
+{
+    return lhs < rhs ? lhs : rhs;
+}
+
+static uint16_t cyd_input_u16_max(uint16_t lhs, uint16_t rhs)
+{
+    return lhs > rhs ? lhs : rhs;
+}
+
+static int32_t cyd_input_abs_i32(int32_t value)
+{
+    return value < 0 ? -value : value;
+}
+
+static int32_t cyd_input_touch_calibration_triangle_area2(const uint16_t *params, size_t a, size_t b, size_t c)
+{
+    int32_t ax = params[a * 2];
+    int32_t ay = params[a * 2 + 1];
+    int32_t bx = params[b * 2];
+    int32_t by = params[b * 2 + 1];
+    int32_t cx = params[c * 2];
+    int32_t cy = params[c * 2 + 1];
+
+    return cyd_input_abs_i32((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+}
+
+static bool cyd_input_touch_calibration_params_valid(const uint16_t *params)
+{
+    if (params == NULL) {
+        return false;
+    }
+
+    uint16_t min_x = UINT16_MAX;
+    uint16_t min_y = UINT16_MAX;
+    uint16_t max_x = 0;
+    uint16_t max_y = 0;
+
+    for (size_t i = 0; i < 4; ++i) {
+        uint16_t x = params[i * 2];
+        uint16_t y = params[i * 2 + 1];
+        if (x > TOUCH_CAL_RAW_MAX || y > TOUCH_CAL_RAW_MAX) {
+            return false;
+        }
+        min_x = cyd_input_u16_min(min_x, x);
+        min_y = cyd_input_u16_min(min_y, y);
+        max_x = cyd_input_u16_max(max_x, x);
+        max_y = cyd_input_u16_max(max_y, y);
+    }
+
+    if ((max_x - min_x) < TOUCH_CAL_MIN_SPAN || (max_y - min_y) < TOUCH_CAL_MIN_SPAN) {
+        return false;
+    }
+
+    for (size_t a = 0; a < 2; ++a) {
+        for (size_t b = a + 1; b < 3; ++b) {
+            for (size_t c = b + 1; c < 4; ++c) {
+                if (cyd_input_touch_calibration_triangle_area2(params, a, b, c) >= TOUCH_CAL_MIN_AREA) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+static void cyd_input_touch_calibration_normalize_for_runtime(uint16_t *params)
+{
+    if (params == NULL) {
+        return;
+    }
+
+#if CONFIG_CYD_TOUCH_OFFSET_ROTATION == 4
+    /* calibrate_touch() samples corners while LovyanGFX temporarily changes
+       display rotation. With this project's touch default path
+       (display rotation 1, touch offset rotation 4), the returned corner
+       sequence ends up 180 degrees out when reused later via
+       setTouchCalibrate(), which flips both axes. Normalize the corners back
+       into the runtime order expected by setCalibrate():
+       top-left, bottom-left, top-right, bottom-right. */
+    const uint16_t normalized[8] = {
+        params[6], params[7],
+        params[4], params[5],
+        params[2], params[3],
+        params[0], params[1],
+    };
+    memcpy(params, normalized, sizeof(normalized));
+#endif
+}
+
+static esp_err_t cyd_input_touch_calibration_apply_default(void)
+{
+    /* Fallback to the pre-calibration behavior provided by the XPT2046 config
+       in cyd_display.cpp. Do not call setTouchCalibrate() here, or the axis
+       range gets applied twice. */
+    s_input.touch_calibration_loaded = true;
+    s_input.touch_calibration_saved = false;
+    ESP_LOGW(TAG,
+             "no saved touch calibration, using default XPT2046 config x=[%d,%d] y=[%d,%d]",
+             CONFIG_CYD_TOUCH_X_MIN,
+             CONFIG_CYD_TOUCH_X_MAX,
+             CONFIG_CYD_TOUCH_Y_MIN,
+             CONFIG_CYD_TOUCH_Y_MAX);
+    return ESP_OK;
+}
+
+static esp_err_t cyd_input_touch_calibration_erase_from_nvs(void)
+{
+#if CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
+    nvs_handle_t nvs_handle;
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
+    esp_err_t err = nvs_erase_key(nvs_handle, NVS_TOUCH_CAL_KEY);
+    if (err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND) {
+        err = nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+    return err;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+static esp_err_t cyd_input_touch_calibration_recover_invalid_nvs(const char *reason)
+{
+#if CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
+    ESP_LOGE(TAG, "invalid touch calibration in NVS (%s); erasing and restarting", reason);
+    esp_err_t err = cyd_input_touch_calibration_erase_from_nvs();
+    ESP_RETURN_ON_ERROR(err, TAG, "erase invalid touch calibration failed");
+    s_input.touch_calibration_loaded = false;
+    s_input.touch_calibration_saved = false;
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+    return ESP_ERR_INVALID_STATE;
+#else
+    (void)reason;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 static int cyd_input_touch_irq_level(void)
@@ -732,15 +879,44 @@ static esp_err_t cyd_input_touch_calibration_load_from_nvs(void)
     size_t required_size = sizeof(blob);
     err = nvs_get_blob(nvs_handle, NVS_TOUCH_CAL_KEY, &blob, &required_size);
     nvs_close(nvs_handle);
+    if (err == ESP_ERR_NVS_INVALID_LENGTH) {
+        ESP_LOGW(TAG,
+                 "touch calibration blob size mismatch: stored=%u expected=%u",
+                 (unsigned)required_size,
+                 (unsigned)sizeof(blob));
+        return cyd_input_touch_calibration_recover_invalid_nvs("size mismatch");
+    }
     if (err != ESP_OK) {
         return err;
     }
-    if (required_size != sizeof(blob) || blob.magic != TOUCH_CAL_MAGIC) {
-        return ESP_ERR_INVALID_SIZE;
+    if (required_size != sizeof(blob)) {
+        ESP_LOGW(TAG,
+                 "touch calibration blob size mismatch: stored=%u expected=%u",
+                 (unsigned)required_size,
+                 (unsigned)sizeof(blob));
+        return cyd_input_touch_calibration_recover_invalid_nvs("size mismatch");
+    }
+    if (blob.magic != TOUCH_CAL_MAGIC) {
+        ESP_LOGW(TAG, "touch calibration magic mismatch: 0x%08lx", (unsigned long)blob.magic);
+        return cyd_input_touch_calibration_recover_invalid_nvs("magic mismatch");
+    }
+    if (!cyd_input_touch_calibration_params_valid(blob.params)) {
+        ESP_LOGW(TAG,
+                 "touch calibration params invalid: [%u,%u] [%u,%u] [%u,%u] [%u,%u]",
+                 blob.params[0],
+                 blob.params[1],
+                 blob.params[2],
+                 blob.params[3],
+                 blob.params[4],
+                 blob.params[5],
+                 blob.params[6],
+                 blob.params[7]);
+        return cyd_input_touch_calibration_recover_invalid_nvs("invalid params");
     }
 
     ESP_RETURN_ON_ERROR(cyd_display_apply_touch_calibration(blob.params, 8), TAG, "apply touch calibration failed");
     s_input.touch_calibration_loaded = true;
+    s_input.touch_calibration_saved = true;
     ESP_LOGI(TAG, "loaded touch calibration from NVS");
     return ESP_OK;
 #else
@@ -766,6 +942,7 @@ static esp_err_t cyd_input_touch_calibration_save_to_nvs(const uint16_t *params)
     nvs_close(nvs_handle);
     ESP_RETURN_ON_ERROR(err, TAG, "save touch calibration failed");
     s_input.touch_calibration_loaded = true;
+    s_input.touch_calibration_saved = true;
     ESP_LOGI(TAG, "saved touch calibration to NVS");
     return ESP_OK;
 #else
@@ -805,6 +982,14 @@ esp_err_t cyd_input_init(void)
         touch_cal_err != ESP_ERR_NVS_NOT_FOUND &&
         touch_cal_err != ESP_ERR_NOT_FOUND) {
         ESP_LOGW(TAG, "touch calibration load skipped: %s", esp_err_to_name(touch_cal_err));
+    }
+
+    if (!s_input.touch_calibration_loaded &&
+        (touch_cal_err == ESP_ERR_NVS_NOT_FOUND || touch_cal_err == ESP_ERR_NOT_FOUND)) {
+        esp_err_t default_cal_err = cyd_input_touch_calibration_apply_default();
+        if (default_cal_err != ESP_OK) {
+            ESP_LOGW(TAG, "default touch calibration apply failed: %s", esp_err_to_name(default_cal_err));
+        }
     }
 
 #if CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT
@@ -933,6 +1118,15 @@ bool cyd_input_has_touch_calibration(void)
 #endif
 }
 
+bool cyd_input_has_saved_touch_calibration(void)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    return s_input.touch_calibration_saved;
+#else
+    return true;
+#endif
+}
+
 esp_err_t cyd_input_discard_pending_events(void)
 {
     cyd_input_event_t event = { 0 };
@@ -961,6 +1155,7 @@ esp_err_t cyd_input_run_touch_calibration(void)
 
     esp_err_t err = cyd_display_calibrate_touch(params, 8);
     if (err == ESP_OK) {
+        cyd_input_touch_calibration_normalize_for_runtime(params);
         err = cyd_display_apply_touch_calibration(params, 8);
     }
     cyd_input_reset_touch_runtime_state();
@@ -977,15 +1172,10 @@ esp_err_t cyd_input_run_touch_calibration(void)
 esp_err_t cyd_input_clear_touch_calibration(void)
 {
 #if CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
-    nvs_handle_t nvs_handle;
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
-    esp_err_t err = nvs_erase_key(nvs_handle, NVS_TOUCH_CAL_KEY);
-    if (err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND) {
-        err = nvs_commit(nvs_handle);
-    }
-    nvs_close(nvs_handle);
+    esp_err_t err = cyd_input_touch_calibration_erase_from_nvs();
     ESP_RETURN_ON_ERROR(err, TAG, "clear touch calibration failed");
     s_input.touch_calibration_loaded = false;
+    s_input.touch_calibration_saved = false;
     ESP_LOGI(TAG, "cleared touch calibration from NVS");
     return ESP_OK;
 #else

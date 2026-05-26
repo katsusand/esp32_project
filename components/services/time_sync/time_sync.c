@@ -12,8 +12,8 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
+#include "radio_manager.h"
 #include "time_sync.h"
-#include "wifi_manager.h"
 
 #ifndef CONFIG_TIME_SYNC_ENABLED
 #define CONFIG_TIME_SYNC_ENABLED 1
@@ -45,8 +45,13 @@
 #ifndef CONFIG_TIME_SYNC_TIMEZONE
 #define CONFIG_TIME_SYNC_TIMEZONE "JST-9"
 #endif
+#ifndef CONFIG_TIME_SYNC_RADIO_WAIT_TIMEOUT_MS
+#define CONFIG_TIME_SYNC_RADIO_WAIT_TIMEOUT_MS 30000
+#endif
+#ifndef CONFIG_TIME_SYNC_RADIO_MAX_HOLD_MS
+#define CONFIG_TIME_SYNC_RADIO_MAX_HOLD_MS 180000
+#endif
 
-#define TIME_SYNC_WIFI_WAIT_POLL_MS 1000U
 #define TIME_SYNC_MIN_INTERVAL_MINUTES 1U
 #define TIME_SYNC_MAX_INTERVAL_MINUTES 1440U
 
@@ -237,14 +242,6 @@ static void time_sync_set_timezone_locked(const char *timezone)
     snprintf(s_time_sync_timezone, sizeof(s_time_sync_timezone), "%s", timezone);
 }
 
-static void time_sync_handle_wifi_connected(void *ctx)
-{
-    (void)ctx;
-    if (time_sync_has_pending_request()) {
-        time_sync_notify_task();
-    }
-}
-
 static void time_sync_apply_timezone(void)
 {
     char timezone[TIME_SYNC_TIMEZONE_MAX_LEN + 1] = { 0 };
@@ -329,26 +326,6 @@ static esp_err_t time_sync_once(void)
     return ESP_OK;
 }
 
-static bool time_sync_wifi_state_is_terminal(wifi_manager_state_t state, bool time_sync_user_active)
-{
-    return state == WIFI_MANAGER_STATE_STOPPED ||
-           state == WIFI_MANAGER_STATE_FAILED ||
-           state == WIFI_MANAGER_STATE_SETUP_REQUIRED ||
-           (state == WIFI_MANAGER_STATE_OFF && !time_sync_user_active);
-}
-
-static void time_sync_release_wifi_user(void)
-{
-    if ((wifi_manager_get_active_users() & WIFI_MANAGER_USER_TIME_SYNC) == 0) {
-        return;
-    }
-
-    esp_err_t release_err = wifi_manager_release(WIFI_MANAGER_USER_TIME_SYNC);
-    if (release_err != ESP_OK) {
-        ESP_LOGW(TAG, "time sync release failed: %s", esp_err_to_name(release_err));
-    }
-}
-
 static esp_err_t time_sync_sync_with_connected_wifi(void)
 {
     esp_err_t sync_err = ESP_FAIL;
@@ -414,44 +391,35 @@ static void time_sync_task(void *arg)
             portENTER_CRITICAL(&s_time_sync_status_lock);
             time_sync_request_locked();
             portEXIT_CRITICAL(&s_time_sync_status_lock);
-            esp_err_t acquire_err = wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC);
-            if (acquire_err != ESP_OK) {
-                ESP_LOGW(TAG, "time sync acquire failed: %s", esp_err_to_name(acquire_err));
-            }
-            ESP_LOGI(TAG, "time sync due; waiting for Wi-Fi connection");
+            ESP_LOGI(TAG, "time sync due; waiting for radio lease");
             continue;
         }
 
-        wifi_manager_state_t wifi_state = WIFI_MANAGER_STATE_STOPPED;
-        if (wifi_manager_get_state(&wifi_state) != ESP_OK) {
-            ESP_LOGW(TAG, "time sync cannot read Wi-Fi state");
-            time_sync_record_attempt_status(ESP_ERR_INVALID_STATE);
+        radio_manager_lease_t lease = { 0 };
+        const radio_manager_request_t radio_request = {
+            .client = RADIO_MANAGER_CLIENT_TIME_SYNC,
+            .required = RADIO_MANAGER_CAP_INTERNET,
+            .max_hold_ticks = pdMS_TO_TICKS(CONFIG_TIME_SYNC_RADIO_MAX_HOLD_MS),
+        };
+
+        time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
+        esp_err_t radio_err = radio_manager_acquire(&radio_request,
+                                                    &lease,
+                                                    pdMS_TO_TICKS(CONFIG_TIME_SYNC_RADIO_WAIT_TIMEOUT_MS));
+        if (radio_err != ESP_OK) {
+            ESP_LOGW(TAG, "time sync radio acquire failed: %s", esp_err_to_name(radio_err));
+            time_sync_record_attempt_status(radio_err);
             time_sync_clear_request();
-            time_sync_release_wifi_user();
             time_sync_set_state(TIME_SYNC_STATE_IDLE);
-            continue;
-        }
-
-        if (wifi_state != WIFI_MANAGER_STATE_CONNECTED) {
-            bool time_sync_user_active =
-                (wifi_manager_get_active_users() & WIFI_MANAGER_USER_TIME_SYNC) != 0;
-            if (time_sync_wifi_state_is_terminal(wifi_state, time_sync_user_active)) {
-                ESP_LOGW(TAG, "time sync Wi-Fi unavailable: state=%d", (int)wifi_state);
-                time_sync_record_attempt_status(ESP_FAIL);
-                time_sync_clear_request();
-                time_sync_release_wifi_user();
-                time_sync_set_state(TIME_SYNC_STATE_IDLE);
-                continue;
-            }
-
-            time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
-            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(TIME_SYNC_WIFI_WAIT_POLL_MS));
             continue;
         }
 
         (void)time_sync_sync_with_connected_wifi();
         time_sync_clear_request();
-        time_sync_release_wifi_user();
+        esp_err_t release_err = radio_manager_release(&lease);
+        if (release_err != ESP_OK) {
+            ESP_LOGW(TAG, "time sync radio release failed: %s", esp_err_to_name(release_err));
+        }
         time_sync_set_state(TIME_SYNC_STATE_IDLE);
     }
 }
@@ -495,9 +463,6 @@ esp_err_t time_sync_start(void)
     time_sync_request_locked();
     portEXIT_CRITICAL(&s_time_sync_status_lock);
     time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
-    ESP_RETURN_ON_ERROR(wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC), TAG, "initial time sync acquire failed");
-
-    wifi_manager_set_connected_callback(time_sync_handle_wifi_connected, NULL);
     time_sync_notify_task();
     return ESP_OK;
 #else
@@ -512,10 +477,6 @@ void time_sync_request_soon(void)
     time_sync_request_locked();
     portEXIT_CRITICAL(&s_time_sync_status_lock);
     time_sync_set_state(TIME_SYNC_STATE_WAITING_WIFI);
-    esp_err_t acquire_err = wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC);
-    if (acquire_err != ESP_OK) {
-        ESP_LOGW(TAG, "time sync acquire failed: %s", esp_err_to_name(acquire_err));
-    }
     time_sync_notify_task();
 #endif
 }

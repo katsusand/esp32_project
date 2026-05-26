@@ -4,9 +4,13 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
+#include "app_stack_monitor.h"
 #include "app_shell.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
+#if CONFIG_ESP32_WIFI_STA_ENABLED
+#include "wifi_manager.h"
+#endif
 
 #define TAG "app_shell"
 static TaskHandle_t s_app_shell_task_handle;
@@ -25,6 +29,24 @@ static bool app_shell_is_home_idle_target(void)
     return s_app_shell_home_app != NULL &&
            s_app_shell_active_app != NULL &&
            s_app_shell_active_app != s_app_shell_home_app;
+}
+
+static bool app_shell_can_return_home_now(void)
+{
+    if (!cyd_input_has_saved_touch_calibration()) {
+        return false;
+    }
+
+#if CONFIG_ESP32_WIFI_STA_ENABLED
+    wifi_manager_state_t wifi_state = WIFI_MANAGER_STATE_STOPPED;
+    if (wifi_manager_get_state(&wifi_state) == ESP_OK &&
+        (wifi_state == WIFI_MANAGER_STATE_SETUP_REQUIRED ||
+         wifi_state == WIFI_MANAGER_STATE_SETUP_RUNNING)) {
+        return false;
+    }
+#endif
+
+    return true;
 }
 
 bool app_shell_is_idle_timeout_elapsed(void)
@@ -97,6 +119,8 @@ static void app_shell_task(void *arg)
     }
 
     while (true) {
+        APP_STACK_MONITOR_CHECK(TAG, "app_shell", 30000);
+
         if (s_app_shell_active_app != NULL && s_app_shell_active_app->step != NULL) {
             ESP_ERROR_CHECK(s_app_shell_active_app->step(s_app_shell_active_app->ctx));
         } else {
@@ -151,6 +175,9 @@ const app_shell_app_t *app_shell_get_home_app(void)
 bool app_shell_request_home_if_idle(void)
 {
     if (!app_shell_is_idle_timeout_elapsed()) {
+        return false;
+    }
+    if (!app_shell_can_return_home_now()) {
         return false;
     }
 

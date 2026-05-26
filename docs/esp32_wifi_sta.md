@@ -90,11 +90,11 @@ English supplement: Saved credentials are fallback defaults, not a replacement f
 `idf.py menuconfig` で `ESP32 Wi-Fi STA` を開き、必要に応じて以下を設定します。
 
 - `ESP32_WIFI_STA_ENABLED`
-- `ESP32_WIFI_STA_AUTO_START`: `app_main()` で `wifi_manager` と `time_sync` を起動する
+- `ESP32_WIFI_STA_AUTO_START`: `system_boot_start()` の中で `wifi_manager` と `time_sync` を起動する
 - `ESP32_WIFI_STA_SSID`
 - `ESP32_WIFI_STA_PASSWORD`
 - `ESP32_WIFI_STA_MAX_RETRY`
-- `ESP32_WIFI_STA_WAIT_ON_BOOT`: 互換用の legacy option。現在の `app_main()` は Wi-Fi 接続待ちで boot をブロックしない
+- `ESP32_WIFI_STA_WAIT_ON_BOOT`: 互換用の legacy option。現在の起動経路は Wi-Fi 接続待ちで boot をブロックしない
 - `ESP32_WIFI_STA_SCAN_LIST_SIZE`
 - `ESP32_WIFI_STA_CONNECT_TIMEOUT_MS`
 - `ESP32_WIFI_STA_WPA3_SAE_PWE_HUNT_AND_PECK`

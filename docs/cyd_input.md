@@ -233,7 +233,26 @@ English supplement: Treat BOOT as a user button only after firmware has started.
 
 `CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT` が有効で、保存済み補正値がない場合は、起動時に補正フローを実行します。
 
+保存済み補正値の blob サイズ、magic、または raw 座標が異常な場合は、`touch_cal` だけを NVS から削除して再起動します。旧フォーマットや壊れた値をそのまま `setTouchCalibrate()` に渡して起動時に不安定になることを避けるためです。
+
 English supplement: Calibration data is stored by `cyd_input`, but the raw calibration operation is performed by `cyd_display_calibrate_touch()` and applied by `cyd_display_apply_touch_calibration()`.
+
+このプロジェクトでは、保存済み補正がない場合でも `CONFIG_CYD_TOUCH_X_MIN/X_MAX/Y_MIN/Y_MAX` と `CONFIG_CYD_TOUCH_OFFSET_ROTATION` を使ったデフォルト変換で最低限の操作を可能にします。ただし、これは「保存済み補正」とは別状態です。起動時にキャリブレーション導線へ入れるかどうか、無操作復帰を許可するかどうかは、保存済み補正の有無で判定します。
+
+注意:
+
+- `CONFIG_CYD_TOUCH_OFFSET_ROTATION` の `4` は「180 度回転」ではない
+- LovyanGFX では `0` から `3` が 90 度単位の回転、`4` が追加の反転フラグ、`5` から `7` が反転付き回転として扱われる
+- この基板設定では `CONFIG_CYD_DISPLAY_ROTATION=1` と `CONFIG_CYD_TOUCH_OFFSET_ROTATION=4` の組み合わせで、未補正時のデフォルト座標系を正しく合わせている
+
+キャリブレーション保存時の注意:
+
+- `cyd_display_calibrate_touch()` は内部で一時的に回転状態を変えて 4 点の raw 座標を取得する
+- その 4 点をこの基板設定のまま `setTouchCalibrate()` 用データとして無加工で保存すると、実行時に X/Y の増減が反転した状態で再現されることがある
+- このプロジェクトでは `cyd_input_run_touch_calibration()` が、取得した 4 点をランタイム向け順序へ正規化してから再適用・保存する
+- そのため、通常のアプリや system settings からタッチ補正を起動する場合は `cyd_input_run_touch_calibration()` を使い、`cyd_display_calibrate_touch()` と `cyd_display_apply_touch_calibration()` を直接つないで使わない
+
+English supplement: On this board, the default raw touch mapping is correct with `CONFIG_CYD_DISPLAY_ROTATION=1` and `CONFIG_CYD_TOUCH_OFFSET_ROTATION=4`, but the raw corner order returned by LovyanGFX calibration is not directly reusable for persistence. `cyd_input_run_touch_calibration()` normalizes the corner order before saving so reboot behavior matches immediate post-calibration behavior.
 
 ## Configuration
 
@@ -246,7 +265,7 @@ English supplement: Calibration data is stored by `cyd_input`, but the raw calib
 - `CONFIG_CYD_TOUCH_PIN_MISO`: タッチ MISO GPIO
 - `CONFIG_CYD_TOUCH_PIN_CS`: タッチ CS GPIO
 - `CONFIG_CYD_TOUCH_PIN_INT`: タッチ INT GPIO
-- `CONFIG_CYD_TOUCH_OFFSET_ROTATION`: タッチ座標の追加回転補正
+- `CONFIG_CYD_TOUCH_OFFSET_ROTATION`: タッチ座標の追加回転/反転補正
 - `CONFIG_CYD_TOUCH_X_MIN`: タッチ raw X 最小値
 - `CONFIG_CYD_TOUCH_X_MAX`: タッチ raw X 最大値
 - `CONFIG_CYD_TOUCH_Y_MIN`: タッチ raw Y 最小値

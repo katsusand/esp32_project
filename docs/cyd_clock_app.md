@@ -97,4 +97,4 @@ English supplement: Clock app owns clock/failure/retrying modes only. Wi-Fi setu
 - `wifi_manager`
 - `app_shell`
 
-`main/main.c` では、表示、入力、必要に応じた Wi-Fi/time sync 起動の後に `app_shell_start(cyd_clock_app_get_app())` を呼びます。
+このプロジェクトでは、`main/app_main()` は `system_boot_start(cyd_clock_app_get_app())` を呼びます。表示、入力、必要に応じた Wi-Fi/time sync 起動は `system_boot` 側で行われ、その後に `app_shell_start(...)` が呼ばれます。

@@ -10,10 +10,13 @@
 #include "cyd_alarm.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
+#include "app_scheduler.h"
 #include "cyd_speaker.h"
 #include "cyd_status_led.h"
+#include "time_tick.h"
 #include "system_boot.h"
 #if CONFIG_ESP32_WIFI_STA_ENABLED
+#include "radio_manager.h"
 #include "time_sync.h"
 #include "wifi_manager.h"
 #endif
@@ -102,6 +105,21 @@ static esp_err_t system_boot_init_nvs(void)
     return ret;
 }
 
+static esp_err_t system_boot_run_touch_calibration_if_needed(void)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    if (cyd_input_has_saved_touch_calibration()) {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "no saved touch calibration, running calibration before app shell start");
+    ESP_RETURN_ON_ERROR(cyd_input_run_touch_calibration(), TAG, "touch calibration failed");
+    return cyd_input_discard_pending_events();
+#else
+    return ESP_OK;
+#endif
+}
+
 esp_err_t system_boot_start(const app_shell_app_t *home_app)
 {
     ESP_RETURN_ON_FALSE(home_app != NULL, ESP_ERR_INVALID_ARG, TAG, "home app required");
@@ -116,6 +134,8 @@ esp_err_t system_boot_start(const app_shell_app_t *home_app)
     ESP_RETURN_ON_ERROR(system_boot_init_nvs(), TAG, "NVS init failed");
     ESP_RETURN_ON_ERROR(cyd_status_led_init(), TAG, "status LED init failed");
     ESP_RETURN_ON_ERROR(cyd_speaker_init(), TAG, "speaker init failed");
+    ESP_RETURN_ON_ERROR(time_tick_start(), TAG, "time tick start failed");
+    ESP_RETURN_ON_ERROR(app_scheduler_init(), TAG, "scheduler init failed");
     ESP_RETURN_ON_ERROR(cyd_alarm_init(), TAG, "alarm init failed");
     ESP_RETURN_ON_ERROR(cyd_display_init(), TAG, "display init failed");
 
@@ -127,12 +147,16 @@ esp_err_t system_boot_start(const app_shell_app_t *home_app)
     }
 
     ESP_RETURN_ON_ERROR(cyd_input_init(), TAG, "input init failed");
+    ESP_RETURN_ON_ERROR(system_boot_run_touch_calibration_if_needed(),
+                        TAG,
+                        "initial touch calibration failed");
 
 #if CONFIG_ESP32_WIFI_STA_AUTO_START
     if (setup_requested_on_boot) {
         wifi_manager_request_setup_on_start();
     }
     ESP_RETURN_ON_ERROR(wifi_manager_start(), TAG, "Wi-Fi manager start failed");
+    ESP_RETURN_ON_ERROR(radio_manager_start(), TAG, "radio manager start failed");
     ESP_RETURN_ON_ERROR(time_sync_start(), TAG, "time sync start failed");
 #endif
 

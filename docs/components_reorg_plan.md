@@ -1,46 +1,51 @@
-# Components Reorg Plan
+# Components Architecture
 
 ## Status
 
-この再編計画は完了済みです。
+このドキュメントは、`components/` 再編が完了したあとの現状構成を説明するためのものです。
 
-完了日:
+再編完了日:
 
 - 2026-05-01
 
-完了項目:
-
-- Step 1: `framework/` と `platform/` の再配置
-- Step 2: `services/` の再配置
-- Step 3: `apps/` と `support/` の再配置
-- `system_boot` の追加と `main/main.c` の簡素化
+English supplement: This document is no longer a migration TODO. It describes the current stable component layout and the intended ownership boundaries.
 
 ## Overview
 
-`components/` がフラットなまま育ってきたため、board 制御、共通 service、UI app、実行基盤が同じ階層に並ぶ状態になっています。
-
-このドキュメントは、今後の再編を安全に進めるための TODO と見通しを整理するためのものです。
-
-English supplement: The goal is to improve navigability and reuse first, without mixing directory cleanup with behavior changes.
-
-## Current Problem
-
-現状では以下が混ざりやすくなっています。
-
-- board / peripheral control
-- Wi-Fi / NTP / NVS を伴う共通 service
-- foreground UI app
-- app 実行基盤や UI helper
-- 補助 library / diagnostics
-
-そのため、新しいアプリを追加するときに「どこへ置くべきか」が直感的でなくなりやすく、再利用の境界も読み取りにくくなります。
-
-## Target Layout
-
-再編の第一目標は、責務の島を作ることです。
+このプロジェクトでは、`components/` を責務ごとに 5 つの層へ分けています。
 
 ```text
 components/
+  apps/
+  framework/
+  platform/
+  services/
+  support/
+```
+
+最も重要な前提は、`components/apps/` がメインアプリ層であり、その他の層は土台として再利用する前提だということです。
+
+時計プロジェクトでは `components/apps/` に clock 系 app を載せていますが、派生プロジェクトではここを差し替え、`platform/`、`framework/`、`services/`、`support/` はできるだけそのまま活かす想定です。
+
+English supplement: Treat `apps/` as the replaceable application layer. The other groups form reusable infrastructure for derived projects.
+
+## Current Layout
+
+現在の主な構成は以下です。
+
+```text
+components/
+  apps/
+    cyd_alarm/
+    cyd_clock_app/
+    cyd_clock_settings_app/
+    cyd_system_apps/
+
+  framework/
+    app_shell/
+    cyd_ui/
+    system_boot/
+
   platform/
     cyd_display/
     cyd_input/
@@ -48,165 +53,146 @@ components/
     cyd_status_led/
 
   services/
+    app_scheduler/
     cyd_wifi_setup/
     esp32_wifi_sta/
+    radio_manager/
     time_sync/
+    time_tick/
     wifi_manager/
     wifi_profile_store/
-
-  apps/
-    cyd_clock_app/
-    cyd_system_apps/
-    cyd_alarm/            # temporary placement; revisit later
-
-  framework/
-    app_shell/
-    cyd_ui/
 
   support/
     app_diagnostics/
     lovyangfx_wrapper/
 ```
 
-## Design Intent
+## Layer Roles
 
-各グループの意味は以下です。
+### `apps/`
 
-- `platform/`
-  CYD board の表示、入力、LED、speaker など、ハード寄り component を置く
-- `services/`
-  Wi-Fi、time sync、credential store など、複数 app から再利用される機能 service を置く
-- `apps/`
-  `app_shell` 上で動く foreground app を置く
-- `framework/`
-  app 実行基盤や UI 組み立て helper を置く
-- `support/`
-  diagnostics や wrapper など、直接の app/service ではない補助 component を置く
+foreground app を置く層です。ここがプロジェクト固有のメインアプリ領域です。
 
-English supplement: This layout is meant to express ownership boundaries, not just naming preference.
+現在の例:
 
-## Migration Policy
+- `cyd_clock_app/`
+  通常時の時計表示
+- `cyd_clock_settings_app/`
+  時計固有設定
+- `cyd_system_apps/`
+  `INFO` / `SETTINGS` のような system-level app
+- `cyd_alarm/`
+  現在は app 層に置いている alarm 機能
 
-今回の再編では、以下を原則とします。
+新しい派生プロジェクトでは、まずこの層を整理することを前提にします。
 
-- まずは directory layout の整理を優先する
-- 1 step の中で挙動変更を混ぜない
-- component 名、public header 名、NVS namespace は当面維持する
-- include 修正と CMake 追従は行うが、API の大規模 rename は後回しにする
-- 各 step ごとにビルド確認する
+English supplement: `apps/` is where project-specific behavior belongs. Replacing or shrinking this layer is the normal path when deriving a new product from this repository.
 
-English supplement: Keep each step reviewable by separating relocation from refactoring.
+### `framework/`
 
-## TODO
+app を載せるための実行基盤です。
 
-### Step 1
+- `app_shell/`
+  foreground UI app の切り替え実行基盤
+- `cyd_ui/`
+  画面組み立て helper
+- `system_boot/`
+  起動 orchestration と subsystem の初期化順
 
-`framework/` と `platform/` を分ける。
+`main/main.c` は薄く保ち、起動責務は `system_boot` へ寄せます。
 
-対象:
+English supplement: `framework/` should stay thin and generic. It provides execution structure rather than domain-specific application behavior.
 
-- `components/framework/app_shell`
-- `components/framework/cyd_ui`
-- `components/platform/cyd_display`
-- `components/platform/cyd_input`
-- `components/platform/cyd_speaker`
-- `components/platform/cyd_status_led`
+### `platform/`
 
-TODO:
+CYD board のハード寄り制御を置く層です。
 
-- 新しい親 directory を作る
-- 対象 component を移動する
-- `CMakeLists.txt` と component discovery が壊れないことを確認する
-- `#include "..."` の解決が維持されることを確認する
-- build が通ることを確認する
+- `cyd_display/`
+- `cyd_input/`
+- `cyd_speaker/`
+- `cyd_status_led/`
 
-期待効果:
+表示、入力、LED、speaker のような board / peripheral 制御はここへ置きます。
 
-- 実行基盤と board 制御の境界が読みやすくなる
-- 次の app が platform API をどこから使うか明確になる
+English supplement: `platform/` owns device-facing behavior tied to the CYD board rather than application use cases.
 
-### Step 2
+### `services/`
 
-`services/` をまとめる。
+複数 app から再利用される共通 service を置く層です。
 
-対象:
+- `wifi_manager/`
+  Wi-Fi 接続状態と接続ライフサイクル
+- `radio_manager/`
+  通信利用権の調停
+- `time_sync/`
+  NTP/SNTP による時刻同期
+- `time_tick/`
+  秒変化配信
+- `app_scheduler/`
+  時刻ベースの共通スケジューラー
+- `wifi_profile_store/`
+  Wi-Fi credential 保存
+- `esp32_wifi_sta/`
+  ESP-IDF Wi-Fi STA wrapper
+- `cyd_wifi_setup/`
+  Wi-Fi setup app と helper
 
-- `components/services/cyd_wifi_setup`
-- `components/services/esp32_wifi_sta`
-- `components/services/time_sync`
-- `components/services/wifi_manager`
-- `components/services/wifi_profile_store`
+新しい機能が「clock 専用ではなく、別 app からも使えそうか」で迷った場合は、まず `services/` に置くべきか検討します。
 
-TODO:
+English supplement: `services/` contains reusable domain logic with state, policy, or background task ownership. If a feature is not specific to one foreground app, it probably belongs here.
 
-- Wi-Fi / NTP / credential 保存の component を service island として集約する
-- 相互依存の include / `REQUIRES` / `PRIV_REQUIRES` を点検する
-- build が通ることを確認する
+### `support/`
 
-期待効果:
+直接の app / service ではない補助 component を置く層です。
 
-- 新規 app から見た再利用対象が明確になる
-- Wi-Fi 系の責務を一か所で追いやすくなる
+- `app_diagnostics/`
+- `lovyangfx_wrapper/`
 
-### Step 3
+diagnostics、wrapper、補助ライブラリ連携のようなものはここへ置きます。
 
-`apps/` と `support/` を整理する。
+## Design Rules
 
-対象:
+この構成では、以下を基本ルールとします。
 
-- `components/apps/cyd_clock_app`
-- `components/apps/cyd_system_apps`
-- `components/apps/cyd_alarm`
-- `components/support/app_diagnostics`
-- `components/support/lovyangfx_wrapper`
+- メインアプリは `apps/` に置く
+- board / peripheral 制御は `platform/` に置く
+- app 実行基盤や UI helper は `framework/` に置く
+- 複数 app から使う共通機能は `services/` に置く
+- 補助 component や wrapper は `support/` に置く
 
-TODO:
+English supplement: Choose the layer based on ownership and reuse boundaries, not just implementation convenience.
 
-- foreground app 群を `apps/` に寄せる
-- support component を `support/` に寄せる
-- `cyd_alarm` の責務を再確認する
+## Startup Boundary
 
-期待効果:
+起動経路は現在、次のように分かれています。
 
-- app と app 以外の違いがはっきりする
-- 次の app 追加時の置き場所が迷いにくくなる
+1. `main/app_main()`
+2. `system_boot_start(...)`
+3. platform / service 初期化
+4. `app_shell_start(home_app)`
 
-## Decision Notes
+これにより `main/main.c` は薄く保たれ、起動順や boot-time 判定は `system_boot` 側で一元管理されます。
 
-`components/` 再編の完了後に `system_boot` を新設し、`main/main.c` の起動 orchestration を切り出しました。
+English supplement: `main` should stay minimal. Boot sequencing belongs to `system_boot`, and foreground app execution belongs to `app_shell`.
 
-理由:
+## Guidance For Derived Projects
 
-- `main/main.c` の include と初期化責務を減らせた
-- directory 再編後に実施したため、構造整理と起動責務整理を分離できた
-- 起動順や boot-time touch 判定を `system_boot` 側へ集約できた
+このリポジトリを土台に別用途へ派生するときは、次の順で考えると整理しやすくなります。
 
-English supplement: `system_boot` was intentionally deferred until after the component boundaries became clearer.
+1. `apps/` のうち不要な app を削る
+2. 新しい main app を `apps/` に追加する
+3. 既存 app から切り出せる共通機能があれば `services/` へ上げる
+4. board 依存の処理は `platform/` を再利用する
+5. 起動順変更が必要なら `system_boot` を調整する
 
-## Future Outlook
+時計機能をベースにしない派生では、まず `apps/` を入れ替え対象として見るのが基本です。
 
-再編後は、以下の次段階を検討しやすくなります。
+English supplement: Most derived projects should change `apps/` first and keep the infrastructure layers as stable as possible.
 
-- 新規 foreground app 用の template component を用意する
-- `wifi_manager_user_t` を拡張し、time sync 以外の Wi-Fi consumer を追加しやすくする
-- 端末共通設定と app 固有設定の境界をより明確にする
-- `cyd_alarm` を app 機能として残すか、共通 service に上げるかを判断する
+## Notes
 
-## Non Goals
+- `cyd_alarm/` は現在 `apps/` にありますが、今後 service 化を検討する余地があります
+- `cyd_system_apps/` は system-level app ですが、foreground app であるため `apps/` に置いています
+- `cyd_wifi_setup/` は UI を持ちますが、Wi-Fi service の一部として `services/` に置いています
 
-この再編 TODO では、以下は対象外とします。
-
-- UI 仕様変更
-- Wi-Fi 接続ポリシー変更
-- time sync の挙動変更
-- NVS key / namespace の変更
-- release / dev build 方針の変更
-
-## Progress Tracking
-
-進捗管理用の簡易 checklist として使う場合は、以下を更新します。
-
-- [x] Step 1: `framework/` と `platform/` の再配置
-- [x] Step 2: `services/` の再配置
-- [x] Step 3: `apps/` と `support/` の再配置
-- [x] 再編後に `system_boot` を追加して `main/main.c` を薄くする
+English supplement: Layering is based on primary ownership. A component may expose UI and still belong to `services/` if it is fundamentally part of a reusable service workflow.

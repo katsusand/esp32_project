@@ -1,0 +1,26 @@
+menu "Radio Manager"
+
+    config RADIO_MANAGER_TASK_STACK_SIZE
+        int "Radio manager task stack size"
+        default 4096
+
+    config RADIO_MANAGER_TASK_PRIORITY
+        int "Radio manager task priority"
+        default 7
+
+    config RADIO_MANAGER_REQUEST_QUEUE_LEN
+        int "Radio lease request queue length"
+        default 5
+
+    config RADIO_MANAGER_CONTROL_QUEUE_LEN
+        int "Radio lease control queue length"
+        default 5
+
+    config RADIO_MANAGER_IDLE_TIMEOUT_MS
+        int "Radio idle timeout (ms)"
+        default 30000
+        help
+            Time to keep the radio/Wi-Fi lease alive after the last client
+            releases it. Default is 30 seconds for development visibility.
+
+endmenu

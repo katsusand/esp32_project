@@ -1,10 +1,4 @@
 menu "CYD Clock App"
-
-    config CYD_CLOCK_APP_TASK_STACK_SIZE
-        int "CYD clock app task stack size(kbyte)"
-        default 8192
-        range 7168 16384
-    
     config CYD_CLOCK_APP_UPDATE_INTERVAL_MS
         int "CYD clock app update interval (ms)"
         default 1000

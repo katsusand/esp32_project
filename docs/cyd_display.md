@@ -16,7 +16,7 @@ English supplement: This component owns the display queue, render task, LovyanGF
 #include "cyd_display.h"
 ```
 
-初期化は、通常 `app_main()` の起動処理で一度だけ呼びます。
+初期化は、通常 `main/app_main()` から入る `system_boot_start()` の起動処理で一度だけ呼びます。
 
 ```c
 ESP_ERROR_CHECK(cyd_display_init());
@@ -286,6 +286,14 @@ ESP_ERROR_CHECK(cyd_display_calibrate_touch(params, 8));
 補正値の保存や読み込みは `cyd_input` 側が担当します。通常のアプリでは `cyd_input_run_touch_calibration()` を使う方が扱いやすいです。
 
 English supplement: `cyd_display_calibrate_touch()` only obtains calibration parameters. Persistent storage is intentionally handled by `cyd_input`.
+
+注意:
+
+- `cyd_display_calibrate_touch()` の戻り値を、そのまま永続保存用データとして扱ってよいとは限りません
+- このプロジェクトの既定構成では、LovyanGFX が補正中に使う一時回転と実行時の `CONFIG_CYD_TOUCH_OFFSET_ROTATION` 解釈が一致しないため、4 点の並びを無加工で `setTouchCalibrate()` に再利用すると X/Y の増減が反転した状態を保存してしまうことがあります
+- 永続保存まで含む通常フローでは `cyd_input_run_touch_calibration()` を使ってください
+
+English supplement: `cyd_display_calibrate_touch()` is a low-level primitive. In this project, persistent touch calibration must go through `cyd_input_run_touch_calibration()` so the returned raw corner order can be normalized for runtime reuse.
 
 ## Configuration
 

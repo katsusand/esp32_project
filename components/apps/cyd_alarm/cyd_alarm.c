@@ -2,21 +2,14 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
-#include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
-#include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "cyd_alarm.h"
+#include "app_scheduler.h"
 #include "cyd_speaker.h"
 
-#ifndef CONFIG_CYD_ALARM_TASK_STACK_SIZE
-#define CONFIG_CYD_ALARM_TASK_STACK_SIZE 4096
-#endif
-#ifndef CONFIG_CYD_ALARM_TASK_PRIORITY
-#define CONFIG_CYD_ALARM_TASK_PRIORITY 4
-#endif
 #ifndef CONFIG_CYD_ALARM_DEFAULT_1_HOUR
 #define CONFIG_CYD_ALARM_DEFAULT_1_HOUR 7
 #endif
@@ -30,8 +23,10 @@
 #define CONFIG_CYD_ALARM_DEFAULT_2_MINUTE 30
 #endif
 
-#define CYD_ALARM_TASK_POLL_MS 250
 #define CYD_ALARM_CONFIG_VERSION 1U
+#define CYD_ALARM_SCHEDULER_OWNER "clock"
+#define CYD_ALARM_SCHEDULER_TAG_1 "alarm1"
+#define CYD_ALARM_SCHEDULER_TAG_2 "alarm2"
 
 static const char *TAG = "cyd_alarm";
 static const char *NVS_NAMESPACE = "cyd_alarm";
@@ -52,7 +47,6 @@ typedef struct {
 #define CYD_ALARM_FLAG_2_ENABLED (1U << 1)
 
 static portMUX_TYPE s_alarm_lock = portMUX_INITIALIZER_UNLOCKED;
-static TaskHandle_t s_alarm_task_handle;
 static bool s_alarm_started;
 static cyd_alarm_config_t s_alarm1 = {
     .hour = CONFIG_CYD_ALARM_DEFAULT_1_HOUR,
@@ -159,107 +153,101 @@ static esp_err_t cyd_alarm_load_from_nvs(void)
     return ESP_OK;
 }
 
-static bool cyd_alarm_matches_alarm1(const struct tm *timeinfo)
+static esp_err_t cyd_alarm_write_config(void)
 {
-    uint8_t weekday_mask = 0;
-    uint8_t hour = 0;
-    uint8_t minute = 0;
-    bool enabled = false;
+    nvs_handle_t nvs_handle;
+    cyd_alarm_config_disk_t disk = { 0 };
 
-    if (timeinfo == NULL) {
-        return false;
+    cyd_alarm_config_to_disk(&disk);
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
+    esp_err_t err = nvs_set_blob(nvs_handle, NVS_CONFIG_KEY, &disk, sizeof(disk));
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
     }
+    nvs_close(nvs_handle);
+    return err;
+}
+
+static void cyd_alarm_make_scheduler_config(cyd_alarm_id_t alarm_id,
+                                            const cyd_alarm_config_t *alarm,
+                                            app_scheduler_config_t *config)
+{
+    ESP_RETURN_VOID_ON_FALSE(alarm != NULL, TAG, "alarm config is null");
+    ESP_RETURN_VOID_ON_FALSE(config != NULL, TAG, "scheduler config is null");
+
+    memset(config, 0, sizeof(*config));
+    strlcpy(config->owner, CYD_ALARM_SCHEDULER_OWNER, sizeof(config->owner));
+    strlcpy(config->tag,
+            alarm_id == CYD_ALARM_ID_1 ? CYD_ALARM_SCHEDULER_TAG_1 : CYD_ALARM_SCHEDULER_TAG_2,
+            sizeof(config->tag));
+    config->mode = APP_SCHEDULER_MODE_INSTANT;
+    config->enabled = alarm->enabled;
+    config->repeat = alarm_id == CYD_ALARM_ID_1;
+    config->weekday_mask = alarm_id == CYD_ALARM_ID_1 ? cyd_alarm_normalize_weekday_mask(alarm->weekday_mask)
+                                                       : APP_SCHEDULER_WEEKDAY_ALL;
+    config->at.hour = alarm->hour;
+    config->at.minute = alarm->minute;
+    config->at.second = 0;
+}
+
+static esp_err_t cyd_alarm_sync_scheduler_entry(cyd_alarm_id_t alarm_id, const cyd_alarm_config_t *alarm)
+{
+    const char *tag = alarm_id == CYD_ALARM_ID_1 ? CYD_ALARM_SCHEDULER_TAG_1 : CYD_ALARM_SCHEDULER_TAG_2;
+    app_scheduler_config_t config = { 0 };
+
+    ESP_RETURN_ON_FALSE(alarm != NULL, ESP_ERR_INVALID_ARG, TAG, "alarm config is null");
+
+    if (!alarm->enabled) {
+        esp_err_t remove_err = app_scheduler_remove(CYD_ALARM_SCHEDULER_OWNER, tag);
+        return remove_err == ESP_ERR_NOT_FOUND ? ESP_OK : remove_err;
+    }
+
+    cyd_alarm_make_scheduler_config(alarm_id, alarm, &config);
+    return app_scheduler_upsert(&config);
+}
+
+static esp_err_t cyd_alarm_sync_scheduler(void)
+{
+    cyd_alarm_config_t alarm1 = { 0 };
+    cyd_alarm_config_t alarm2 = { 0 };
 
     portENTER_CRITICAL(&s_alarm_lock);
-    enabled = s_alarm1.enabled;
-    weekday_mask = s_alarm1.weekday_mask;
-    hour = s_alarm1.hour;
-    minute = s_alarm1.minute;
+    alarm1 = s_alarm1;
+    alarm2 = s_alarm2;
     portEXIT_CRITICAL(&s_alarm_lock);
 
-    if (!enabled) {
-        return false;
-    }
-
-    if ((weekday_mask & (1U << timeinfo->tm_wday)) == 0) {
-        return false;
-    }
-
-    return timeinfo->tm_hour == hour && timeinfo->tm_min == minute;
+    ESP_RETURN_ON_ERROR(cyd_alarm_sync_scheduler_entry(CYD_ALARM_ID_1, &alarm1),
+                        TAG,
+                        "sync alarm1 schedule failed");
+    ESP_RETURN_ON_ERROR(cyd_alarm_sync_scheduler_entry(CYD_ALARM_ID_2, &alarm2),
+                        TAG,
+                        "sync alarm2 schedule failed");
+    return ESP_OK;
 }
 
-static bool cyd_alarm_matches_alarm2(const struct tm *timeinfo)
+static void cyd_alarm_scheduler_handler(const app_scheduler_event_t *event, void *ctx)
 {
-    uint8_t hour = 0;
-    uint8_t minute = 0;
-    bool enabled = false;
+    (void)ctx;
 
-    if (timeinfo == NULL) {
-        return false;
+    if (event == NULL ||
+        event->type != APP_SCHEDULER_EVENT_FIRED ||
+        strcmp(event->owner, CYD_ALARM_SCHEDULER_OWNER) != 0) {
+        return;
     }
 
-    portENTER_CRITICAL(&s_alarm_lock);
-    enabled = s_alarm2.enabled;
-    hour = s_alarm2.hour;
-    minute = s_alarm2.minute;
-    portEXIT_CRITICAL(&s_alarm_lock);
-
-    return enabled && timeinfo->tm_hour == hour && timeinfo->tm_min == minute;
-}
-
-static int32_t cyd_alarm_minute_stamp(const struct tm *timeinfo)
-{
-    if (timeinfo == NULL) {
-        return -1;
+    if (strcmp(event->tag, CYD_ALARM_SCHEDULER_TAG_1) != 0 &&
+        strcmp(event->tag, CYD_ALARM_SCHEDULER_TAG_2) != 0) {
+        return;
     }
 
-    return ((int32_t)timeinfo->tm_year * 366 * 24 * 60) +
-           ((int32_t)timeinfo->tm_yday * 24 * 60) +
-           ((int32_t)timeinfo->tm_hour * 60) +
-           (int32_t)timeinfo->tm_min;
-}
+    ESP_LOGI(TAG, "alarm triggered: %s", event->tag);
+    (void)cyd_speaker_play_event(CYD_SPEAKER_EVENT_ALARM);
 
-static void cyd_alarm_task(void *arg)
-{
-    int32_t last_stamp = -1;
-
-    (void)arg;
-
-    while (true) {
-        time_t now = 0;
-        struct tm local_time = { 0 };
-
-        time(&now);
-        localtime_r(&now, &local_time);
-
-        if ((local_time.tm_year + 1900) >= 2024) {
-            int32_t stamp = cyd_alarm_minute_stamp(&local_time);
-            if (stamp != last_stamp) {
-                bool alarm1_match = cyd_alarm_matches_alarm1(&local_time);
-                bool alarm2_match = cyd_alarm_matches_alarm2(&local_time);
-
-                if (alarm1_match || alarm2_match) {
-                    ESP_LOGI(TAG,
-                             "alarm triggered at %02d:%02d (alarm1=%d alarm2=%d)",
-                             local_time.tm_hour,
-                             local_time.tm_min,
-                             alarm1_match,
-                             alarm2_match);
-                    (void)cyd_speaker_play_event(CYD_SPEAKER_EVENT_ALARM);
-                }
-
-                if (alarm2_match) {
-                    portENTER_CRITICAL(&s_alarm_lock);
-                    s_alarm2.enabled = false;
-                    portEXIT_CRITICAL(&s_alarm_lock);
-                    (void)cyd_alarm_save();
-                }
-
-                last_stamp = stamp;
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(CYD_ALARM_TASK_POLL_MS));
+    if (strcmp(event->tag, CYD_ALARM_SCHEDULER_TAG_2) == 0) {
+        portENTER_CRITICAL(&s_alarm_lock);
+        s_alarm2.enabled = false;
+        portEXIT_CRITICAL(&s_alarm_lock);
+        (void)cyd_alarm_write_config();
     }
 }
 
@@ -281,13 +269,12 @@ esp_err_t cyd_alarm_init(void)
         ESP_RETURN_ON_ERROR(err, TAG, "load alarm config failed");
     }
 
-    BaseType_t created = xTaskCreate(cyd_alarm_task,
-                                     "cyd_alarm",
-                                     CONFIG_CYD_ALARM_TASK_STACK_SIZE,
-                                     NULL,
-                                     CONFIG_CYD_ALARM_TASK_PRIORITY,
-                                     &s_alarm_task_handle);
-    ESP_RETURN_ON_FALSE(created == pdPASS, ESP_FAIL, TAG, "create alarm task failed");
+    ESP_RETURN_ON_ERROR(app_scheduler_register_handler(CYD_ALARM_SCHEDULER_OWNER,
+                                                       cyd_alarm_scheduler_handler,
+                                                       NULL),
+                        TAG,
+                        "register alarm scheduler handler failed");
+    ESP_RETURN_ON_ERROR(cyd_alarm_sync_scheduler(), TAG, "sync scheduler failed");
 
     s_alarm_started = true;
     return ESP_OK;
@@ -295,17 +282,8 @@ esp_err_t cyd_alarm_init(void)
 
 esp_err_t cyd_alarm_save(void)
 {
-    nvs_handle_t nvs_handle;
-    cyd_alarm_config_disk_t disk = { 0 };
-
-    cyd_alarm_config_to_disk(&disk);
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
-    esp_err_t err = nvs_set_blob(nvs_handle, NVS_CONFIG_KEY, &disk, sizeof(disk));
-    if (err == ESP_OK) {
-        err = nvs_commit(nvs_handle);
-    }
-    nvs_close(nvs_handle);
-    return err;
+    ESP_RETURN_ON_ERROR(cyd_alarm_write_config(), TAG, "write alarm config failed");
+    return cyd_alarm_sync_scheduler();
 }
 
 cyd_alarm_mode_t cyd_alarm_get_mode(void)

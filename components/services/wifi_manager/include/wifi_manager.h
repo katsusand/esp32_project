@@ -23,7 +23,7 @@ typedef enum {
 } wifi_manager_state_t;
 
 typedef enum {
-    WIFI_MANAGER_USER_TIME_SYNC = BIT0,
+    WIFI_MANAGER_USER_RADIO_MANAGER = BIT0,
 } wifi_manager_user_t;
 
 typedef enum {

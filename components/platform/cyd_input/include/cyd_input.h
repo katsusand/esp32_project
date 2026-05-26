@@ -75,6 +75,7 @@ esp_err_t cyd_input_get_mode_button_touch(size_t button_count, size_t *button_in
 esp_err_t cyd_input_read_event(cyd_input_event_t *event, TickType_t wait_ticks);
 TickType_t cyd_input_get_last_activity_tick(void);
 bool cyd_input_has_touch_calibration(void);
+bool cyd_input_has_saved_touch_calibration(void);
 esp_err_t cyd_input_discard_pending_events(void);
 esp_err_t cyd_input_run_touch_calibration(void);
 esp_err_t cyd_input_clear_touch_calibration(void);

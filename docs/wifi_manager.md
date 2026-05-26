@@ -2,13 +2,13 @@
 
 ## Overview
 
-`wifi_manager` は、Wi-Fi 接続状態と接続要求をまとめる上位コンポーネントです。
+`wifi_manager` は、Wi-Fi 接続状態と接続要求をまとめる低レベルの接続管理コンポーネントです。
 
-`wifi_manager_start()` は manager task を常駐させますが、通常起動では Wi-Fi radio を開始しません。初期化後は `WIFI_MANAGER_STATE_OFF` で待機します。通信が必要なコンポーネントは `wifi_manager_acquire()` で利用期間を開始し、処理後に `wifi_manager_release()` で利用期間を終了します。active user が 1 つ以上ある間だけ、manager が Wi-Fi を ON にして接続を維持します。
+`wifi_manager_start()` は manager task を常駐させますが、通常起動では Wi-Fi radio を開始しません。初期化後は `WIFI_MANAGER_STATE_OFF` で待機します。内部的には `wifi_manager_acquire()` / `wifi_manager_release()` により active user を管理し、active user が 1 つ以上ある間だけ manager が Wi-Fi を ON にして接続を維持します。
 
 SSID 未設定、または起動時の明示的な setup shortcut では `WIFI_MANAGER_STATE_SETUP_REQUIRED` に遷移します。設定済み SSID へ接続できない場合は `WIFI_MANAGER_STATE_FAILED` になり、Wi-Fi setup app に入るかどうかは foreground app (`cyd_clock_app`) が判断します。接続後は STA 状態を定期監視し、切断時は再接続を試みます。manager 自身は LCD を触りません。
 
-English supplement: `wifi_manager` is a network orchestration layer, not a display owner. It keeps the manager task alive while allowing the Wi-Fi STA/radio to be OFF unless at least one client has acquired Wi-Fi.
+English supplement: `wifi_manager` owns Wi-Fi STA state and connection policy, but new application-level clients should usually go through `radio_manager` rather than calling it directly.
 
 ## Public API
 
@@ -24,17 +24,28 @@ English supplement: `wifi_manager` is a network orchestration layer, not a displ
 ESP_ERROR_CHECK(wifi_manager_start());
 ```
 
-通常の Wi-Fi 利用期間は `wifi_manager_acquire()` / `wifi_manager_release()` で囲みます。`acquire` により active user bit が立ち、`OFF` / `FAILED` / `INIT` など接続要求可能な状態なら manager task が接続を開始します。`release` により active user が 0 になると、setup 中でなければ manager が Wi-Fi STA を停止して `OFF` に戻します。
+通常のアプリ/サービスは `wifi_manager` を直接 acquire せず、`radio_manager` から通信利用権を取得します。`wifi_manager` は STA 接続の実処理を担当し、radio 利用順や idle timeout は `radio_manager` が管理します。
+
+English supplement: New communication services should prefer `radio_manager` leases. Direct `wifi_manager` acquire/release is now a lower-level integration point used by `radio_manager`.
 
 ```c
-ESP_ERROR_CHECK(wifi_manager_acquire(WIFI_MANAGER_USER_TIME_SYNC));
-/* Wi-Fi connected callback or wifi_manager_wait_connected() を待って通信する。 */
-ESP_ERROR_CHECK(wifi_manager_release(WIFI_MANAGER_USER_TIME_SYNC));
+radio_manager_request_t request = {
+    .client = RADIO_MANAGER_CLIENT_TIME_SYNC,
+    .required = RADIO_MANAGER_CAP_INTERNET,
+    .max_hold_ticks = pdMS_TO_TICKS(30000),
+};
+radio_manager_lease_t lease = { 0 };
+
+ESP_ERROR_CHECK(radio_manager_acquire(&request, &lease, pdMS_TO_TICKS(10000)));
+/* 通信処理 */
+ESP_ERROR_CHECK(radio_manager_release(&lease));
 ```
 
-接続済み状態を待つ場合は `wifi_manager_wait_connected()` を使えます。ただし `OFF` 状態では自動的に ON にせず、`ESP_ERR_INVALID_STATE` を返します。先に利用者として `wifi_manager_acquire()` してください。
+`wifi_manager_acquire()` / `wifi_manager_release()` は現在も公開されていますが、これは `radio_manager` や低レベル統合のための API と考えてください。新しい HTTP client や別用途の通信 service を追加する場合は、まず `radio_manager` 側へ client / capability を追加する方針を優先します。
 
-English supplement: New Wi-Fi clients should prefer acquire/release ownership. The older request functions remain available for explicit retry paths, but they are not the primary lifetime model.
+接続済み状態を待つ場合は `wifi_manager_wait_connected()` を使えます。ただし `OFF` 状態では自動的に ON にせず、`ESP_ERR_INVALID_STATE` を返します。この API は主に `radio_manager` 内部や低レベル切り分け用です。
+
+English supplement: `wifi_manager_wait_connected()` is still useful for lower-level integration and diagnostics, but it is not the primary application-level entry point.
 
 明示的に Wi-Fi を ON にするだけなら `wifi_manager_enable()` を使います。これは非同期の要求で、active user は増やさず、接続完了を待ちません。
 
@@ -67,7 +78,7 @@ English supplement: `SETUP_REQUIRED` is only a request/state signal. `SETUP_RUNN
 
 Wi-Fi が有効化中かどうかは `wifi_manager_is_enabled()` で判定できます。`STOPPED` と `OFF` では `false` を返します。
 
-診断表示向けには `wifi_manager_get_active_users()`、`wifi_manager_get_last_user()`、`wifi_manager_get_connected_duration_seconds()`、`wifi_manager_get_connected_duration_high_water_seconds()`、`wifi_manager_get_warning()` を使えます。現在の user bit は `WIFI_MANAGER_USER_TIME_SYNC` のみです。
+診断表示向けには `wifi_manager_get_active_users()`、`wifi_manager_get_last_user()`、`wifi_manager_get_connected_duration_seconds()`、`wifi_manager_get_connected_duration_high_water_seconds()`、`wifi_manager_get_warning()` を使えます。現在の通常通信経路で使う user bit は `WIFI_MANAGER_USER_RADIO_MANAGER` です。
 
 ## State Model
 
@@ -92,7 +103,7 @@ typedef enum {
 1. `wifi_manager_start()` が task を作り、`INIT` へ入る
 2. 通常起動では Wi-Fi を開始せず、`OFF` で要求を待つ
 3. 起動時のタッチ IRQ が LOW なら、明示的な setup shortcut として `SETUP_REQUIRED` に入る
-4. `wifi_manager_acquire()`、retry API、または `wifi_manager_enable()` により、設定済み credential で接続を試みる
+4. `radio_manager` 経由の acquire、retry API、または `wifi_manager_enable()` により、設定済み credential で接続を試みる
 5. SSID 未設定なら `SETUP_REQUIRED`、設定済み credential で接続できない場合は `FAILED` に入る
    `wifi_manager_request_connection_without_setup()` からの要求では、setup UI を直接起動せず、失敗状態で待つ
 6. 接続後は `CONFIG_WIFI_MANAGER_MONITOR_INTERVAL_MS` ごとに STA 状態を監視する
@@ -103,11 +114,11 @@ English supplement: The manager task is long-lived. `STOPPED` means the manager 
 
 ## Concurrency Policy
 
-Wi-Fi 利用者は bit mask で調停します。各コンポーネントは自分に割り当てられた `wifi_manager_user_t` bit で `wifi_manager_acquire()` し、処理完了時に同じ bit を `wifi_manager_release()` します。active user が残っている間は Wi-Fi を維持し、最後の user が release したときだけ OFF に戻します。
+Wi-Fi 利用者は内部的には bit mask で調停されます。各 low-level client は `wifi_manager_user_t` bit で `wifi_manager_acquire()` し、処理完了時に同じ bit を `wifi_manager_release()` します。active user が残っている間は Wi-Fi を維持し、最後の user が release したときだけ OFF に戻します。
 
-現在定義されている user は `WIFI_MANAGER_USER_TIME_SYNC` のみです。新しい Wi-Fi 利用コンポーネントを追加する場合は、`wifi_manager_user_t` に専用 bit を追加してから acquire/release してください。
+現在の通常通信経路では `radio_manager` が `WIFI_MANAGER_USER_RADIO_MANAGER` を使って `wifi_manager` を保持します。新しい通信コンポーネントはまず `radio_manager` に client / capability を追加し、`wifi_manager` への直接 user 追加は低レベル統合が必要な場合だけ検討してください。
 
-English supplement: Active users are represented as bits, not a nesting counter per user. Each client should acquire once for its active work window and release the same bit when done.
+English supplement: Active users are represented as bits, not a nesting counter per user. In the current architecture, `radio_manager` is the normal owner of Wi-Fi lifetime for communication features.
 
 ## Configuration
 
@@ -134,4 +145,4 @@ English supplement: The manager no longer runs the display setup flow itself, bu
 
 `cyd_wifi_setup` は現在、設定済み credential 接続 helper と shell 上の `wifi setup app` として参照しています。全画面 setup UI の描画 owner は `app_shell` task です。
 
-起動順としては、`main/app_main()` で `cyd_display_init()` と `cyd_input_init()` が完了した後に `wifi_manager_start()` を呼びます。現在の `main/main.c` はこの順序になっています。
+起動順としては、`main/app_main()` から `system_boot_start()` に入り、`system_boot` の中で `cyd_display_init()` と `cyd_input_init()` が完了した後に `wifi_manager_start()` を呼びます。

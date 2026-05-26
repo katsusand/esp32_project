@@ -6,6 +6,32 @@ TFT 表示、XPT2046 タッチ、オンボード RGB LED、ブザー、Wi-Fi セ
 
 English supplement: This project targets ESP-IDF v5.4.3 and an ESP32 CYD-class board with 4 MB flash.
 
+## Design Intent
+
+このリポジトリでは、`components/apps/` がメインアプリの置き場所です。
+
+- `components/apps/`
+  プロジェクト固有の foreground app を置く層。派生プロジェクトでは、まずここを差し替える前提で考える
+- `components/platform/`
+  表示、入力、LED、speaker などの board / device 寄り基盤
+- `components/framework/`
+  `app_shell` や `cyd_ui` など、app を載せるための実行基盤
+- `components/services/`
+  Wi-Fi、time sync、radio lease、scheduler など、複数 app から再利用する service
+- `components/support/`
+  diagnostics や wrapper などの補助層
+
+この時計プロジェクトでは `components/apps/` に clock 系 app を載せていますが、設計上はここが入れ替え対象であり、それ以外は土台として再利用する想定です。
+
+配置先は「画面を持つかどうか」ではなく、「主責務が何か」で判断します。
+
+- foreground app として `app_shell` に載るものは `components/apps/`
+- 複数 app から再利用する service が、必要に応じて UI も持つ場合は `components/services/`
+
+たとえば `cyd_system_apps` は reusable でも foreground app なので `apps/` に置き、`cyd_wifi_setup` は画面を持っていても Wi-Fi service workflow の一部なので `services/` に置いています。
+
+English supplement: Treat `components/apps/` as the application layer and the other component groups as reusable infrastructure. Derived projects should usually replace or shrink `components/apps/` first, while keeping `platform/`, `framework/`, `services/`, and `support/` as the base.
+
 ## Features
 
 - LovyanGFX ベースの 320x240 TFT 表示
@@ -13,6 +39,7 @@ English supplement: This project targets ESP-IDF v5.4.3 and an ESP32 CYD-class b
 - 起動時 shortcut、未同期時、設定画面から入れる Wi-Fi scan/password setup UI
 - 保存済み Wi-Fi credential によるオンデマンド接続
 - NTP/SNTP による時刻同期と POSIX timezone 設定
+- アプリ共通の時刻スケジューラー
 - 時計画面の 24時間/12時間表示切り替え
 - RGB status LED と PWM speaker
 - `sdkconfig.defaults` による CYD ボード設定と 4 MB flash 設定の固定
@@ -39,6 +66,8 @@ English supplement: CYD clone boards often look identical but use different LCD 
 
 ## Project Structure
 
+- Basic rule:
+  `components/apps/` is the main application layer. The other component groups are the reusable base.
 - `main/`: `app_main()` と起動順
 - `components/framework/system_boot/`: 起動 orchestration と各 subsystem の初期化順
 - `components/platform/cyd_display/`: TFT 表示、画面モデル、ログビュー、タッチ低レベルアクセス
@@ -48,6 +77,7 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `components/services/esp32_wifi_sta/`: ESP-IDF Wi-Fi STA wrapper と credential 保存
 - `components/services/wifi_manager/`: Wi-Fi 接続状態と接続要求の orchestration
 - `components/services/time_sync/`: SNTP/NTP 時刻同期
+- `components/services/app_scheduler/`: アプリ共通の時刻スケジューラー
 - `components/apps/cyd_clock_app/`: clock app
 - `components/apps/cyd_clock_settings_app/`: clock-specific settings app
 - `components/apps/cyd_system_apps/`: reusable `INFO` / `SETTINGS` / touch calibration apps
@@ -55,22 +85,28 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `components/platform/cyd_speaker/`: PWM speaker
 - `components/support/lovyangfx_wrapper/`: LovyanGFX を ESP-IDF component として組み込む wrapper
 - `docs/`: コンポーネントごとの詳細ドキュメント
-- `docs/components_reorg_plan.md`: `components/` 再編 TODO と今後の見通し
+- `docs/components_reorg_plan.md`: `components/` の現状アーキテクチャと層ごとの役割
 - `docs/system_apps_split_plan.md`: 共通 `INFO/SETTINGS` と clock-specific settings 分離 TODO
 - `third_party/lovyangfx_upstream/`: LovyanGFX upstream source
 
 ## Setup
 
-ESP-IDF v5.4.3 の環境を読み込んでから操作します。
+EIM 管理の ESP-IDF v5.4.3 環境を読み込んでから操作します。
 
 ```bash
-source ~/.espressif/v5.4.3/esp-idf/export.sh
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
 ```
+
+`python_env` が存在する環境では `source ~/.espressif/v5.4.3/esp-idf/export.sh` でも動作することがありますが、このリポジトリでは EIM 前提のため `activate_idf_v5.4.3.sh` を優先します。
+
+VS Code の ESP-IDF 拡張を使っている場合は、通常これらを手で意識しなくても拡張側が環境を扱います。
+
+English supplement: For CLI usage in this repository, prefer the EIM-generated activation script. VS Code ESP-IDF extension users usually do not need to source it manually.
 
 初回または設定変更時は menuconfig を開きます。
 
 ```bash
-idf.py menuconfig
+python "$IDF_PATH/tools/idf.py" menuconfig
 ```
 
 Wi-Fi をビルド時に固定したい場合は、`ESP32 Wi-Fi STA` の `Wi-Fi SSID` と `Wi-Fi password` を設定します。
@@ -82,14 +118,14 @@ English supplement: Credentials are runtime/local configuration. Do not commit r
 ## Build and Flash
 
 ```bash
-source ~/.espressif/v5.4.3/esp-idf/export.sh
-idf.py build
-idf.py -p PORT flash monitor
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
+python "$IDF_PATH/tools/idf.py" build
+python "$IDF_PATH/tools/idf.py" -p PORT flash monitor
 ```
 
 monitor を終了するには `Ctrl-]` を押します。
 
-`idf.py` が見つからない場合は、ESP-IDF 環境が読み込まれていない可能性があります。先に `source ~/.espressif/v5.4.3/esp-idf/export.sh` を実行してください。
+`idf.py` が見つからない場合は、ESP-IDF 環境が読み込まれていない可能性があります。先に `source ~/.espressif/tools/activate_idf_v5.4.3.sh` を実行してください。
 
 人間や AI / IDE Assistant が `source` を読み落としやすい場合は、`scripts/` のラッパーを優先してください。
 
@@ -100,6 +136,34 @@ monitor を終了するには `Ctrl-]` を押します。
 ```
 
 English supplement: These wrapper scripts are the preferred execution entry points for repeatable local work because they load the pinned ESP-IDF environment and default `DEV=1` automatically.
+
+## Troubleshooting
+
+まずは `./scripts/idf-build.sh`、`./scripts/idf-menuconfig.sh`、`./scripts/idf-flash-monitor.sh` のラッパーを優先してください。`source` の読み忘れや `DEV=1` の付け忘れを避けやすくなります。
+
+### activate_idf_v5.4.3.sh が非ゼロ終了する
+
+注意:
+
+- EIM が生成する `activate_idf_v5.4.3.sh` は、環境変数の設定自体は成功していても、シェルや呼び出し方によっては非ゼロ終了になることがある
+- そのため、AI / IDE Assistant や自動化が `set -e` 前提で `source ~/.espressif/tools/activate_idf_v5.4.3.sh && ...` のように書くと、実際には `idf.py` 実行前に止まることがある
+- そのような環境では、`source ~/.espressif/tools/activate_idf_v5.4.3.sh || true` のように activation script の返り値だけ吸収してから `python "$IDF_PATH/tools/idf.py" ...` を実行すると切り分けしやすい
+
+English supplement: On some macOS/EIM setups, `activate_idf_v5.4.3.sh` may populate the environment correctly but still return a non-zero status. Automation that assumes `set -e` semantics should account for this.
+
+### psutil の PermissionError が出る
+
+以下のようなエラーが出る場合があります。
+
+```text
+PermissionError: [Errno 1] Operation not permitted
+```
+
+- これは `idf_component_manager` が `psutil` 経由でプロセス列挙を行う際に、macOS の sandbox / 権限制限へ当たっている可能性がある
+- 少なくともこのプロジェクトでは、ソースコード不備よりも先に「実行環境の制限」を疑う方が切り分けしやすい
+- Codex など sandbox 付き環境では、ビルドコマンドを権限付きで再実行すると通ることがある
+
+English supplement: If `idf_component_manager` fails inside `psutil` with `PermissionError`, prioritize checking sandbox or process-enumeration restrictions before investigating source changes.
 
 ## New Mac Setup
 
@@ -159,10 +223,10 @@ exec zsh
 eim install -i v5.4.3
 ```
 
-インストール後、`~/.espressif/v5.4.3/esp-idf/export.sh` が存在することを確認します。
+インストール後、`~/.espressif/tools/activate_idf_v5.4.3.sh` が存在することを確認します。
 
 ```bash
-test -f ~/.espressif/v5.4.3/esp-idf/export.sh
+test -f ~/.espressif/tools/activate_idf_v5.4.3.sh
 ```
 
 基本手順は以下です。
@@ -171,10 +235,10 @@ test -f ~/.espressif/v5.4.3/esp-idf/export.sh
 2. Homebrew がなければインストールする
 3. EIM CLI で ESP-IDF v5.4.3 を導入する
 4. LovyanGFX submodule を取得する
-5. `~/.espressif/v5.4.3/esp-idf/export.sh` が存在することを確認する
-6. このリポジトリ直下で `source ~/.espressif/v5.4.3/esp-idf/export.sh` を実行する
+5. `~/.espressif/tools/activate_idf_v5.4.3.sh` が存在することを確認する
+6. このリポジトリ直下で `source ~/.espressif/tools/activate_idf_v5.4.3.sh` を実行する
 7. 必要に応じて `idf.py menuconfig` を開く
-8. `DEV=1 idf.py build` で開発用ビルドを行う
+8. `DEV=1 python "$IDF_PATH/tools/idf.py" build` で開発用ビルドを行う
 
 English supplement: Treat this repository as the source of truth for project intent and workflow. A new Mac should recreate the same ESP-IDF environment rather than trying to reuse another machine's generated build outputs.
 
@@ -198,7 +262,9 @@ AI / IDE Assistant 向け運用ルール：
 - 新しい Mac への ESP-IDF 導入は、まず EIM CLI による `eim install -i v5.4.3` を案内する
 - clone 後は `third_party/lovyangfx_upstream` の LovyanGFX submodule が取得済みか確認する
 - 可能なら `./scripts/idf-build.sh`、`./scripts/idf-menuconfig.sh`、`./scripts/idf-flash-monitor.sh` を優先して使う
-- `idf.py` を直接使う場合は、必ず `source ~/.espressif/v5.4.3/esp-idf/export.sh` の実行を前提にする
+- `idf.py` を直接使う場合は、EIM 前提として `source ~/.espressif/tools/activate_idf_v5.4.3.sh` の実行を前提にする
+- `activate_idf_v5.4.3.sh` が環境設定後に非ゼロ終了する環境では、`set -e` 前提の自動化でそのまま連結しない
+- macOS 上の sandbox / 権限制限で `psutil` が `PermissionError: [Errno 1] Operation not permitted` を返す場合、これはソース不備ではなくプロセス列挙制限の可能性を優先して確認する
 - `build/` は環境依存の生成物として扱い、別の Mac で作られた `build/` の再利用を前提にしない
 - `sdkconfig` はローカル生成物として扱い、共有すべき基準値は `sdkconfig.defaults` を参照する
 
@@ -213,9 +279,9 @@ AI / IDE Assistant 向け運用ルール：
 このプロジェクトでは、通常の組み込み開発フローとして `DEV=1` を付けた開発用ビルドを標準とします。
 
 ```bash
-source ~/.espressif/v5.4.3/esp-idf/export.sh
-DEV=1 idf.py build
-DEV=1 idf.py -p PORT flash monitor
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
+DEV=1 python "$IDF_PATH/tools/idf.py" build
+DEV=1 python "$IDF_PATH/tools/idf.py" -p PORT flash monitor
 ```
 
 または、ラッパースクリプトを使っても同じです。
@@ -276,7 +342,7 @@ setup flow は以下です。
 
 ## Time Sync and Clock
 
-`CONFIG_ESP32_WIFI_STA_AUTO_START` が有効な場合、`main/app_main()` は `wifi_manager_start()` の後に `time_sync_start()` を呼びます。`wifi_manager_start()` は manager task を常駐させますが、通常起動では Wi-Fi radio を開始しません。`time_sync` は同期待ちの間だけ `WIFI_MANAGER_USER_TIME_SYNC` として `wifi_manager_acquire()` し、同期処理が終わると `wifi_manager_release()` します。
+`CONFIG_ESP32_WIFI_STA_AUTO_START` が有効な場合、`main/app_main()` は `system_boot_start(...)` を通じて `wifi_manager_start()`、`radio_manager_start()`、`time_sync_start()` を順に呼びます。`wifi_manager_start()` は manager task を常駐させますが、通常起動では Wi-Fi radio を開始しません。`time_sync` は `radio_manager` から `RADIO_MANAGER_CAP_INTERNET` の lease を取得している間だけ Wi-Fi を利用します。
 
 一度も NTP 同期に成功していない状態では、Wi-Fi 接続失敗時に setup UI へ遷移できます。一度でも同期に成功した後は、再同期の Wi-Fi 接続失敗では setup UI に遷移せず、時計表示を維持します。
 
@@ -313,6 +379,7 @@ English supplement: `sdkconfig.defaults` is the project baseline. Local `sdkconf
 - [CYD System Apps](docs/cyd_system_apps.md)
 - [ESP32 Wi-Fi STA](docs/esp32_wifi_sta.md)
 - [Wi-Fi Manager](docs/wifi_manager.md)
+- [Time Tick](docs/time_tick.md)
 - [Time Sync](docs/time_sync.md)
 - [CYD Clock App](docs/cyd_clock_app.md)
 - [CYD Status LED Driver](docs/cyd_status_led.md)
@@ -340,6 +407,18 @@ idf.py reconfigure
 ### Fullclean cannot remove build
 
 別環境で生成された `build/` のため `idf.py fullclean` が削除を拒否する場合があります。その場合、このプロジェクトでは自動削除せず、内容を確認した上で手動で `build/` を削除してください。
+
+### AI build stops at psutil PermissionError
+
+特に macOS 上で AI / IDE Assistant が sandbox 付きで `idf.py build` や `idf.py fullclean` を実行すると、`idf_component_manager` 内の `psutil` がプロセス列挙で失敗し、`PermissionError: [Errno 1] Operation not permitted` で止まることがあります。
+
+この場合は、まずソースエラーではなく実行権限の制限を疑ってください。
+
+- `activate_idf_v5.4.3.sh` で環境を読み込んでも止まる場合がある
+- まず activation script の返り値で止まっていないか確認する
+- その上で `psutil` の `PermissionError` が出ているなら、権限付きで同じビルドを再実行して純粋なビルド成否を確認する
+
+English supplement: On macOS, sandboxed AI-driven builds may fail before real compilation because `psutil` in `idf_component_manager` cannot enumerate processes. Treat this as an execution-environment issue first, not a firmware source regression.
 
 ### LovyanGFX is missing
 
