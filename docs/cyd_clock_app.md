@@ -6,7 +6,7 @@
 
 現在は `app_shell` 上で動く foreground app です。周期的に `time()` / `localtime_r()` を読み、`cyd_ui` 経由で時計画面を更新します。時刻表示部分のタップで 24時間表示と 12時間表示を切り替えます。長押しはタップをキャンセルするだけで、Wi-Fi 設定への shortcut ではありません。
 
-LCD owner は `app_shell` task であり、`cyd_clock_app` 自身はその task 上で実行されます。`wifi_manager` が `SETUP_REQUIRED` になった場合、明示的な起動時 setup shortcut、またはまだ一度も NTP 同期に成功していない状態なら自動的に Wi-Fi setup へ入ります。一度でも NTP 同期に成功した後は、通常の接続失敗だけでは自動遷移せず、時計画面を維持します。
+LCD owner は `app_shell` task であり、`cyd_clock_app` 自身はその task 上で実行されます。`wifi_connection` が `SETUP_REQUIRED` になった場合、明示的な起動時 setup shortcut、またはまだ一度も NTP 同期に成功していない状態なら自動的に Wi-Fi setup へ入ります。一度でも NTP 同期に成功した後は、通常の接続失敗だけでは自動遷移せず、時計画面を維持します。
 
 English supplement: `cyd_clock_app` is no longer a standalone task. It is a shell-managed foreground app that can request transitions to other apps.
 
@@ -94,7 +94,7 @@ English supplement: Clock app owns clock/failure/retrying modes only. Wi-Fi setu
 - `cyd_ui`
 - `cyd_wifi_setup`
 - `time_sync`
-- `wifi_manager`
+- `wifi_connection`
 - `app_shell`
 
-このプロジェクトでは、`main/app_main()` は `system_boot_start(cyd_clock_app_get_app())` を呼びます。表示、入力、必要に応じた Wi-Fi/time sync 起動は `system_boot` 側で行われ、その後に `app_shell_start(...)` が呼ばれます。
+このプロジェクトでは、`main/app_main()` は `cyd_clock_composition_start()` を呼びます。表示・入力は`system_boot`、時計固有serviceと必要に応じたWi-Fi/time sync起動はcompositionが担当し、その後に`app_shell_start(cyd_clock_app_get_app())`を呼びます。

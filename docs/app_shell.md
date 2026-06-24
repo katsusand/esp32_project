@@ -4,7 +4,7 @@
 
 `app_shell` は、CYD の foreground UI アプリを実行するための最小ランタイムです。
 
-通常構成では、`main/app_main()` は `system_boot_start(cyd_clock_app_get_app())` を呼びます。`system_boot` が各 subsystem を初期化したあと、`app_shell_start()` により `app_shell` task が LCD owner として常駐します。その task 上で `clock app` や `wifi setup app` が 1 つずつ実行されます。
+通常構成では、`main/app_main()` は `cyd_clock_composition_start()` を呼びます。compositionが共通bootと時計製品のserviceを初期化したあと、`app_shell_start()` により `app_shell` taskがLCD ownerとして常駐します。そのtask上で`clock app`や`wifi setup app`が1つずつ実行されます。
 
 学習用・実験用に初期アプリを差し替える場合も、考え方は同じです。たとえば `hello_app` から `info_app` に切り替える場合でも、新しい FreeRTOS task を作るのではなく、`app_shell` task が「次に呼ぶ app」を差し替えます。
 
@@ -37,6 +37,7 @@ typedef struct app_shell_app {
     esp_err_t (*enter)(void *ctx, const app_shell_app_t *from_app);
     esp_err_t (*step)(void *ctx);
     esp_err_t (*leave)(void *ctx);
+    bool (*idle_return_suppressed)(void *ctx);
 } app_shell_app_t;
 ```
 
@@ -56,9 +57,19 @@ ESP_ERROR_CHECK(app_shell_switch_to(cyd_wifi_setup_get_app()));
 
 English supplement: `app_shell_switch_to()` is deferred until the shell regains control after the current app step returns.
 
+home復帰timeoutは `app_shell_get_idle_return_timeout_seconds()` と
+`app_shell_set_idle_return_timeout_seconds()` で実行時に参照・変更できます。
+`app_shell_save_idle_return_timeout_seconds()` を呼ぶとNVSへ保存され、次回起動時はKconfig初期値よりNVS値が優先されます。`0` は自動復帰無効です。
+
+入力中など一時的にhome復帰させたくないアプリは `idle_return_suppressed` で自身の状態を返します。アプリIDによる特例判定は行いません。
+
+composition 側で起動中の service 状態に応じて home 復帰を止めたい場合は、`app_shell_set_home_return_allowed_callback()` で短い判定callbackを登録します。`app_shell` 自体は Wi-Fi や時刻同期などの domain service を直接参照しません。
+
+English supplement: The suppression and home-return guard callbacks must be fast and side-effect free. Zero timeout disables idle return.
+
 ## Lifecycle
 
-各 shell app は、`enter`、`step`、`leave` の 3 つの callback で構成されます。
+各 shell app は、`enter`、`step`、`leave` の lifecycle callbackと、任意の `idle_return_suppressed` callbackで構成されます。
 
 - `enter`: その app に切り替わった直後に 1 回だけ呼ばれる。`from_app` には遷移元 app が入る
 - `step`: その app が active な間、`app_shell` task から繰り返し呼ばれる
@@ -127,7 +138,7 @@ English supplement: `hello` is a learning app for observing app switching withou
 
 - `app_shell` が `cyd_display_claim_owner()` する
 - foreground app は shell task 上で動くので描画できる
-- `wifi_manager`、`time_sync` などの background task は描画しない
+- `wifi_connection`、`time_sync` などの background task は描画しない
 
 このルールにより、タッチ/描画競合を減らします。
 
@@ -137,6 +148,7 @@ English supplement: `hello` is a learning app for observing app switching withou
 
 - `CONFIG_APP_SHELL_TASK_STACK_SIZE`
 - `CONFIG_APP_SHELL_TASK_PRIORITY`
+- `CONFIG_APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS`
 
 foreground app は shell task の stack を共有するため、stack size は active app の最大使用量を見て調整します。
 
@@ -147,11 +159,11 @@ foreground app は shell task の stack を共有するため、stack size は a
 このプロジェクトでは、共有データは次のように分けると理解しやすいです。
 
 - 電源を切っても残す設定: NVS や store component に保存する
-- 起動中だけ必要なシステム状態: `wifi_manager`、`time_sync` のような manager component が持つ
+- 起動中だけ必要なシステム状態: `wifi_connection`、`time_sync` のような manager component が持つ
 - app 固有の一時状態: app 内部の `static` state や `app_shell_app_t.ctx` に持つ
 - 画面遷移の一時パラメータ: `enter()` の `from_app` や、必要に応じた遷移先 app の setter API で渡す
 
-たとえば Wi-Fi 設定は `wifi_profile_store` / NVS に保存され、Wi-Fi の現在状態は `wifi_manager` が管理します。これは `app_shell` に持たせるより、意味のある component に分けた方が責務が明確です。
+たとえば Wi-Fi 設定は `wifi_profile_store` / NVS に保存され、Wi-Fi の現在状態は `wifi_connection` が管理します。Wi-Fi setup 中に home 復帰を止めるような製品固有の接続判断は、composition が `app_shell_set_home_return_allowed_callback()` に登録します。これは `app_shell` に Wi-Fi 知識を持たせるより、意味のある component に分けた方が責務が明確です。
 
 一方で、PC のクリップボードのように「特定 app の所有物ではないが、複数 app が一時的に使う作業状態」が必要になった場合は、`app_shell` または `app_workspace` のような共通 component に持たせる選択肢があります。
 

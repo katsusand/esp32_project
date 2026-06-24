@@ -33,6 +33,20 @@ ESP_ERROR_CHECK(app_shell_switch_to(system_settings_app_get_app()));
 
 English supplement: Return apps come from the `from_app` pointer passed to `enter()`, avoiding compile-time dependency from system apps back to the clock app.
 
+保存済みSSID一覧、touch calibration消去確認、NVS消去確認は、次のAPIで次回のsettings遷移先として直接指定できます。
+
+```c
+system_settings_open_stored_ssids();
+ESP_ERROR_CHECK(app_shell_switch_to(system_settings_app_get_app()));
+```
+
+確認画面を開く場合は、1行目を `system_settings_open_clear_touch_calib_confirm()` または
+`system_settings_open_clear_nvs_confirm()` に置き換えます。
+
+指定は次回の `settings app` の `enter()` で一度だけ消費されます。直接開いた画面の戻る操作は、通常のsettings pageではなく遷移元アプリへ戻ります。
+
+English supplement: Direct-view selection is one-shot and thread-safe; callers still request the shell transition explicitly.
+
 ## Info App
 
 `info app` は参照用の情報画面です。
@@ -76,9 +90,15 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
 
 `NVS` page の `Clear Touch Calib` は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。`Initialize NVS` は確認画面を経て `nvs_flash_erase()` を実行し、保存済み Wi-Fi profile や各種設定値も含めて初期化したうえで再起動します。
 
+NVS blob の version / size / 文字列終端などが現在 firmware の想定フォーマットと一致しない場合は、起動時に warning 付きの `Initialize NVS` 画面へ強制遷移します。この場合、通常の clock home には入らず、`Initialize` 実行後の再起動が必要です。
+
+English supplement: Structurally incompatible persistent data now routes the product into a forced initialize flow instead of silently trusting or rewriting the broken payload.
+
 `Wi-Fi Setup` へ入ると、`wifi_setup app` は `from_app` として `settings app` を受け取ります。これにより、Wi-Fi 設定完了後は settings 画面へ戻ります。
 
 app 固有設定がある場合は、`system_settings_set_extension()` で `label + app_shell_app_t` を差し込めます。現在の時計アプリでは `Clock Settings` への導線がこれで追加されます。
+
+時計固有の alarm 設定と scheduler 診断表示は `Clock Settings` 側にあります。`cyd_system_apps` は `app_scheduler` に依存しません。
 
 settings 画面が `wifi_setup app` から戻ってきた場合は、元の return app を保持します。これにより `clock -> settings -> wifi_setup -> settings -> <<` は `clock` へ戻ります。
 

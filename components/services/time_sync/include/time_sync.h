@@ -2,6 +2,7 @@
 #define TIME_SYNC_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 #include "esp_err.h"
 

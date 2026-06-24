@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #include "freertos/task.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
@@ -10,15 +11,15 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
+#include "nvs_health.h"
 #include "app_shell.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
-#include "app_scheduler.h"
 #include "cyd_system_apps.h"
 #include "cyd_ui.h"
 #include "cyd_wifi_setup.h"
 #include "time_sync.h"
-#include "wifi_manager.h"
+#include "wifi_connection.h"
 #include "wifi_profile_store.h"
 
 #define TAG "cyd_system_apps"
@@ -153,16 +154,22 @@ typedef enum {
 } cyd_settings_view_t;
 
 typedef enum {
+    CYD_SETTINGS_DIRECT_VIEW_NONE = 0,
+    CYD_SETTINGS_DIRECT_VIEW_STORED_SSIDS,
+    CYD_SETTINGS_DIRECT_VIEW_CLEAR_TOUCH_CALIB_CONFIRM,
+    CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM,
+} cyd_settings_direct_view_t;
+
+typedef enum {
     CYD_INFO_PAGE_INFO = 0,
     CYD_INFO_PAGE_DIAG,
     CYD_INFO_PAGE_DIAG2,
-    CYD_INFO_PAGE_SCHED,
     CYD_INFO_PAGE_COUNT,
 } cyd_info_page_t;
 
 typedef struct {
     bool valid;
-    wifi_manager_state_t wifi_state;
+    wifi_connection_state_t wifi_state;
     time_sync_state_t time_sync_state;
     bool has_last_attempt;
     esp_err_t last_attempt_status;
@@ -182,11 +189,15 @@ static cyd_system_apps_touch_tracker_t s_settings_touch_tracker;
 static cyd_info_page_t s_info_page = CYD_INFO_PAGE_INFO;
 static cyd_settings_page_t s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
 static cyd_settings_view_t s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+static cyd_settings_direct_view_t s_settings_pending_direct_view;
+static cyd_settings_direct_view_t s_settings_direct_view;
+static portMUX_TYPE s_settings_direct_view_lock = portMUX_INITIALIZER_UNLOCKED;
 static wifi_profile_store_entry_t s_settings_profiles[WIFI_PROFILE_STORE_MAX_ENTRIES];
 static size_t s_settings_profile_count = 0;
 static size_t s_settings_selected_profile = 0;
 static bool s_settings_sync_now_pending = false;
 static cyd_settings_status_snapshot_t s_settings_status_snapshot = { 0 };
+static bool s_settings_force_initialize = false;
 
 static esp_err_t cyd_settings_refresh(void);
 
@@ -282,26 +293,26 @@ static bool cyd_settings_touch_stepper_action(const cyd_input_event_t *event, ui
     return true;
 }
 
-static const char *cyd_system_apps_wifi_state_text(wifi_manager_state_t state)
+static const char *cyd_system_apps_wifi_state_text(wifi_connection_state_t state)
 {
     switch (state) {
-    case WIFI_MANAGER_STATE_STOPPED:
+    case WIFI_CONNECTION_STATE_STOPPED:
         return "wifi: stopped";
-    case WIFI_MANAGER_STATE_INIT:
+    case WIFI_CONNECTION_STATE_INIT:
         return "wifi: init";
-    case WIFI_MANAGER_STATE_OFF:
+    case WIFI_CONNECTION_STATE_OFF:
         return "wifi: off";
-    case WIFI_MANAGER_STATE_CONNECTING:
+    case WIFI_CONNECTION_STATE_CONNECTING:
         return "wifi: connecting";
-    case WIFI_MANAGER_STATE_CONNECTED:
+    case WIFI_CONNECTION_STATE_CONNECTED:
         return "wifi: connected";
-    case WIFI_MANAGER_STATE_RECONNECTING:
+    case WIFI_CONNECTION_STATE_RECONNECTING:
         return "wifi: reconnecting";
-    case WIFI_MANAGER_STATE_FAILED:
+    case WIFI_CONNECTION_STATE_FAILED:
         return "wifi: failed";
-    case WIFI_MANAGER_STATE_SETUP_REQUIRED:
+    case WIFI_CONNECTION_STATE_SETUP_REQUIRED:
         return "wifi: setup needed";
-    case WIFI_MANAGER_STATE_SETUP_RUNNING:
+    case WIFI_CONNECTION_STATE_SETUP_RUNNING:
         return "wifi: setup";
     default:
         return "wifi: unknown";
@@ -310,13 +321,13 @@ static const char *cyd_system_apps_wifi_state_text(wifi_manager_state_t state)
 
 static void cyd_system_apps_format_wifi_status(char *status_text, size_t status_size)
 {
-    wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
+    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
 
     if (status_text == NULL || status_size == 0) {
         return;
     }
 
-    if (wifi_manager_get_state(&state) != ESP_OK) {
+    if (wifi_connection_get_state(&state) != ESP_OK) {
         snprintf(status_text, status_size, "wifi: unavailable");
         return;
     }
@@ -324,12 +335,12 @@ static void cyd_system_apps_format_wifi_status(char *status_text, size_t status_
     snprintf(status_text, status_size, "%s", cyd_system_apps_wifi_state_text(state));
 }
 
-static const char *cyd_system_apps_wifi_warning_text(wifi_manager_warning_t warning)
+static const char *cyd_system_apps_wifi_warning_text(wifi_connection_warning_t warning)
 {
     switch (warning) {
-    case WIFI_MANAGER_WARNING_CONNECTED_TOO_LONG:
+    case WIFI_CONNECTION_WARNING_CONNECTED_TOO_LONG:
         return "connected too long";
-    case WIFI_MANAGER_WARNING_NONE:
+    case WIFI_CONNECTION_WARNING_NONE:
     default:
         return "none";
     }
@@ -337,7 +348,7 @@ static const char *cyd_system_apps_wifi_warning_text(wifi_manager_warning_t warn
 
 static void cyd_system_apps_format_wifi_users(char *status_text, size_t status_size)
 {
-    uint32_t active_users = wifi_manager_get_active_users();
+    uint32_t active_users = wifi_connection_get_active_users();
 
     if (status_text == NULL || status_size == 0) {
         return;
@@ -348,7 +359,7 @@ static void cyd_system_apps_format_wifi_users(char *status_text, size_t status_s
         return;
     }
 
-    if (active_users == WIFI_MANAGER_USER_RADIO_MANAGER) {
+    if (active_users == WIFI_CONNECTION_USER_RADIO_MANAGER) {
         snprintf(status_text, status_size, "wifi users: radio mgr");
         return;
     }
@@ -356,10 +367,10 @@ static void cyd_system_apps_format_wifi_users(char *status_text, size_t status_s
     snprintf(status_text, status_size, "wifi users: 0x%02lx", (unsigned long)active_users);
 }
 
-static const char *cyd_system_apps_wifi_user_text(wifi_manager_user_t user)
+static const char *cyd_system_apps_wifi_user_text(wifi_connection_user_t user)
 {
     switch (user) {
-    case WIFI_MANAGER_USER_RADIO_MANAGER:
+    case WIFI_CONNECTION_USER_RADIO_MANAGER:
         return "radio mgr";
     default:
         return "none";
@@ -375,12 +386,12 @@ static void cyd_system_apps_format_wifi_last_user(char *status_text, size_t stat
     snprintf(status_text,
              status_size,
              "wifi last user: %s",
-             cyd_system_apps_wifi_user_text(wifi_manager_get_last_user()));
+             cyd_system_apps_wifi_user_text(wifi_connection_get_last_user()));
 }
 
 static void cyd_system_apps_format_wifi_duration(char *status_text, size_t status_size)
 {
-    uint32_t connected_seconds = wifi_manager_get_connected_duration_seconds();
+    uint32_t connected_seconds = wifi_connection_get_connected_duration_seconds();
 
     if (status_text == NULL || status_size == 0) {
         return;
@@ -394,7 +405,7 @@ static void cyd_system_apps_format_wifi_duration(char *status_text, size_t statu
 
 static void cyd_system_apps_format_wifi_duration_high_water(char *status_text, size_t status_size)
 {
-    uint32_t high_water_seconds = wifi_manager_get_connected_duration_high_water_seconds();
+    uint32_t high_water_seconds = wifi_connection_get_connected_duration_high_water_seconds();
 
     if (status_text == NULL || status_size == 0) {
         return;
@@ -415,7 +426,7 @@ static void cyd_system_apps_format_wifi_warning(char *status_text, size_t status
     snprintf(status_text,
              status_size,
              "wifi warn: %s",
-             cyd_system_apps_wifi_warning_text(wifi_manager_get_warning()));
+             cyd_system_apps_wifi_warning_text(wifi_connection_get_warning()));
 }
 
 static const char *cyd_info_app_next_page_label(void)
@@ -426,8 +437,6 @@ static const char *cyd_info_app_next_page_label(void)
     case CYD_INFO_PAGE_DIAG:
         return "DIAG2";
     case CYD_INFO_PAGE_DIAG2:
-        return "SCHED";
-    case CYD_INFO_PAGE_SCHED:
     default:
         return "INFO";
     }
@@ -501,78 +510,9 @@ static void cyd_system_apps_format_sync_attempt(char *status_text, size_t status
     }
 }
 
-static const char *cyd_system_apps_scheduler_state_text(app_scheduler_state_t state)
-{
-    switch (state) {
-    case APP_SCHEDULER_STATE_DISABLED:
-        return "dis";
-    case APP_SCHEDULER_STATE_WAITING:
-        return "wait";
-    case APP_SCHEDULER_STATE_ACTIVE:
-        return "active";
-    case APP_SCHEDULER_STATE_STOPPED:
-        return "stop";
-    default:
-        return "unk";
-    }
-}
-
-static const char *cyd_system_apps_scheduler_mode_text(app_scheduler_mode_t mode)
-{
-    switch (mode) {
-    case APP_SCHEDULER_MODE_INSTANT:
-        return "i";
-    case APP_SCHEDULER_MODE_WINDOW:
-        return "w";
-    default:
-        return "?";
-    }
-}
-
-static const char *cyd_system_apps_scheduler_behavior_text(app_scheduler_behavior_t behavior)
-{
-    switch (behavior) {
-    case APP_SCHEDULER_BEHAVIOR_EVENT:
-        return "e";
-    case APP_SCHEDULER_BEHAVIOR_LATCHED:
-        return "l";
-    default:
-        return "?";
-    }
-}
-
-static void cyd_system_apps_format_scheduler_time(const app_scheduler_status_t *status,
-                                                  char *time_text,
-                                                  size_t time_size)
-{
-    if (time_text == NULL || time_size == 0) {
-        return;
-    }
-    if (status == NULL) {
-        snprintf(time_text, time_size, "--:--");
-        return;
-    }
-
-    if (status->config.mode == APP_SCHEDULER_MODE_WINDOW) {
-        snprintf(time_text,
-                 time_size,
-                 "%02u:%02u-%02u:%02u",
-                 (unsigned)status->config.at.hour,
-                 (unsigned)status->config.at.minute,
-                 (unsigned)status->config.to.hour,
-                 (unsigned)status->config.to.minute);
-    } else {
-        snprintf(time_text,
-                 time_size,
-                 "%02u:%02u",
-                 (unsigned)status->config.at.hour,
-                 (unsigned)status->config.at.minute);
-    }
-}
-
 static void cyd_settings_capture_status_snapshot(cyd_settings_status_snapshot_t *snapshot)
 {
-    wifi_manager_state_t wifi_state = WIFI_MANAGER_STATE_STOPPED;
+    wifi_connection_state_t wifi_state = WIFI_CONNECTION_STATE_STOPPED;
     esp_err_t last_attempt_status = ESP_OK;
     time_t last_success_at = 0;
 
@@ -582,7 +522,7 @@ static void cyd_settings_capture_status_snapshot(cyd_settings_status_snapshot_t 
 
     *snapshot = (cyd_settings_status_snapshot_t){
         .valid = true,
-        .wifi_state = WIFI_MANAGER_STATE_STOPPED,
+        .wifi_state = WIFI_CONNECTION_STATE_STOPPED,
         .time_sync_state = time_sync_get_state(),
         .has_last_attempt = time_sync_get_last_attempt_status(&last_attempt_status),
         .last_attempt_status = last_attempt_status,
@@ -591,7 +531,7 @@ static void cyd_settings_capture_status_snapshot(cyd_settings_status_snapshot_t 
         .sync_now_pending = s_settings_sync_now_pending,
     };
 
-    if (wifi_manager_get_state(&wifi_state) == ESP_OK) {
+    if (wifi_connection_get_state(&wifi_state) == ESP_OK) {
         snapshot->wifi_state = wifi_state;
     }
 }
@@ -676,7 +616,18 @@ static uint16_t cyd_settings_time_sync_step_minutes(uint16_t interval_minutes)
 
 static uint16_t cyd_settings_time_sync_decrease(uint16_t interval_minutes)
 {
-    uint16_t step_minutes = cyd_settings_time_sync_step_minutes(interval_minutes);
+    uint16_t step_minutes = 1U;
+
+    /* Use the step that the increase operation used to reach this range. */
+    if (interval_minutes > 360U) {
+        step_minutes = 180U;
+    } else if (interval_minutes > 120U) {
+        step_minutes = 60U;
+    } else if (interval_minutes > 60U) {
+        step_minutes = 30U;
+    } else if (interval_minutes > 10U) {
+        step_minutes = 5U;
+    }
 
     if (interval_minutes <= CYD_SETTINGS_TIME_SYNC_MINUTES_MIN + step_minutes - 1U) {
         return CYD_SETTINGS_TIME_SYNC_MINUTES_MIN;
@@ -727,38 +678,38 @@ static const char *cyd_settings_page_title(cyd_settings_page_t page)
 
 static bool cyd_settings_sync_now_enabled(void)
 {
-    wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
+    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
 
     if (time_sync_is_busy()) {
         return false;
     }
 
-    if (wifi_manager_get_state(&state) != ESP_OK) {
+    if (wifi_connection_get_state(&state) != ESP_OK) {
         return false;
     }
 
-    return state == WIFI_MANAGER_STATE_CONNECTED ||
-           state == WIFI_MANAGER_STATE_FAILED ||
-           state == WIFI_MANAGER_STATE_OFF ||
-           state == WIFI_MANAGER_STATE_SETUP_REQUIRED;
+    return state == WIFI_CONNECTION_STATE_CONNECTED ||
+           state == WIFI_CONNECTION_STATE_FAILED ||
+           state == WIFI_CONNECTION_STATE_OFF ||
+           state == WIFI_CONNECTION_STATE_SETUP_REQUIRED;
 }
 
 static esp_err_t cyd_settings_request_sync_now(void)
 {
-    wifi_manager_state_t wifi_state = WIFI_MANAGER_STATE_STOPPED;
+    wifi_connection_state_t wifi_state = WIFI_CONNECTION_STATE_STOPPED;
 
-    ESP_RETURN_ON_ERROR(wifi_manager_get_state(&wifi_state), TAG, "get wifi state failed");
+    ESP_RETURN_ON_ERROR(wifi_connection_get_state(&wifi_state), TAG, "get wifi state failed");
 
-    if (wifi_state == WIFI_MANAGER_STATE_CONNECTED) {
+    if (wifi_state == WIFI_CONNECTION_STATE_CONNECTED) {
         s_settings_sync_now_pending = false;
         time_sync_request_soon();
     } else {
         s_settings_sync_now_pending = true;
         bool retry_requested = false;
-        if (wifi_state == WIFI_MANAGER_STATE_FAILED ||
-            wifi_state == WIFI_MANAGER_STATE_OFF ||
-            wifi_state == WIFI_MANAGER_STATE_SETUP_REQUIRED) {
-            if (wifi_manager_retry_connection_without_setup_async() != ESP_OK) {
+        if (wifi_state == WIFI_CONNECTION_STATE_FAILED ||
+            wifi_state == WIFI_CONNECTION_STATE_OFF ||
+            wifi_state == WIFI_CONNECTION_STATE_SETUP_REQUIRED) {
+            if (wifi_connection_retry_connection_without_setup_async() != ESP_OK) {
                 ESP_LOGW(TAG, "SYNC NOW failed to start Wi-Fi retry");
                 s_settings_sync_now_pending = false;
             } else {
@@ -766,8 +717,8 @@ static esp_err_t cyd_settings_request_sync_now(void)
             }
         }
         if (retry_requested ||
-            wifi_state == WIFI_MANAGER_STATE_CONNECTING ||
-            wifi_state == WIFI_MANAGER_STATE_RECONNECTING) {
+            wifi_state == WIFI_CONNECTION_STATE_CONNECTING ||
+            wifi_state == WIFI_CONNECTION_STATE_RECONNECTING) {
             time_sync_request_soon_and_release_wifi();
         }
     }
@@ -778,15 +729,15 @@ static esp_err_t cyd_settings_request_sync_now(void)
 
 static void cyd_settings_service_sync_now_pending(void)
 {
-    wifi_manager_state_t wifi_state = WIFI_MANAGER_STATE_STOPPED;
+    wifi_connection_state_t wifi_state = WIFI_CONNECTION_STATE_STOPPED;
 
     if (!s_settings_sync_now_pending) {
         return;
     }
-    if (wifi_manager_get_state(&wifi_state) != ESP_OK) {
+    if (wifi_connection_get_state(&wifi_state) != ESP_OK) {
         return;
     }
-    if (wifi_state == WIFI_MANAGER_STATE_CONNECTED) {
+    if (wifi_state == WIFI_CONNECTION_STATE_CONNECTED) {
         ESP_LOGI(TAG, "SYNC NOW resumed after Wi-Fi reconnect");
         s_settings_sync_now_pending = false;
     }
@@ -882,7 +833,7 @@ static esp_err_t cyd_info_app_show(void)
         snprintf(wifi_fail_line,
                  sizeof(wifi_fail_line),
                  "wifi fail: %s",
-                 cyd_system_apps_wifi_failure_text(wifi_manager_get_last_failure_reason()));
+                 cyd_system_apps_wifi_failure_text(wifi_connection_get_last_failure_reason()));
         snprintf(sync_state_line,
                  sizeof(sync_state_line),
                  "sync state: %s",
@@ -953,7 +904,7 @@ static esp_err_t cyd_info_app_show(void)
         snprintf(wifi_fail_line,
                  sizeof(wifi_fail_line),
                  "wifi fail: %s",
-                 cyd_system_apps_wifi_failure_text(wifi_manager_get_last_failure_reason()));
+                 cyd_system_apps_wifi_failure_text(wifi_connection_get_last_failure_reason()));
 
         cyd_ui_screen_clear(screen);
         cyd_ui_add_text(screen,
@@ -972,89 +923,6 @@ static esp_err_t cyd_info_app_show(void)
         cyd_ui_add_text(screen, wifi_max_on_line, 2, 17, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, wifi_warn_line, 2, 20, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, wifi_fail_line, 2, 23, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_button(screen,
-                          "<<",
-                          CYD_SYSTEM_APPS_BACK_COL,
-                          CYD_SYSTEM_APPS_BACK_ROW,
-                          CYD_SYSTEM_APPS_BACK_SPAN_COLS,
-                          CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
-                          CYD_UI_COLOR_BLUE,
-                          CYD_UI_COLOR_CYAN,
-                          CYD_INFO_APP_ACTION_BACK);
-
-        return cyd_ui_submit(screen);
-    }
-
-    if (s_info_page == CYD_INFO_PAGE_SCHED) {
-        app_scheduler_status_t statuses[APP_SCHEDULER_MAX_ENTRIES] = { 0 };
-        size_t schedule_count = 0;
-        char count_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        cyd_display_screen_t *screen = &s_info_screen;
-        esp_err_t list_err = app_scheduler_list(statuses,
-                                                APP_SCHEDULER_MAX_ENTRIES,
-                                                &schedule_count);
-
-        cyd_ui_screen_clear(screen);
-        cyd_ui_add_text(screen,
-                        "SCHED",
-                        CYD_SYSTEM_APPS_TITLE_COL,
-                        CYD_SYSTEM_APPS_TITLE_ROW,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
-                        CYD_DISPLAY_ALIGN_RIGHT,
-                        2,
-                        CYD_UI_COLOR_CYAN);
-
-        if (list_err != ESP_OK && list_err != ESP_ERR_INVALID_SIZE) {
-            snprintf(count_line, sizeof(count_line), "scheduler: unavailable");
-            cyd_ui_add_text(screen, count_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        } else {
-            snprintf(count_line,
-                     sizeof(count_line),
-                     "schedules: %u/%u",
-                     (unsigned)schedule_count,
-                     (unsigned)APP_SCHEDULER_MAX_ENTRIES);
-            cyd_ui_add_text(screen, count_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-
-            if (schedule_count == 0) {
-                cyd_ui_add_text(screen,
-                                "empty",
-                                2,
-                                9,
-                                36,
-                                2,
-                                CYD_DISPLAY_ALIGN_LEFT,
-                                1,
-                                CYD_UI_COLOR_LIGHTGREY);
-            }
-
-            for (size_t i = 0; i < schedule_count && i < APP_SCHEDULER_MAX_ENTRIES; ++i) {
-                char schedule_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-                char time_text[16] = { 0 };
-                cyd_system_apps_format_scheduler_time(&statuses[i], time_text, sizeof(time_text));
-                snprintf(schedule_line,
-                         sizeof(schedule_line),
-                         "%u %.7s/%.8s %.1s%.1s %.4s %.11s",
-                         (unsigned)statuses[i].slot_id + 1U,
-                         statuses[i].config.owner,
-                         statuses[i].config.tag,
-                         cyd_system_apps_scheduler_mode_text(statuses[i].config.mode),
-                         cyd_system_apps_scheduler_behavior_text(statuses[i].config.behavior),
-                         cyd_system_apps_scheduler_state_text(statuses[i].state),
-                         time_text);
-                cyd_ui_add_text(screen,
-                                schedule_line,
-                                2,
-                                8 + (int)(i * 3),
-                                36,
-                                2,
-                                CYD_DISPLAY_ALIGN_LEFT,
-                                1,
-                                CYD_UI_COLOR_WHITE);
-            }
-        }
-
         ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
         cyd_ui_add_button(screen,
                           "<<",
@@ -1218,6 +1086,31 @@ static esp_err_t cyd_settings_render_clear_touch_calib_confirm(cyd_display_scree
 
 static esp_err_t cyd_settings_render_clear_nvs_confirm(cyd_display_screen_t *screen)
 {
+    if (s_settings_force_initialize) {
+        const char *summary = nvs_health_get_summary();
+        cyd_ui_add_text(screen, "Invalid NVS data found", 2, 6, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_RED);
+        cyd_ui_add_text(screen,
+                        (summary != NULL && summary[0] != '\0') ? summary : "Saved data format mismatch",
+                        2,
+                        10,
+                        36,
+                        3,
+                        CYD_DISPLAY_ALIGN_LEFT,
+                        1,
+                        CYD_UI_COLOR_YELLOW);
+        cyd_ui_add_text(screen, "Initialize is required", 2, 15, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+        cyd_ui_add_button(screen,
+                          "Initialize",
+                          10,
+                          21,
+                          20,
+                          3,
+                          CYD_UI_COLOR_RED,
+                          CYD_UI_COLOR_YELLOW,
+                          CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CONFIRM);
+        return ESP_OK;
+    }
+
     cyd_ui_add_text(screen, "Initialize all NVS data?", 2, 8, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
     cyd_ui_add_text(screen, "Wi-Fi/settings/calib erased", 2, 11, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_YELLOW);
     cyd_ui_add_text(screen, "Device will restart", 2, 14, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_YELLOW);
@@ -1633,14 +1526,30 @@ static esp_err_t cyd_info_app_leave(void *ctx)
 static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_app)
 {
     (void)ctx;
+    s_settings_force_initialize = nvs_health_requires_initialize();
     if (from_app != NULL &&
         from_app != cyd_wifi_setup_get_app() &&
         from_app != system_touch_calibration_app_get_app() &&
         (s_settings_extension == NULL || from_app != s_settings_extension->app)) {
         s_settings_return_app = from_app;
     }
+    portENTER_CRITICAL(&s_settings_direct_view_lock);
+    s_settings_direct_view = s_settings_pending_direct_view;
+    s_settings_pending_direct_view = CYD_SETTINGS_DIRECT_VIEW_NONE;
+    portEXIT_CRITICAL(&s_settings_direct_view_lock);
+
     s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
     s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+    if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_STORED_SSIDS) {
+        s_settings_page = CYD_SETTINGS_PAGE_NETWORK;
+        s_settings_view = CYD_SETTINGS_VIEW_STORED_SSIDS;
+    } else if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_TOUCH_CALIB_CONFIRM) {
+        s_settings_page = CYD_SETTINGS_PAGE_NVS;
+        s_settings_view = CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM;
+    } else if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM) {
+        s_settings_page = CYD_SETTINGS_PAGE_NVS;
+        s_settings_view = CYD_SETTINGS_VIEW_CLEAR_NVS_CONFIRM;
+    }
     s_settings_selected_profile = 0;
     s_settings_sync_now_pending = false;
     s_settings_status_snapshot = (cyd_settings_status_snapshot_t){ 0 };
@@ -1710,6 +1619,11 @@ static esp_err_t cyd_settings_handle_stored_ssids_action(uint16_t action_id, boo
     }
 
     if (action_id == CYD_SETTINGS_APP_ACTION_BACK) {
+        if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_STORED_SSIDS) {
+            *handled = true;
+            ESP_RETURN_ON_FALSE(s_settings_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "settings return app not set");
+            return app_shell_switch_to(s_settings_return_app);
+        }
         s_settings_view = CYD_SETTINGS_VIEW_PAGES;
         ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
         *handled = true;
@@ -1894,6 +1808,11 @@ static esp_err_t cyd_settings_handle_nvs_page_action(uint16_t action_id, bool *h
 
     if (s_settings_view == CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM) {
         if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CANCEL) {
+            if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_TOUCH_CALIB_CONFIRM) {
+                *handled = true;
+                ESP_RETURN_ON_FALSE(s_settings_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "settings return app not set");
+                return app_shell_switch_to(s_settings_return_app);
+            }
             s_settings_view = CYD_SETTINGS_VIEW_PAGES;
             ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
             *handled = true;
@@ -1917,7 +1836,17 @@ static esp_err_t cyd_settings_handle_nvs_page_action(uint16_t action_id, bool *h
     }
 
     if (s_settings_view == CYD_SETTINGS_VIEW_CLEAR_NVS_CONFIRM) {
+        if (s_settings_force_initialize &&
+            action_id == CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CANCEL) {
+            *handled = true;
+            return ESP_OK;
+        }
         if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CANCEL) {
+            if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM) {
+                *handled = true;
+                ESP_RETURN_ON_FALSE(s_settings_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "settings return app not set");
+                return app_shell_switch_to(s_settings_return_app);
+            }
             s_settings_view = CYD_SETTINGS_VIEW_PAGES;
             ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
             *handled = true;
@@ -2077,6 +2006,28 @@ const app_shell_app_t *system_settings_app_get_app(void)
 const app_shell_app_t *system_touch_calibration_app_get_app(void)
 {
     return &s_cyd_touch_calibration_shell_app;
+}
+
+static void system_settings_set_direct_view(cyd_settings_direct_view_t direct_view)
+{
+    portENTER_CRITICAL(&s_settings_direct_view_lock);
+    s_settings_pending_direct_view = direct_view;
+    portEXIT_CRITICAL(&s_settings_direct_view_lock);
+}
+
+void system_settings_open_stored_ssids(void)
+{
+    system_settings_set_direct_view(CYD_SETTINGS_DIRECT_VIEW_STORED_SSIDS);
+}
+
+void system_settings_open_clear_touch_calib_confirm(void)
+{
+    system_settings_set_direct_view(CYD_SETTINGS_DIRECT_VIEW_CLEAR_TOUCH_CALIB_CONFIRM);
+}
+
+void system_settings_open_clear_nvs_confirm(void)
+{
+    system_settings_set_direct_view(CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM);
 }
 
 void system_settings_set_extension(const system_settings_extension_t *extension)

@@ -1,23 +1,23 @@
-menu "Wi-Fi Manager"
+menu "Wi-Fi Connection"
 
-    config WIFI_MANAGER_TASK_STACK_SIZE
-        int "Wi-Fi manager task stack size"
+    config WIFI_CONNECTION_TASK_STACK_SIZE
+        int "Wi-Fi connection task stack size"
         default 8192
         range 7168 32768
         depends on ESP32_WIFI_STA_ENABLED
         help
-            Wi-Fi manager task の stack size です。
+            Wi-Fi connection task の stack size です。
             English: this task manages STA state and connection requests,
             while the foreground setup UI runs on the app_shell task.
 
-    config WIFI_MANAGER_TASK_PRIORITY
-        int "Wi-Fi manager task priority"
+    config WIFI_CONNECTION_TASK_PRIORITY
+        int "Wi-Fi connection task priority"
         default 8
         range 1 24
         depends on ESP32_WIFI_STA_ENABLED
 
-    config WIFI_MANAGER_MONITOR_INTERVAL_MS
-        int "Wi-Fi manager monitor interval (ms)"
+    config WIFI_CONNECTION_MONITOR_INTERVAL_MS
+        int "Wi-Fi connection monitor interval (ms)"
         default 2000
         range 500 60000
         depends on ESP32_WIFI_STA_ENABLED
@@ -25,15 +25,15 @@ menu "Wi-Fi Manager"
             Interval used while connected to poll the STA status and detect
             reconnection/setup transitions.
 
-    config WIFI_MANAGER_STACK_LOG_INTERVAL_MS
-        int "Wi-Fi manager stack log interval (ms)"
+    config WIFI_CONNECTION_STACK_LOG_INTERVAL_MS
+        int "Wi-Fi connection stack log interval (ms)"
         default 30000
         range 1000 600000
         depends on ESP32_WIFI_STA_ENABLED
         help
-            Minimum interval between Wi-Fi manager stack high-water log lines.
+            Minimum interval between Wi-Fi connection stack high-water log lines.
 
-    config WIFI_MANAGER_SCAN_RETRY_ATTEMPTS
+    config WIFI_CONNECTION_SCAN_RETRY_ATTEMPTS
         int "Wi-Fi scan retry attempts for saved SSIDs"
         default 5
         range 1 20
@@ -42,7 +42,7 @@ menu "Wi-Fi Manager"
             保存済み SSID が見つからない場合に再スキャンする最大回数です。
             English supplement: Used only when saved SSIDs are not visible in scan results.
 
-    config WIFI_MANAGER_SCAN_RETRY_DELAY_MS
+    config WIFI_CONNECTION_SCAN_RETRY_DELAY_MS
         int "Wi-Fi scan retry delay (ms)"
         default 3000
         range 0 60000

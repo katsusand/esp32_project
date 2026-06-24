@@ -10,6 +10,14 @@
 
 English supplement: `time_sync` requests an internet radio lease from `radio_manager`; it does not directly own Wi-Fi lifetime or disconnect policy.
 
+同期要求は世代番号付きで管理します。radio待機中やSNTP試行中に新しい要求が届いた場合、古い試行の完了・失敗処理はその新しい要求を消去しません。
+
+English supplement: Request completion clears only the generation it handled, preserving requests posted during an in-flight attempt.
+
+前回受理した同期要求から5秒未満の要求は重複として破棄します。破棄時は経過時間、dedup window、現在の要求世代をwarningログへ記録します。同期に成功した場合、その成功時点までに集約された要求はすべて満たした扱いにします。
+
+English supplement: Requests received within five seconds are deduplicated and logged. A successful sync satisfies all requests accumulated through that completion point.
+
 ## Public API
 
 利用するファイルでは、次のヘッダーを include します。
@@ -121,4 +129,4 @@ English supplement: The jitter is symmetric around the base interval. If subtrac
 - `esp_hw_support`
 - `radio_manager`
 
-このプロジェクトでは、`main/app_main()` から `system_boot_start()` に入り、`CONFIG_ESP32_WIFI_STA_AUTO_START` が有効な場合はその中で `wifi_manager_start()`、`radio_manager_start()` の後に `time_sync_start()` を呼びます。
+この時計製品では、`cyd_clock_composition_start()` が共通boot後に、`CONFIG_ESP32_WIFI_STA_AUTO_START` が有効な場合は `wifi_connection_start()`、`radio_manager_start()` の後に `time_sync_start()` を呼びます。

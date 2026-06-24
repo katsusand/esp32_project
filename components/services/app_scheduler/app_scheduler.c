@@ -9,6 +9,8 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "nvs.h"
+#include "nvs_health.h"
+#include "nvs_schema.h"
 #include "app_scheduler.h"
 #include "time_tick.h"
 
@@ -23,9 +25,6 @@
 #define APP_SCHEDULER_CONFIG_VERSION 2U
 
 static const char *TAG = "app_scheduler";
-static const char *NVS_NAMESPACE = "app_scheduler";
-static const char *NVS_CONFIG_KEY = "config_v1";
-
 typedef struct {
     bool occupied;
     app_scheduler_config_t config;
@@ -215,8 +214,10 @@ static esp_err_t app_scheduler_write_configs(void)
     }
     portEXIT_CRITICAL(&s_scheduler_lock);
 
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
-    esp_err_t err = nvs_set_blob(nvs_handle, NVS_CONFIG_KEY, &disk, sizeof(disk));
+    ESP_RETURN_ON_ERROR(nvs_open_descriptor(NVS_KEY_APP_SCHEDULER_CONFIG.ns, NVS_READWRITE, &nvs_handle),
+                        TAG,
+                        "open NVS failed");
+    esp_err_t err = nvs_set_blob(nvs_handle, NVS_KEY_APP_SCHEDULER_CONFIG.key, &disk, sizeof(disk));
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
     }
@@ -230,18 +231,35 @@ static esp_err_t app_scheduler_load_configs(void)
     app_scheduler_disk_t disk = { 0 };
     size_t disk_size = sizeof(disk);
 
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    esp_err_t err = nvs_open_descriptor(NVS_KEY_APP_SCHEDULER_CONFIG.ns, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
         return err;
     }
 
-    err = nvs_get_blob(nvs_handle, NVS_CONFIG_KEY, &disk, &disk_size);
+    err = nvs_get_blob(nvs_handle, NVS_KEY_APP_SCHEDULER_CONFIG.key, &disk, &disk_size);
     nvs_close(nvs_handle);
     if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_INVALID_LENGTH) {
+            nvs_health_report_invalid(&NVS_KEY_APP_SCHEDULER_CONFIG, err, "invalid scheduler blob length");
+        }
         return err;
     }
     if (disk_size != sizeof(disk) || disk.version != APP_SCHEDULER_CONFIG_VERSION) {
+        nvs_health_report_invalid(&NVS_KEY_APP_SCHEDULER_CONFIG, ESP_ERR_INVALID_VERSION, "invalid scheduler blob");
         return ESP_ERR_INVALID_VERSION;
+    }
+
+    for (size_t i = 0; i < APP_SCHEDULER_MAX_ENTRIES; ++i) {
+        if (disk.occupied[i] == 0) {
+            continue;
+        }
+        disk.configs[i].owner[APP_SCHEDULER_OWNER_MAX_LEN] = '\0';
+        disk.configs[i].tag[APP_SCHEDULER_TAG_MAX_LEN] = '\0';
+        disk.configs[i].weekday_mask = app_scheduler_normalize_weekday_mask(disk.configs[i].weekday_mask);
+        if (app_scheduler_validate_config(&disk.configs[i]) != ESP_OK) {
+            nvs_health_report_invalid(&NVS_KEY_APP_SCHEDULER_CONFIG, ESP_ERR_INVALID_ARG, "invalid scheduler entry");
+            return ESP_ERR_INVALID_ARG;
+        }
     }
 
     portENTER_CRITICAL(&s_scheduler_lock);
@@ -437,7 +455,8 @@ esp_err_t app_scheduler_init(void)
     if (err != ESP_OK &&
         err != ESP_ERR_NVS_NOT_FOUND &&
         err != ESP_ERR_NVS_INVALID_LENGTH &&
-        err != ESP_ERR_INVALID_VERSION) {
+        err != ESP_ERR_INVALID_VERSION &&
+        err != ESP_ERR_INVALID_ARG) {
         ESP_RETURN_ON_ERROR(err, TAG, "load scheduler config failed");
     }
 

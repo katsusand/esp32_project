@@ -12,6 +12,8 @@ English supplement: This project targets ESP-IDF v5.4.3 and an ESP32 CYD-class b
 
 - `components/apps/`
   プロジェクト固有の foreground app を置く層。派生プロジェクトでは、まずここを差し替える前提で考える
+- `components/products/`
+  productごとの機能選択、初期化順、app/serviceの接続を定義するcomposition層
 - `components/platform/`
   表示、入力、LED、speaker などの board / device 寄り基盤
 - `components/framework/`
@@ -30,7 +32,7 @@ English supplement: This project targets ESP-IDF v5.4.3 and an ESP32 CYD-class b
 
 たとえば `cyd_system_apps` は reusable でも foreground app なので `apps/` に置き、`cyd_wifi_setup` は画面を持っていても Wi-Fi service workflow の一部なので `services/` に置いています。
 
-English supplement: Treat `components/apps/` as the application layer and the other component groups as reusable infrastructure. Derived projects should usually replace or shrink `components/apps/` first, while keeping `platform/`, `framework/`, `services/`, and `support/` as the base.
+English supplement: Treat `components/products/` as the replaceable product composition layer and `components/apps/` as foreground application implementations. Derived projects should keep reusable `platform/`, `framework/`, `services/`, and `support/` components where possible.
 
 ## Features
 
@@ -68,14 +70,15 @@ English supplement: CYD clone boards often look identical but use different LCD 
 
 - Basic rule:
   `components/apps/` is the main application layer. The other component groups are the reusable base.
-- `main/`: `app_main()` と起動順
-- `components/framework/system_boot/`: 起動 orchestration と各 subsystem の初期化順
+- `main/`: 起動するproduct compositionの選択
+- `components/products/cyd_clock_composition/`: 時計製品の機能選択と起動接続
+- `components/framework/system_boot/`: NVS、CYD platform、入力補正などの共通起動処理
 - `components/platform/cyd_display/`: TFT 表示、画面モデル、ログビュー、タッチ低レベルアクセス
 - `components/platform/cyd_input/`: タッチ/BOOT ボタン入力イベント、タッチ補正保存
 - `components/framework/app_shell/`: foreground UI アプリの実行基盤
 - `components/services/cyd_wifi_setup/`: Wi-Fi scan/password setup app と helper
 - `components/services/esp32_wifi_sta/`: ESP-IDF Wi-Fi STA wrapper と credential 保存
-- `components/services/wifi_manager/`: Wi-Fi 接続状態と接続要求の orchestration
+- `components/services/wifi_connection/`: Wi-Fi 接続状態と接続要求の orchestration
 - `components/services/time_sync/`: SNTP/NTP 時刻同期
 - `components/services/app_scheduler/`: アプリ共通の時刻スケジューラー
 - `components/apps/cyd_clock_app/`: clock app
@@ -86,7 +89,9 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `components/support/lovyangfx_wrapper/`: LovyanGFX を ESP-IDF component として組み込む wrapper
 - `docs/`: コンポーネントごとの詳細ドキュメント
 - `docs/components_reorg_plan.md`: `components/` の現状アーキテクチャと層ごとの役割
-- `docs/system_apps_split_plan.md`: 共通 `INFO/SETTINGS` と clock-specific settings 分離 TODO
+- `docs/system_apps_split_plan.md`: 共通 `INFO/SETTINGS` と clock-specific settings 分離の完了状態
+- `docs/cyd_clock_settings_app.md`: clock-specific settings / scheduler diagnostics
+- `docs/nvs_storage.md`: NVS 保存先一覧と ownership / migration 方針
 - `third_party/lovyangfx_upstream/`: LovyanGFX upstream source
 
 ## Setup
@@ -324,7 +329,7 @@ English supplement: Avoid preserving a build directory across different machines
 
 ## Wi-Fi Setup
 
-起動時に設定済み credential がある場合でも、`wifi_manager` は通常 Wi-Fi radio を開始せず、`OFF` 状態で待機します。NTP 同期など Wi-Fi を使う処理が `wifi_manager_acquire()` した期間だけ接続し、処理完了後の `wifi_manager_release()` で利用者がいなくなると Wi-Fi を OFF に戻します。
+起動時に設定済み credential がある場合でも、`wifi_connection` は通常 Wi-Fi radio を開始せず、`OFF` 状態で待機します。NTP 同期など Wi-Fi を使う処理が `wifi_connection_acquire()` した期間だけ接続し、処理完了後の `wifi_connection_release()` で利用者がいなくなると Wi-Fi を OFF に戻します。
 
 現在の UI 構造は `main -> app_shell -> clock app / settings app / wifi setup app` です。SSID が未設定、未同期状態での接続失敗、または起動時にタッチ IRQ が LOW の場合は Wi-Fi setup app に入れます。同期済みの通常時計画面から Wi-Fi 設定へ入る場合は、`SETTINGS` から `Wi-Fi Setup` を選択します。
 
@@ -340,9 +345,33 @@ setup flow は以下です。
 
 保存先は `esp32_wifi_sta` コンポーネントの NVS namespace です。`CONFIG_ESP32_WIFI_STA_SSID` が空の場合、次回起動時に保存済み credential が default configuration として使われます。
 
+## Wi-Fi Build Switch
+
+Wi-Fi STA 機能をバイナリから外したい派生ビルドでは、CMake 再構成時に `APP_WIFI_STA=0` を指定します。
+
+```bash
+source ~/.espressif/tools/activate_idf_v5.4.3.sh || true
+APP_WIFI_STA=0 python "$IDF_PATH/tools/idf.py" reconfigure
+APP_WIFI_STA=0 DEV=1 ninja -C build
+```
+
+通常の Wi-Fi 有効ビルドへ戻す場合は、`APP_WIFI_STA` を未指定にして再構成します。
+
+```bash
+source ~/.espressif/tools/activate_idf_v5.4.3.sh || true
+python "$IDF_PATH/tools/idf.py" reconfigure
+DEV=1 ninja -C build
+```
+
+`APP_WIFI_STA=0` では `esp32_wifi_sta`、`wifi_profile_store`、`wifi_connection`、`radio_manager`、`time_sync`、`cyd_wifi_setup` が stub 実装へ切り替わります。アプリ側の API 呼び出しは残せますが、Wi-Fi 接続・NTP 同期・Wi-Fi setup は実行されません。
+
+English supplement: `APP_WIFI_STA` is a build-time feature switch. Kconfig options such as `CONFIG_ESP32_WIFI_STA_ENABLED` still describe runtime defaults and menuconfig intent, but they are not used for component source/dependency selection.
+
+詳しい判断基準は [Build Feature Switches](docs/build_feature_switches.md) にまとめています。特に、component の `CMakeLists.txt` で source/dependency を切り替える場合は `CONFIG_*` を使わず、CMake 再構成時に見える build-time switch を使います。
+
 ## Time Sync and Clock
 
-`CONFIG_ESP32_WIFI_STA_AUTO_START` が有効な場合、`main/app_main()` は `system_boot_start(...)` を通じて `wifi_manager_start()`、`radio_manager_start()`、`time_sync_start()` を順に呼びます。`wifi_manager_start()` は manager task を常駐させますが、通常起動では Wi-Fi radio を開始しません。`time_sync` は `radio_manager` から `RADIO_MANAGER_CAP_INTERNET` の lease を取得している間だけ Wi-Fi を利用します。
+`CONFIG_ESP32_WIFI_STA_AUTO_START` が有効な場合、`cyd_clock_composition_start()` は共通boot完了後に `wifi_connection_start()`、`radio_manager_start()`、`time_sync_start()` を順に呼びます。`wifi_connection_start()` は管理taskを常駐させますが、通常起動では Wi-Fi radio を開始しません。`time_sync` は `radio_manager` から `RADIO_MANAGER_CAP_INTERNET` の lease を取得している間だけ Wi-Fi を利用します。
 
 一度も NTP 同期に成功していない状態では、Wi-Fi 接続失敗時に setup UI へ遷移できます。一度でも同期に成功した後は、再同期の Wi-Fi 接続失敗では setup UI に遷移せず、時計表示を維持します。
 
@@ -375,13 +404,15 @@ English supplement: `sdkconfig.defaults` is the project baseline. Local `sdkconf
 - [App Shell](docs/app_shell.md)
 - [CYD UI Helper](docs/cyd_ui.md)
 - [CYD Input Driver](docs/cyd_input.md)
+- [Build Feature Switches](docs/build_feature_switches.md)
 - [CYD Wi-Fi Setup](docs/cyd_wifi_setup.md)
 - [CYD System Apps](docs/cyd_system_apps.md)
 - [ESP32 Wi-Fi STA](docs/esp32_wifi_sta.md)
-- [Wi-Fi Manager](docs/wifi_manager.md)
+- [Wi-Fi Connection](docs/wifi_connection.md)
 - [Time Tick](docs/time_tick.md)
 - [Time Sync](docs/time_sync.md)
 - [CYD Clock App](docs/cyd_clock_app.md)
+- [CYD Clock Composition](docs/cyd_clock_composition.md)
 - [CYD Status LED Driver](docs/cyd_status_led.md)
 - [CYD Speaker Driver](docs/cyd_speaker.md)
 - [LovyanGFX Wrapper](docs/lovyangfx_wrapper.md)

@@ -8,6 +8,8 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "nvs.h"
+#include "nvs_health.h"
+#include "nvs_schema.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
 #define LGFX_USE_V1
@@ -17,8 +19,6 @@
 namespace {
 
 static const char *TAG = "cyd_display";
-static const char *NVS_NAMESPACE = "cyd_display";
-static const char *NVS_BRIGHTNESS_KEY = "brightness";
 static constexpr uint8_t CYD_DISPLAY_MIN_SAFE_BRIGHTNESS = 13;
 static constexpr int32_t GRID_CELL_PX = CYD_DISPLAY_GRID_CELL_PX;
 static constexpr int32_t SCREEN_MARGIN_X = GRID_CELL_PX;
@@ -42,6 +42,7 @@ static constexpr size_t MAX_STRIP_COUNT = (320 + STRIP_HEIGHT_PX - 1) / STRIP_HE
 static constexpr uint8_t LOG_TITLE_ROW = 0;
 static constexpr uint8_t LOG_FIRST_LINE_ROW = 3;
 static constexpr size_t LOG_VISIBLE_ROWS = CYD_DISPLAY_GRID_ROWS - LOG_FIRST_LINE_ROW;
+static constexpr uint32_t CYD_DISPLAY_CONFIG_VERSION = 1U;
 
 #ifdef CONFIG_CYD_DISPLAY_RGB_ORDER
 static constexpr bool CYD_DISPLAY_RGB_ORDER = true;
@@ -174,36 +175,59 @@ static size_t s_mode_button_count = 0;
 static bool s_has_previous_screen = false;
 static LGFX_Sprite s_strip_sprite(&s_display);
 
-static esp_err_t cyd_display_load_saved_brightness(uint8_t *brightness)
+typedef struct {
+    uint32_t version;
+    uint8_t brightness;
+    uint8_t reserved[3];
+} cyd_display_disk_t;
+
+static esp_err_t cyd_display_load_brightness_blob(uint8_t *brightness)
 {
     nvs_handle_t nvs_handle;
-    uint8_t stored_brightness = 0;
+    cyd_display_disk_t disk = {};
+    size_t disk_size = sizeof(disk);
 
     ESP_RETURN_ON_FALSE(brightness != nullptr, ESP_ERR_INVALID_ARG, TAG, "brightness is null");
 
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    esp_err_t err = nvs_open_descriptor(NVS_KEY_CYD_DISPLAY_CONFIG.ns, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
         return err;
     }
 
-    err = nvs_get_u8(nvs_handle, NVS_BRIGHTNESS_KEY, &stored_brightness);
+    err = nvs_get_blob(nvs_handle, NVS_KEY_CYD_DISPLAY_CONFIG.key, &disk, &disk_size);
     nvs_close(nvs_handle);
     if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_INVALID_LENGTH) {
+            nvs_health_report_invalid(&NVS_KEY_CYD_DISPLAY_CONFIG, err, "invalid display config length");
+        }
         return err;
     }
+    if (disk_size != sizeof(disk) || disk.version != CYD_DISPLAY_CONFIG_VERSION) {
+        nvs_health_report_invalid(&NVS_KEY_CYD_DISPLAY_CONFIG, ESP_ERR_INVALID_VERSION, "invalid display config");
+        return ESP_ERR_INVALID_VERSION;
+    }
 
-    *brightness = (stored_brightness < CYD_DISPLAY_MIN_SAFE_BRIGHTNESS)
+    *brightness = (disk.brightness < CYD_DISPLAY_MIN_SAFE_BRIGHTNESS)
                       ? CYD_DISPLAY_MIN_SAFE_BRIGHTNESS
-                      : stored_brightness;
+                      : disk.brightness;
     return ESP_OK;
 }
 
 static esp_err_t cyd_display_write_brightness(uint8_t brightness)
 {
     nvs_handle_t nvs_handle;
+    cyd_display_disk_t disk = {
+        .version = CYD_DISPLAY_CONFIG_VERSION,
+        .brightness = brightness,
+        .reserved = {0},
+    };
 
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
-    esp_err_t err = nvs_set_u8(nvs_handle, NVS_BRIGHTNESS_KEY, brightness);
+    ESP_RETURN_ON_ERROR(nvs_open_descriptor(NVS_KEY_CYD_DISPLAY_CONFIG.ns,
+                                            NVS_READWRITE,
+                                            &nvs_handle),
+                        TAG,
+                        "open NVS failed");
+    esp_err_t err = nvs_set_blob(nvs_handle, NVS_KEY_CYD_DISPLAY_CONFIG.key, &disk, sizeof(disk));
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
     }
@@ -1040,7 +1064,7 @@ extern "C" esp_err_t cyd_display_init(void)
     }
 
     uint8_t brightness = CONFIG_CYD_DISPLAY_BACKLIGHT_BRIGHTNESS;
-    esp_err_t brightness_err = cyd_display_load_saved_brightness(&brightness);
+    esp_err_t brightness_err = cyd_display_load_brightness_blob(&brightness);
     if (brightness_err != ESP_OK && brightness_err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGW(TAG, "brightness load failed: %s", esp_err_to_name(brightness_err));
     }

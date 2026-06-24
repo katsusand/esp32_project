@@ -527,11 +527,6 @@ bool esp32_wifi_sta_has_configured_ssid(void)
     return wifi_profile_store_has_profiles();
 }
 
-esp_err_t esp32_wifi_sta_save_credentials(const char *ssid, const char *password)
-{
-    return wifi_profile_store_record_success(ssid, password, WIFI_AUTH_OPEN);
-}
-
 esp_err_t esp32_wifi_sta_stop(void)
 {
     ESP_RETURN_ON_FALSE(s_wifi_sta.initialized, ESP_ERR_INVALID_STATE, TAG, "Wi-Fi STA not initialized");

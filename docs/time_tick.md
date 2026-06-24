@@ -53,7 +53,7 @@ English supplement: `jumped=true` usually means time correction, delayed process
 
 `time_tick_subscribe()` を呼ぶ前に、`time_tick_start()` が完了している必要があります。
 
-このプロジェクトでは通常、`system_boot_start()` が起動時に一度だけ `time_tick_start()` を呼びます。そのため、通常の app や service は個別に start せず、subscribe だけ行えば十分です。
+この時計製品では通常、`cyd_clock_composition_start()` が起動時に一度だけ `time_tick_start()` を呼びます。そのため、通常のappやserviceは個別にstartせず、subscribeだけ行えば十分です。
 
 ```c
 ESP_ERROR_CHECK(time_tick_start());

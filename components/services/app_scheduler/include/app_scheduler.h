@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "esp_err.h"
-#include "freertos/portmacro.h"
+#include "freertos/FreeRTOS.h"
 
 #ifdef __cplusplus
 extern "C" {

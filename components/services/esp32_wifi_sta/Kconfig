@@ -11,7 +11,7 @@ menu "ESP32 Wi-Fi STA"
         default n
         depends on ESP32_WIFI_STA_ENABLED
         help
-            When enabled, app_main starts wifi_manager and time_sync after the
+            When enabled, app_main starts wifi_connection and time_sync after the
             display/input initialization. The Wi-Fi STA/radio normally remains
             off until a component such as time_sync acquires Wi-Fi.
 
@@ -21,7 +21,7 @@ menu "ESP32 Wi-Fi STA"
         depends on ESP32_WIFI_STA_AUTO_START
         help
             Legacy option retained for compatibility. The current app_main path
-            starts wifi_manager/time_sync and does not block boot on Wi-Fi.
+            starts wifi_connection/time_sync and does not block boot on Wi-Fi.
 
     config ESP32_WIFI_STA_SCAN_LIST_SIZE
         int "Wi-Fi scan record count"
@@ -51,6 +51,15 @@ menu "ESP32 Wi-Fi STA"
         default 5
         range 0 100
         depends on ESP32_WIFI_STA_ENABLED
+
+    config ESP32_WIFI_STA_RETRY_DELAY_MS
+        int "Wi-Fi fresh retry delay (ms)"
+        default 1000
+        range 0 10000
+        depends on ESP32_WIFI_STA_ENABLED
+        help
+            接続失敗後に STA を停止し、設定を再適用して再開するまでの待ち時間です。
+            English: delay between fresh stop/reconfigure/start connection attempts.
 
     config ESP32_WIFI_STA_CONNECT_TIMEOUT_MS
         int "Wi-Fi boot wait timeout (ms)"

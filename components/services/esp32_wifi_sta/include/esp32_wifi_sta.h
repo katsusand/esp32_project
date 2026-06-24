@@ -5,8 +5,40 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
-#include "esp_netif_types.h"
-#include "esp_wifi_types.h"
+#include "sdkconfig.h"
+#if !defined(__ESP_WIFI_TYPES_H__)
+#ifndef WIFI_AUTH_MODE_T_FALLBACK_DEFINED
+#define WIFI_AUTH_MODE_T_FALLBACK_DEFINED
+typedef enum {
+    WIFI_AUTH_OPEN = 0,
+    WIFI_AUTH_WEP,
+    WIFI_AUTH_WPA_PSK,
+    WIFI_AUTH_WPA2_PSK,
+    WIFI_AUTH_WPA_WPA2_PSK,
+    WIFI_AUTH_WPA3_PSK,
+    WIFI_AUTH_WPA2_WPA3_PSK,
+    WIFI_AUTH_WAPI_PSK,
+} wifi_auth_mode_t;
+#endif
+
+#ifndef WIFI_SAE_PWE_METHOD_T_FALLBACK_DEFINED
+#define WIFI_SAE_PWE_METHOD_T_FALLBACK_DEFINED
+typedef enum {
+    WPA3_SAE_PWE_UNSPECIFIED = 0,
+    WPA3_SAE_PWE_HUNT_AND_PECK,
+    WPA3_SAE_PWE_HASH_TO_ELEMENT,
+    WPA3_SAE_PWE_BOTH,
+} wifi_sae_pwe_method_t;
+#endif
+#endif
+
+#if !defined(_ESP_NETIF_TYPES_H_)
+typedef struct {
+    uint32_t ip;
+    uint32_t netmask;
+    uint32_t gw;
+} esp_netif_ip_info_t;
+#endif
 #include "freertos/FreeRTOS.h"
 
 #ifdef __cplusplus
@@ -65,7 +97,6 @@ esp_err_t esp32_wifi_sta_enter_scan_mode(void);
 esp_err_t esp32_wifi_sta_get_scan_records(esp32_wifi_sta_scan_record_t *records,
                                           size_t record_capacity,
                                           size_t *record_count);
-esp_err_t esp32_wifi_sta_save_credentials(const char *ssid, const char *password);
 esp32_wifi_sta_failure_reason_t esp32_wifi_sta_get_last_failure_reason(void);
 bool esp32_wifi_sta_is_connected(void);
 

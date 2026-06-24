@@ -5,10 +5,13 @@
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "nvs.h"
+#include "nvs_health.h"
+#include "nvs_schema.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
 #include "radio_manager.h"
-#include "wifi_manager.h"
+#include "wifi_connection.h"
 
 #ifndef CONFIG_RADIO_MANAGER_TASK_STACK_SIZE
 #define CONFIG_RADIO_MANAGER_TASK_STACK_SIZE 4096
@@ -28,8 +31,14 @@
 #define RADIO_MANAGER_NOTIFY_GRANTED 0x80000000UL
 #define RADIO_MANAGER_TOKEN_MASK     0x7fffffffUL
 #define RADIO_MANAGER_WIFI_WAIT_MS   1000U
-
+#define RADIO_MANAGER_CONFIG_VERSION 1U
 static const char *TAG = "radio_manager";
+
+typedef struct {
+    uint32_t version;
+    uint16_t idle_timeout_seconds;
+    uint16_t reserved;
+} radio_manager_disk_t;
 
 typedef struct {
     radio_manager_request_t request;
@@ -61,6 +70,89 @@ static QueueHandle_t s_control_queue;
 static TaskHandle_t s_task_handle;
 static uint32_t s_next_request_id = 1;
 static portMUX_TYPE s_request_id_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_idle_timeout_loaded;
+static uint16_t s_idle_timeout_seconds = CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS / 1000U;
+
+static esp_err_t radio_manager_load_idle_timeout_blob(uint16_t *timeout_seconds)
+{
+    nvs_handle_t handle = 0;
+    radio_manager_disk_t disk = { 0 };
+    size_t disk_size = sizeof(disk);
+
+    ESP_RETURN_ON_FALSE(timeout_seconds != NULL, ESP_ERR_INVALID_ARG, TAG, "timeout pointer is null");
+
+    esp_err_t err = nvs_open_descriptor(NVS_KEY_RADIO_MANAGER_CONFIG.ns, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_get_blob(handle, NVS_KEY_RADIO_MANAGER_CONFIG.key, &disk, &disk_size);
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_INVALID_LENGTH) {
+            nvs_health_report_invalid(&NVS_KEY_RADIO_MANAGER_CONFIG, err, "invalid radio manager blob length");
+        }
+        return err;
+    }
+    if (disk_size != sizeof(disk) || disk.version != RADIO_MANAGER_CONFIG_VERSION) {
+        nvs_health_report_invalid(&NVS_KEY_RADIO_MANAGER_CONFIG, ESP_ERR_INVALID_VERSION, "invalid radio manager blob");
+        return ESP_ERR_INVALID_VERSION;
+    }
+
+    *timeout_seconds = disk.idle_timeout_seconds;
+    return ESP_OK;
+}
+
+static esp_err_t radio_manager_write_idle_timeout_blob(uint16_t timeout_seconds)
+{
+    nvs_handle_t handle = 0;
+    radio_manager_disk_t disk = {
+        .version = RADIO_MANAGER_CONFIG_VERSION,
+        .idle_timeout_seconds = timeout_seconds,
+    };
+
+    ESP_RETURN_ON_ERROR(nvs_open_descriptor(NVS_KEY_RADIO_MANAGER_CONFIG.ns, NVS_READWRITE, &handle),
+                        TAG,
+                        "open NVS failed");
+    esp_err_t err = nvs_set_blob(handle, NVS_KEY_RADIO_MANAGER_CONFIG.key, &disk, sizeof(disk));
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+static esp_err_t radio_manager_load_idle_timeout_if_needed(void)
+{
+    portENTER_CRITICAL(&s_request_id_lock);
+    bool loaded = s_idle_timeout_loaded;
+    portEXIT_CRITICAL(&s_request_id_lock);
+    if (loaded) {
+        return ESP_OK;
+    }
+
+    uint16_t timeout_seconds = CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS / 1000U;
+    esp_err_t err = radio_manager_load_idle_timeout_blob(&timeout_seconds);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        return err;
+    }
+
+    portENTER_CRITICAL(&s_request_id_lock);
+    if (!s_idle_timeout_loaded) {
+        s_idle_timeout_seconds = timeout_seconds;
+        s_idle_timeout_loaded = true;
+    }
+    portEXIT_CRITICAL(&s_request_id_lock);
+    return ESP_OK;
+}
+
+static TickType_t radio_manager_idle_timeout_wait_ticks(void)
+{
+    uint16_t timeout_seconds = radio_manager_get_idle_timeout_seconds();
+    return timeout_seconds == 0
+        ? portMAX_DELAY
+        : pdMS_TO_TICKS((uint32_t)timeout_seconds * 1000U);
+}
 
 static uint32_t radio_manager_next_request_id(void)
 {
@@ -87,27 +179,27 @@ static bool radio_manager_request_expired(const radio_manager_pending_request_t 
 static esp_err_t radio_manager_prepare_internet(bool *wifi_acquired)
 {
     if (!*wifi_acquired) {
-        ESP_RETURN_ON_ERROR(wifi_manager_acquire(WIFI_MANAGER_USER_RADIO_MANAGER),
+        ESP_RETURN_ON_ERROR(wifi_connection_acquire(WIFI_CONNECTION_USER_RADIO_MANAGER),
                             TAG,
                             "Wi-Fi acquire failed");
         *wifi_acquired = true;
     }
 
     while (true) {
-        wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
-        if (wifi_manager_get_state(&state) != ESP_OK) {
+        wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
+        if (wifi_connection_get_state(&state) != ESP_OK) {
             return ESP_ERR_INVALID_STATE;
         }
-        if (state == WIFI_MANAGER_STATE_CONNECTED) {
+        if (state == WIFI_CONNECTION_STATE_CONNECTED) {
             return ESP_OK;
         }
-        if (state == WIFI_MANAGER_STATE_FAILED ||
-            state == WIFI_MANAGER_STATE_SETUP_REQUIRED ||
-            state == WIFI_MANAGER_STATE_SETUP_RUNNING ||
-            state == WIFI_MANAGER_STATE_STOPPED) {
+        if (state == WIFI_CONNECTION_STATE_FAILED ||
+            state == WIFI_CONNECTION_STATE_SETUP_REQUIRED ||
+            state == WIFI_CONNECTION_STATE_SETUP_RUNNING ||
+            state == WIFI_CONNECTION_STATE_STOPPED) {
             return ESP_FAIL;
         }
-        if (wifi_manager_wait_connected(pdMS_TO_TICKS(RADIO_MANAGER_WIFI_WAIT_MS)) == ESP_ERR_INVALID_STATE) {
+        if (wifi_connection_wait_connected(pdMS_TO_TICKS(RADIO_MANAGER_WIFI_WAIT_MS)) == ESP_ERR_INVALID_STATE) {
             vTaskDelay(pdMS_TO_TICKS(RADIO_MANAGER_WIFI_WAIT_MS));
         }
     }
@@ -128,7 +220,7 @@ static void radio_manager_release_wifi_if_idle(bool *wifi_acquired)
         return;
     }
 
-    esp_err_t err = wifi_manager_release(WIFI_MANAGER_USER_RADIO_MANAGER);
+    esp_err_t err = wifi_connection_release(WIFI_CONNECTION_USER_RADIO_MANAGER);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Wi-Fi release failed: %s", esp_err_to_name(err));
     }
@@ -146,6 +238,17 @@ static void radio_manager_grant_owner(radio_manager_owner_t *owner,
     xTaskNotify(pending->notify_task,
                 RADIO_MANAGER_NOTIFY_GRANTED | owner->token,
                 eSetValueWithOverwrite);
+}
+
+static void radio_manager_reject_request(const radio_manager_pending_request_t *pending)
+{
+    if (pending == NULL || pending->notify_task == NULL) {
+        return;
+    }
+
+    (void)xTaskNotify(pending->notify_task,
+                      pending->request_id & RADIO_MANAGER_TOKEN_MASK,
+                      eSetValueWithOverwrite);
 }
 
 static bool radio_manager_control_matches_owner(const radio_manager_owner_t *owner,
@@ -210,7 +313,7 @@ static void radio_manager_task(void *arg)
         radio_manager_pending_request_t pending = { 0 };
         if (xQueueReceive(s_request_queue,
                           &pending,
-                          pdMS_TO_TICKS(CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS)) != pdTRUE) {
+                          radio_manager_idle_timeout_wait_ticks()) != pdTRUE) {
             radio_manager_release_wifi_if_idle(&wifi_acquired);
             continue;
         }
@@ -230,6 +333,9 @@ static void radio_manager_task(void *arg)
                      (int)pending.request.client,
                      (unsigned)pending.request_id,
                      esp_err_to_name(err));
+            if (!radio_manager_request_expired(&pending)) {
+                radio_manager_reject_request(&pending);
+            }
             radio_manager_release_wifi_if_idle(&wifi_acquired);
             continue;
         }
@@ -271,6 +377,35 @@ esp_err_t radio_manager_start(void)
                                      &s_task_handle);
     ESP_RETURN_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, TAG, "task create failed");
     return ESP_OK;
+}
+
+uint16_t radio_manager_get_idle_timeout_seconds(void)
+{
+    esp_err_t err = radio_manager_load_idle_timeout_if_needed();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "load idle timeout failed: %s", esp_err_to_name(err));
+    }
+
+    portENTER_CRITICAL(&s_request_id_lock);
+    uint16_t timeout_seconds = s_idle_timeout_seconds;
+    portEXIT_CRITICAL(&s_request_id_lock);
+    return timeout_seconds;
+}
+
+esp_err_t radio_manager_set_idle_timeout_seconds(uint16_t timeout_seconds)
+{
+    ESP_RETURN_ON_ERROR(radio_manager_load_idle_timeout_if_needed(), TAG, "load idle timeout failed");
+    portENTER_CRITICAL(&s_request_id_lock);
+    s_idle_timeout_seconds = timeout_seconds;
+    portEXIT_CRITICAL(&s_request_id_lock);
+    return ESP_OK;
+}
+
+esp_err_t radio_manager_save_idle_timeout_seconds(void)
+{
+    ESP_RETURN_ON_ERROR(radio_manager_load_idle_timeout_if_needed(), TAG, "load idle timeout failed");
+    uint16_t timeout_seconds = radio_manager_get_idle_timeout_seconds();
+    return radio_manager_write_idle_timeout_blob(timeout_seconds);
 }
 
 esp_err_t radio_manager_acquire(const radio_manager_request_t *request,

@@ -9,8 +9,8 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
+#include "app_scheduler.h"
 #include "app_shell.h"
-#include "cyd_alarm.h"
 #include "cyd_clock_app.h"
 #include "cyd_clock_settings_app.h"
 #include "cyd_display.h"
@@ -20,7 +20,7 @@
 #include "cyd_wifi_setup.h"
 #include "time_tick.h"
 #include "time_sync.h"
-#include "wifi_manager.h"
+#include "wifi_connection.h"
 
 #ifndef CONFIG_CYD_CLOCK_APP_TASK_PRIORITY
 #define CONFIG_CYD_CLOCK_APP_TASK_PRIORITY 5
@@ -43,10 +43,20 @@
 #define CYD_CLOCK_APP_TIME_ROW 10
 #define CYD_CLOCK_APP_TIME_SPAN_COLS CYD_DISPLAY_GRID_COLS
 #define CYD_CLOCK_APP_TIME_SPAN_ROWS 6
+#define CYD_CLOCK_ALARM_OWNER "clock"
+#define CYD_CLOCK_ALARM1_TAG "alarm1"
+#define CYD_CLOCK_ALARM2_TAG "alarm2"
 
 static cyd_display_screen_t s_clock_screen;
 static bool s_clock_use_24_hour = true;
 static system_settings_extension_t s_clock_settings_extension;
+
+typedef enum {
+    CYD_CLOCK_ALARM_MODE_OFF = 0,
+    CYD_CLOCK_ALARM_MODE_1,
+    CYD_CLOCK_ALARM_MODE_2,
+    CYD_CLOCK_ALARM_MODE_1_2,
+} cyd_clock_alarm_mode_t;
 
 typedef enum {
     CYD_CLOCK_APP_MODE_CLOCK = 0,
@@ -74,6 +84,87 @@ typedef struct {
 
 static cyd_clock_touch_tracker_t s_clock_touch_tracker;
 static cyd_clock_mode_button_tracker_t s_clock_action_tracker;
+
+static bool cyd_clock_alarm_load_status(const char *tag, app_scheduler_status_t *status)
+{
+    if (status == NULL) {
+        return false;
+    }
+    return app_scheduler_get_status(CYD_CLOCK_ALARM_OWNER, tag, status) == ESP_OK;
+}
+
+static bool cyd_clock_alarm_enabled(const char *tag)
+{
+    app_scheduler_status_t status = { 0 };
+    return cyd_clock_alarm_load_status(tag, &status) && status.config.enabled;
+}
+
+static cyd_clock_alarm_mode_t cyd_clock_alarm_get_mode(void)
+{
+    bool alarm1_enabled = cyd_clock_alarm_enabled(CYD_CLOCK_ALARM1_TAG);
+    bool alarm2_enabled = cyd_clock_alarm_enabled(CYD_CLOCK_ALARM2_TAG);
+
+    if (alarm1_enabled && alarm2_enabled) {
+        return CYD_CLOCK_ALARM_MODE_1_2;
+    }
+    if (alarm1_enabled) {
+        return CYD_CLOCK_ALARM_MODE_1;
+    }
+    if (alarm2_enabled) {
+        return CYD_CLOCK_ALARM_MODE_2;
+    }
+    return CYD_CLOCK_ALARM_MODE_OFF;
+}
+
+static const char *cyd_clock_alarm_mode_label(cyd_clock_alarm_mode_t mode)
+{
+    switch (mode) {
+    case CYD_CLOCK_ALARM_MODE_1:
+        return "ALARM1 ON";
+    case CYD_CLOCK_ALARM_MODE_2:
+        return "ALARM2 ON";
+    case CYD_CLOCK_ALARM_MODE_1_2:
+        return "ALARM1/2 ON";
+    case CYD_CLOCK_ALARM_MODE_OFF:
+    default:
+        return "ALARM OFF";
+    }
+}
+
+static esp_err_t cyd_clock_alarm_set_enabled(const char *tag, bool enabled)
+{
+    return app_scheduler_set_enabled(CYD_CLOCK_ALARM_OWNER, tag, enabled);
+}
+
+static esp_err_t cyd_clock_alarm_cycle_mode(void)
+{
+    cyd_clock_alarm_mode_t next_mode = CYD_CLOCK_ALARM_MODE_OFF;
+    cyd_clock_alarm_mode_t current_mode = cyd_clock_alarm_get_mode();
+
+    switch (current_mode) {
+    case CYD_CLOCK_ALARM_MODE_OFF:
+        next_mode = CYD_CLOCK_ALARM_MODE_1;
+        break;
+    case CYD_CLOCK_ALARM_MODE_1:
+        next_mode = CYD_CLOCK_ALARM_MODE_2;
+        break;
+    case CYD_CLOCK_ALARM_MODE_2:
+        next_mode = CYD_CLOCK_ALARM_MODE_1_2;
+        break;
+    case CYD_CLOCK_ALARM_MODE_1_2:
+    default:
+        next_mode = CYD_CLOCK_ALARM_MODE_OFF;
+        break;
+    }
+
+    bool enable_alarm1 = next_mode == CYD_CLOCK_ALARM_MODE_1 || next_mode == CYD_CLOCK_ALARM_MODE_1_2;
+    bool enable_alarm2 = next_mode == CYD_CLOCK_ALARM_MODE_2 || next_mode == CYD_CLOCK_ALARM_MODE_1_2;
+
+    ESP_RETURN_ON_ERROR(cyd_clock_alarm_set_enabled(CYD_CLOCK_ALARM1_TAG, enable_alarm1),
+                        TAG,
+                        "set alarm1 enabled failed");
+    return cyd_clock_alarm_set_enabled(CYD_CLOCK_ALARM2_TAG, enable_alarm2);
+}
 
 static void cyd_clock_app_prepare_settings_extension(void)
 {
@@ -215,26 +306,26 @@ static void cyd_clock_app_format_sync_status(char *status_text, size_t status_si
     strftime(status_text, status_size, "sync: %m-%d %H:%M OK", &sync_time);
 }
 
-static const char *cyd_clock_app_wifi_state_text(wifi_manager_state_t state)
+static const char *cyd_clock_app_wifi_state_text(wifi_connection_state_t state)
 {
     switch (state) {
-    case WIFI_MANAGER_STATE_STOPPED:
+    case WIFI_CONNECTION_STATE_STOPPED:
         return "wifi: stopped";
-    case WIFI_MANAGER_STATE_INIT:
+    case WIFI_CONNECTION_STATE_INIT:
         return "wifi: init";
-    case WIFI_MANAGER_STATE_OFF:
+    case WIFI_CONNECTION_STATE_OFF:
         return "wifi: off";
-    case WIFI_MANAGER_STATE_CONNECTING:
+    case WIFI_CONNECTION_STATE_CONNECTING:
         return "wifi: connecting";
-    case WIFI_MANAGER_STATE_CONNECTED:
+    case WIFI_CONNECTION_STATE_CONNECTED:
         return "wifi: connected";
-    case WIFI_MANAGER_STATE_RECONNECTING:
+    case WIFI_CONNECTION_STATE_RECONNECTING:
         return "wifi: reconnecting";
-    case WIFI_MANAGER_STATE_FAILED:
+    case WIFI_CONNECTION_STATE_FAILED:
         return "wifi: failed";
-    case WIFI_MANAGER_STATE_SETUP_REQUIRED:
+    case WIFI_CONNECTION_STATE_SETUP_REQUIRED:
         return "wifi: setup needed";
-    case WIFI_MANAGER_STATE_SETUP_RUNNING:
+    case WIFI_CONNECTION_STATE_SETUP_RUNNING:
         return "wifi: setup";
     default:
         return "wifi: unknown";
@@ -243,13 +334,13 @@ static const char *cyd_clock_app_wifi_state_text(wifi_manager_state_t state)
 
 static void cyd_clock_app_format_wifi_status(char *status_text, size_t status_size)
 {
-    wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
+    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
 
     if (status_text == NULL || status_size == 0) {
         return;
     }
 
-    if (wifi_manager_get_state(&state) != ESP_OK) {
+    if (wifi_connection_get_state(&state) != ESP_OK) {
         snprintf(status_text, status_size, "wifi: unavailable");
         return;
     }
@@ -336,7 +427,7 @@ static bool cyd_clock_app_process_input(void)
                 continue;
             }
             if (action_id == CYD_CLOCK_APP_ACTION_ALARM) {
-                ESP_RETURN_ON_ERROR(cyd_alarm_cycle_mode(NULL), TAG, "cycle alarm mode failed");
+                ESP_RETURN_ON_ERROR(cyd_clock_alarm_cycle_mode(), TAG, "cycle alarm mode failed");
                 redraw = true;
                 continue;
             }
@@ -377,8 +468,8 @@ static esp_err_t cyd_clock_app_show_clock(void)
     char status_text[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     char wifi_status_text[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     cyd_display_screen_t *screen = &s_clock_screen;
-    cyd_alarm_mode_t alarm_mode = cyd_alarm_get_mode();
-    const char *alarm_label = cyd_alarm_mode_label(alarm_mode);
+    cyd_clock_alarm_mode_t alarm_mode = cyd_clock_alarm_get_mode();
+    const char *alarm_label = cyd_clock_alarm_mode_label(alarm_mode);
 
     time(&now);
     localtime_r(&now, &local_time);
@@ -471,38 +562,38 @@ static esp_err_t cyd_clock_app_show_clock(void)
                               12,
                               3,
                               CYD_UI_COLOR_WHITE,
-                              alarm_mode == CYD_ALARM_MODE_OFF ? CYD_UI_COLOR_DIMGREY : CYD_UI_COLOR_RED,
-                              alarm_mode == CYD_ALARM_MODE_OFF ? CYD_UI_COLOR_LIGHTGREY : CYD_UI_COLOR_YELLOW,
+                              alarm_mode == CYD_CLOCK_ALARM_MODE_OFF ? CYD_UI_COLOR_DIMGREY : CYD_UI_COLOR_RED,
+                              alarm_mode == CYD_CLOCK_ALARM_MODE_OFF ? CYD_UI_COLOR_LIGHTGREY : CYD_UI_COLOR_YELLOW,
                               CYD_CLOCK_APP_ACTION_ALARM);
     return cyd_ui_submit(screen);
 }
 
 static bool cyd_clock_app_should_enter_wifi_setup(void)
 {
-    wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
+    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
 
-    if (wifi_manager_get_state(&state) != ESP_OK) {
+    if (wifi_connection_get_state(&state) != ESP_OK) {
         return false;
     }
 
-    return state == WIFI_MANAGER_STATE_SETUP_REQUIRED &&
-           (wifi_manager_is_setup_requested_explicitly() ||
+    return state == WIFI_CONNECTION_STATE_SETUP_REQUIRED &&
+           (wifi_connection_is_setup_requested_explicitly() ||
             !cyd_clock_app_has_time_sync_success());
 }
 
 static bool cyd_clock_app_should_show_wifi_failed(void)
 {
-    wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
+    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
 
     if (cyd_clock_app_has_time_sync_success()) {
         return false;
     }
 
-    if (wifi_manager_get_state(&state) != ESP_OK) {
+    if (wifi_connection_get_state(&state) != ESP_OK) {
         return false;
     }
 
-    return state == WIFI_MANAGER_STATE_FAILED;
+    return state == WIFI_CONNECTION_STATE_FAILED;
 }
 
 static const char *cyd_clock_app_wifi_failure_text(esp32_wifi_sta_failure_reason_t reason)
@@ -533,7 +624,7 @@ static void cyd_clock_app_begin_wifi_setup(void)
 static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
 {
     const char *lines[] = {
-        cyd_clock_app_wifi_failure_text(wifi_manager_get_last_failure_reason()),
+        cyd_clock_app_wifi_failure_text(wifi_connection_get_last_failure_reason()),
         "Select RETRY or SETUP",
     };
     const char *buttons[] = { "RETRY", "SETUP" };
@@ -553,7 +644,7 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
         if (cyd_clock_app_touch_confirmed_mode_button(&event, &tracker, &button_index)) {
             if (button_index == 0) {
                 ESP_LOGI(TAG, "retrying saved Wi-Fi profiles");
-                if (wifi_manager_retry_connection_without_setup_async() != ESP_OK) {
+                if (wifi_connection_retry_connection_without_setup_async() != ESP_OK) {
                     ESP_LOGW(TAG, "failed to start Wi-Fi retry");
                     return CYD_CLOCK_APP_MODE_WIFI_FAILED;
                 }
@@ -572,8 +663,8 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
 
 static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
 {
-    cyd_wifi_setup_autoconnect_progress_t last_progress = {
-        .phase = (cyd_wifi_setup_autoconnect_phase_t)-1,
+    wifi_connection_progress_t last_progress = {
+        .phase = (wifi_connection_progress_phase_t)-1,
     };
 
     while (true) {
@@ -581,16 +672,16 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
         (void)cyd_input_read_event(&event, pdMS_TO_TICKS(CYD_CLOCK_APP_INPUT_POLL_MS));
         (void)cyd_clock_app_touch_is_tap(&event);
 
-        cyd_wifi_setup_autoconnect_progress_t progress = cyd_wifi_setup_get_autoconnect_progress();
+        wifi_connection_progress_t progress = wifi_connection_get_progress();
         if (progress.phase != last_progress.phase ||
             strncmp(progress.ssid, last_progress.ssid, sizeof(progress.ssid)) != 0) {
             const char *lines[2] = { "", "Please wait" };
             char trying_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
 
-            if (progress.phase == CYD_WIFI_SETUP_AUTOCONNECT_TRYING && progress.ssid[0] != '\0') {
+            if (progress.phase == WIFI_CONNECTION_PROGRESS_CONNECTING && progress.ssid[0] != '\0') {
                 snprintf(trying_line, sizeof(trying_line), "Trying %.30s", progress.ssid);
                 lines[0] = trying_line;
-            } else if (progress.phase == CYD_WIFI_SETUP_AUTOCONNECT_SEARCHING) {
+            } else if (progress.phase == WIFI_CONNECTION_PROGRESS_SEARCHING) {
                 lines[0] = "Searching saved APs";
             } else {
                 lines[0] = "Connecting Wi-Fi";
@@ -600,18 +691,18 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
             last_progress = progress;
         }
 
-        wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
-        if (wifi_manager_get_state(&state) != ESP_OK) {
+        wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
+        if (wifi_connection_get_state(&state) != ESP_OK) {
             return CYD_CLOCK_APP_MODE_WIFI_FAILED;
         }
 
-        if (state == WIFI_MANAGER_STATE_CONNECTED) {
+        if (state == WIFI_CONNECTION_STATE_CONNECTED) {
             ESP_LOGI(TAG, "saved Wi-Fi retry connected");
             return CYD_CLOCK_APP_MODE_CLOCK;
         }
-        if (state == WIFI_MANAGER_STATE_FAILED ||
-            state == WIFI_MANAGER_STATE_OFF ||
-            state == WIFI_MANAGER_STATE_SETUP_REQUIRED) {
+        if (state == WIFI_CONNECTION_STATE_FAILED ||
+            state == WIFI_CONNECTION_STATE_OFF ||
+            state == WIFI_CONNECTION_STATE_SETUP_REQUIRED) {
             ESP_LOGW(TAG, "saved Wi-Fi retry ended with state=%d", (int)state);
             return CYD_CLOCK_APP_MODE_WIFI_FAILED;
         }

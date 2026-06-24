@@ -233,7 +233,7 @@ English supplement: Treat BOOT as a user button only after firmware has started.
 
 `CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT` が有効で、保存済み補正値がない場合は、起動時に補正フローを実行します。
 
-保存済み補正値の blob サイズ、magic、または raw 座標が異常な場合は、`touch_cal` だけを NVS から削除して再起動します。旧フォーマットや壊れた値をそのまま `setTouchCalibrate()` に渡して起動時に不安定になることを避けるためです。
+保存済み補正値は versioned blob として保存します。blob サイズ、version/header、または raw 座標が異常な場合は、その値を信用せず `Initialize NVS` を要求する warning 対象として扱います。
 
 English supplement: Calibration data is stored by `cyd_input`, but the raw calibration operation is performed by `cyd_display_calibrate_touch()` and applied by `cyd_display_apply_touch_calibration()`.
 

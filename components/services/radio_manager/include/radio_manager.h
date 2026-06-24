@@ -33,6 +33,9 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
                                 radio_manager_lease_t *lease,
                                 TickType_t wait_ticks);
 esp_err_t radio_manager_release(const radio_manager_lease_t *lease);
+uint16_t radio_manager_get_idle_timeout_seconds(void);
+esp_err_t radio_manager_set_idle_timeout_seconds(uint16_t timeout_seconds);
+esp_err_t radio_manager_save_idle_timeout_seconds(void);
 
 #ifdef __cplusplus
 }

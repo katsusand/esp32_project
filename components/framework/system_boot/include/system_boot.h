@@ -1,14 +1,18 @@
 #ifndef SYSTEM_BOOT_H
 #define SYSTEM_BOOT_H
 
+#include <stdbool.h>
 #include "esp_err.h"
-#include "app_shell.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-esp_err_t system_boot_start(const app_shell_app_t *home_app);
+typedef struct {
+    bool setup_shortcut_requested;
+} system_boot_result_t;
+
+esp_err_t system_boot_start(system_boot_result_t *result);
 
 #ifdef __cplusplus
 }

@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
-#include "freertos/portmacro.h"
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -10,27 +9,18 @@
 #include "app_shell.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
+#include "cyd_text_input.h"
 #include "cyd_ui.h"
 #include "esp32_wifi_sta.h"
 #include "cyd_wifi_setup.h"
 #include "time_sync.h"
-#include "wifi_manager.h"
-#include "wifi_profile_store.h"
+#include "wifi_connection.h"
+#include "wifi_connection.h"
 
 #define WIFI_SCAN_STATUS_LINE_COUNT 10
 #define WIFI_SCAN_RECORD_CAPACITY CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE
-#define WIFI_PASSWORD_MAX_LEN   64
 #define WIFI_SCREEN_FIRST_LINE_ROW 4
 #define WIFI_SCREEN_LINE_HEIGHT_ROWS 2
-#define WIFI_KEY_ROW_0          9
-#define WIFI_KEY_ROW_1          12
-#define WIFI_KEY_ROW_2          15
-#define WIFI_KEY_CONTROL_ROW    20
-#define WIFI_KEY_BOTTOM_ROW     25
-#define WIFI_KEY_HEIGHT_ROWS    2
-#define WIFI_CONTROL_HEIGHT_ROWS 3
-#define WIFI_BOTTOM_HEIGHT_ROWS 4
-#define WIFI_KEY_WIDTH_COLS     4
 #define WIFI_BACK_COL           0
 #define WIFI_BACK_ROW           0
 #define WIFI_BACK_WIDTH_COLS    6
@@ -40,80 +30,19 @@
 #define WIFI_TITLE_WIDTH_COLS   32
 #define WIFI_TITLE_HEIGHT_ROWS  2
 #define WIFI_ACTION_SCAN_BASE   0x0100
-#define WIFI_ACTION_KEY_BASE    0x0200
-#define WIFI_ACTION_LOWER       0x0301
-#define WIFI_ACTION_UPPER       0x0302
-#define WIFI_ACTION_SYMBOL      0x0303
-#define WIFI_ACTION_DELETE      0x0304
-#define WIFI_ACTION_SPACE       0x0305
-#define WIFI_ACTION_CANCEL      0x0306
-#define WIFI_ACTION_SAVE        0x0307
-#define WIFI_ACTION_TOGGLE_PASSWORD 0x0308
-#define WIFI_ACTION_TOGGLE_CASE 0x0309
 #define WIFI_ACTION_SCAN_BACK   0x030a
 #define WIFI_ACTION_SCAN_REFRESH 0x030b
 #define WIFI_ACTION_SCAN_PREV   0x030c
 #define WIFI_ACTION_SCAN_NEXT   0x030d
 #define WIFI_IDLE_POLL_MS       250
 
-#ifndef CONFIG_ESP32_WIFI_STA_SSID
-#define CONFIG_ESP32_WIFI_STA_SSID ""
-#endif
-#ifndef CONFIG_ESP32_WIFI_STA_MAX_RETRY
-#define CONFIG_ESP32_WIFI_STA_MAX_RETRY 5
-#endif
 #ifndef CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS
 #define CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS 15000
-#endif
-#ifndef CONFIG_ESP32_WIFI_STA_SAE_H2E_IDENTIFIER
-#define CONFIG_ESP32_WIFI_STA_SAE_H2E_IDENTIFIER ""
 #endif
 
 #define TAG "cyd_wifi_setup"
 
 static cyd_display_screen_t s_wifi_setup_screen;
-static portMUX_TYPE s_autoconnect_progress_lock = portMUX_INITIALIZER_UNLOCKED;
-static cyd_wifi_setup_autoconnect_progress_t s_autoconnect_progress = {
-    .phase = CYD_WIFI_SETUP_AUTOCONNECT_IDLE,
-};
-
-static void wifi_set_autoconnect_progress(cyd_wifi_setup_autoconnect_phase_t phase, const char *ssid)
-{
-    portENTER_CRITICAL(&s_autoconnect_progress_lock);
-    s_autoconnect_progress.phase = phase;
-    if (ssid != NULL) {
-        snprintf(s_autoconnect_progress.ssid, sizeof(s_autoconnect_progress.ssid), "%.32s", ssid);
-    } else {
-        s_autoconnect_progress.ssid[0] = '\0';
-    }
-    portEXIT_CRITICAL(&s_autoconnect_progress_lock);
-}
-
-typedef enum {
-    WIFI_KEYBOARD_LOWER = 0,
-    WIFI_KEYBOARD_UPPER,
-    WIFI_KEYBOARD_SYMBOL,
-    WIFI_KEYBOARD_SYMBOL_EXTRA,
-} wifi_keyboard_page_t;
-
-typedef enum {
-    WIFI_PASSWORD_ACTION_NONE = 0,
-    WIFI_PASSWORD_ACTION_CANCEL,
-    WIFI_PASSWORD_ACTION_SAVE,
-    WIFI_PASSWORD_ACTION_DELETE,
-    WIFI_PASSWORD_ACTION_SPACE,
-    WIFI_PASSWORD_ACTION_LOWER,
-    WIFI_PASSWORD_ACTION_UPPER,
-    WIFI_PASSWORD_ACTION_SYMBOL,
-    WIFI_PASSWORD_ACTION_TOGGLE_SHOW,
-    WIFI_PASSWORD_ACTION_TOGGLE_CASE,
-    WIFI_PASSWORD_ACTION_CHAR,
-} wifi_password_action_t;
-
-typedef struct {
-    wifi_password_action_t action;
-    char ch;
-} wifi_password_key_t;
 
 typedef struct {
     bool pending;
@@ -128,11 +57,6 @@ typedef struct {
 } wifi_touch_mode_button_tracker_t;
 
 typedef struct {
-    wifi_profile_store_entry_t profile;
-    esp32_wifi_sta_scan_record_t scan_record;
-} wifi_saved_candidate_t;
-
-typedef struct {
     bool initialized;
     uint32_t scan_round;
     size_t page_index;
@@ -145,10 +69,6 @@ typedef struct {
 typedef struct {
     bool initialized;
     esp32_wifi_sta_scan_record_t record;
-    char password[WIFI_PASSWORD_MAX_LEN + 1];
-    wifi_keyboard_page_t page;
-    bool show_password;
-    wifi_touch_action_tracker_t touch_tracker;
 } wifi_password_session_t;
 
 static wifi_scan_session_t s_scan_session = { 0 };
@@ -421,286 +341,20 @@ static void wifi_discard_pending_input(wifi_scan_session_t *session)
     (void)cyd_input_discard_pending_events();
 }
 
-static const char *wifi_keyboard_row(wifi_keyboard_page_t page, size_t row)
+static esp_err_t wifi_test_connect_and_save(const char *ssid,
+                                            const char *password,
+                                            wifi_auth_mode_t authmode)
 {
-    static const char *lower_rows[] = { "qwertyuiop", "asdfghjkl", "zxcvbnm.-_" };
-    static const char *upper_rows[] = { "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM.-_" };
-    static const char *symbol_rows[] = { "1234567890", "~!@#$%^&*", "-_=+,.;:/?" };
-    static const char *symbol_extra_rows[] = { "1234567890", "()[]{}<>|", "'\"`/" };
-
-    if (row >= 3) {
-        return "";
-    }
-    if (page == WIFI_KEYBOARD_UPPER) {
-        return upper_rows[row];
-    }
-    if (page == WIFI_KEYBOARD_SYMBOL) {
-        return symbol_rows[row];
-    }
-    if (page == WIFI_KEYBOARD_SYMBOL_EXTRA) {
-        return symbol_extra_rows[row];
-    }
-    return lower_rows[row];
-}
-
-static uint8_t wifi_keyboard_row_col_offset(const char *keys, size_t row)
-{
-    (void)keys;
-    return row == 1 ? 2 : 0;
-}
-
-static void wifi_mask_password(char *dst, size_t dst_size, const char *password)
-{
-    size_t password_len = password != NULL ? strlen(password) : 0;
-    size_t visible_len = password_len < (dst_size - 1) ? password_len : (dst_size - 1);
-
-    for (size_t i = 0; i < visible_len; ++i) {
-        dst[i] = '*';
-    }
-    dst[visible_len] = '\0';
-}
-
-static esp_err_t wifi_show_password_screen(const char *ssid,
-                                           const char *password,
-                                           wifi_keyboard_page_t page,
-                                           bool show_password)
-{
-    cyd_display_screen_t *screen = &s_wifi_setup_screen;
-    char ssid_line[CYD_DISPLAY_TEXT_MAX_LEN + 1];
-    char password_line[CYD_DISPLAY_TEXT_MAX_LEN + 1];
-    char show_button_line[CYD_DISPLAY_TEXT_MAX_LEN + 1];
-    char masked[WIFI_PASSWORD_MAX_LEN + 1];
-    const bool symbol_page = page == WIFI_KEYBOARD_SYMBOL || page == WIFI_KEYBOARD_SYMBOL_EXTRA;
-    const char *case_button_text = symbol_page ? "abc" : (page == WIFI_KEYBOARD_UPPER ? "abc" : "ABC");
-    const char *symbol_button_text = page == WIFI_KEYBOARD_SYMBOL ? "()[]" : "123";
-    const uint8_t row_starts[] = { WIFI_KEY_ROW_0, WIFI_KEY_ROW_1, WIFI_KEY_ROW_2 };
-
-    snprintf(ssid_line, sizeof(ssid_line), "SSID: %.33s", ssid != NULL ? ssid : "");
-    if (show_password) {
-        snprintf(password_line, sizeof(password_line), "PASS: %.34s", password != NULL ? password : "");
-    } else {
-        wifi_mask_password(masked, sizeof(masked), password);
-        snprintf(password_line, sizeof(password_line), "PASS: %.34s", masked);
-    }
-    snprintf(show_button_line, sizeof(show_button_line), "[%c] SHOW PASSWORD", show_password ? 'x' : ' ');
-    cyd_ui_screen_clear(screen);
-
-    cyd_ui_add_text(screen, "Wi-Fi Password", 0, 1, CYD_DISPLAY_GRID_COLS, 2, CYD_DISPLAY_ALIGN_CENTER, 2, CYD_UI_COLOR_YELLOW);
-    cyd_ui_add_text(screen, ssid_line, 1, 4, CYD_DISPLAY_GRID_COLS - 2, 1, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-    cyd_ui_add_text(screen, password_line, 1, 6, CYD_DISPLAY_GRID_COLS - 2, 1, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_CYAN);
-    cyd_ui_add_button(screen,
-                    show_button_line,
-                    1,
-                    7,
-                    24,
-                    2,
-                    show_password ? CYD_UI_COLOR_BLUE : CYD_UI_COLOR_DARKGREY,
-                    CYD_UI_COLOR_LIGHTGREY,
-                    WIFI_ACTION_TOGGLE_PASSWORD);
-
-    for (size_t row = 0; row < 3; ++row) {
-        const char *keys = wifi_keyboard_row(page, row);
-        uint8_t col_offset = wifi_keyboard_row_col_offset(keys, row);
-        for (size_t i = 0; i < strlen(keys); ++i) {
-            char key_text[2] = { keys[i], '\0' };
-            cyd_ui_add_button(screen,
-                            key_text,
-                            (uint8_t)(col_offset + i * WIFI_KEY_WIDTH_COLS),
-                            row_starts[row],
-                            WIFI_KEY_WIDTH_COLS,
-                            WIFI_KEY_HEIGHT_ROWS,
-                            CYD_UI_COLOR_DARKGREY,
-                            CYD_UI_COLOR_LIGHTGREY,
-                            (uint16_t)(WIFI_ACTION_KEY_BASE + (uint8_t)keys[i]));
-        }
-    }
-
-    cyd_ui_add_button(screen, case_button_text, 0, WIFI_KEY_CONTROL_ROW, 8, WIFI_CONTROL_HEIGHT_ROWS, CYD_UI_COLOR_BLUE, CYD_UI_COLOR_CYAN, WIFI_ACTION_TOGGLE_CASE);
-    cyd_ui_add_button(screen, symbol_button_text, 8, WIFI_KEY_CONTROL_ROW, 8, WIFI_CONTROL_HEIGHT_ROWS, CYD_UI_COLOR_BLUE, CYD_UI_COLOR_CYAN, WIFI_ACTION_SYMBOL);
-    cyd_ui_add_button(screen, "DEL", 16, WIFI_KEY_CONTROL_ROW, 8, WIFI_CONTROL_HEIGHT_ROWS, CYD_UI_COLOR_RED, CYD_UI_COLOR_LIGHTGREY, WIFI_ACTION_DELETE);
-    cyd_ui_add_button(screen, "SPACE", 24, WIFI_KEY_CONTROL_ROW, 16, WIFI_CONTROL_HEIGHT_ROWS, CYD_UI_COLOR_DARKGREY, CYD_UI_COLOR_LIGHTGREY, WIFI_ACTION_SPACE);
-    cyd_ui_add_button(screen, "CANCEL", 1, WIFI_KEY_BOTTOM_ROW, 18, WIFI_BOTTOM_HEIGHT_ROWS, CYD_UI_COLOR_DARKGREY, CYD_UI_COLOR_LIGHTGREY, WIFI_ACTION_CANCEL);
-    cyd_ui_add_button(screen, "SAVE", 21, WIFI_KEY_BOTTOM_ROW, 18, WIFI_BOTTOM_HEIGHT_ROWS, CYD_UI_COLOR_GREEN, CYD_UI_COLOR_LIGHTGREY, WIFI_ACTION_SAVE);
-
-    return cyd_ui_submit(screen);
-}
-
-static wifi_password_key_t wifi_password_key_from_action(uint16_t action_id, wifi_keyboard_page_t page)
-{
-    wifi_password_key_t key = { .action = WIFI_PASSWORD_ACTION_NONE, .ch = '\0' };
-    (void)page;
-
-    switch (action_id) {
-        case WIFI_ACTION_CANCEL:
-            key.action = WIFI_PASSWORD_ACTION_CANCEL;
-            break;
-        case WIFI_ACTION_SAVE:
-            key.action = WIFI_PASSWORD_ACTION_SAVE;
-            break;
-        case WIFI_ACTION_DELETE:
-            key.action = WIFI_PASSWORD_ACTION_DELETE;
-            break;
-        case WIFI_ACTION_SPACE:
-            key.action = WIFI_PASSWORD_ACTION_SPACE;
-            break;
-        case WIFI_ACTION_LOWER:
-            key.action = WIFI_PASSWORD_ACTION_LOWER;
-            break;
-        case WIFI_ACTION_UPPER:
-            key.action = WIFI_PASSWORD_ACTION_UPPER;
-            break;
-        case WIFI_ACTION_SYMBOL:
-            key.action = WIFI_PASSWORD_ACTION_SYMBOL;
-            break;
-        case WIFI_ACTION_TOGGLE_PASSWORD:
-            key.action = WIFI_PASSWORD_ACTION_TOGGLE_SHOW;
-            break;
-        case WIFI_ACTION_TOGGLE_CASE:
-            key.action = WIFI_PASSWORD_ACTION_TOGGLE_CASE;
-            break;
-        default:
-            if (action_id >= WIFI_ACTION_KEY_BASE && action_id <= WIFI_ACTION_KEY_BASE + 0x7f) {
-                key.action = WIFI_PASSWORD_ACTION_CHAR;
-                key.ch = (char)(action_id - WIFI_ACTION_KEY_BASE);
-            }
-            break;
-    }
-    return key;
-}
-
-static esp_err_t wifi_test_connect_and_save(const char *ssid, const char *password)
-{
-    esp32_wifi_sta_config_t config = {
-        .ssid = ssid,
-        .password = password,
-        .max_retry = CONFIG_ESP32_WIFI_STA_MAX_RETRY,
-        .authmode_threshold = WIFI_AUTH_OPEN,
-        .sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
-        .sae_h2e_identifier = CONFIG_ESP32_WIFI_STA_SAE_H2E_IDENTIFIER,
-    };
-
     ESP_RETURN_ON_ERROR(cyd_display_show_text("Wi-Fi", "Connecting..."), TAG, "show connecting failed");
-    ESP_RETURN_ON_ERROR(esp32_wifi_sta_init_with_config(&config), TAG, "Wi-Fi config failed");
-    ESP_RETURN_ON_ERROR(esp32_wifi_sta_start(), TAG, "Wi-Fi start failed");
-    ESP_RETURN_ON_ERROR(esp32_wifi_sta_wait_connected(pdMS_TO_TICKS(CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS)),
+    ESP_RETURN_ON_ERROR(wifi_connection_connect_and_save(
+                            ssid,
+                            password,
+                            authmode,
+                            pdMS_TO_TICKS(CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS),
+                            NULL),
                         TAG,
                         "Wi-Fi connect test failed");
-    ESP_RETURN_ON_ERROR(esp32_wifi_sta_save_credentials(ssid, password), TAG, "Wi-Fi credential save failed");
     return cyd_display_show_text("Wi-Fi", "Saved");
-}
-
-static int wifi_compare_candidates(const wifi_saved_candidate_t *lhs, const wifi_saved_candidate_t *rhs)
-{
-    if (lhs->profile.last_success_seq != rhs->profile.last_success_seq) {
-        return lhs->profile.last_success_seq > rhs->profile.last_success_seq ? -1 : 1;
-    }
-    if (lhs->scan_record.rssi != rhs->scan_record.rssi) {
-        return lhs->scan_record.rssi > rhs->scan_record.rssi ? -1 : 1;
-    }
-    return strncmp(lhs->profile.ssid, rhs->profile.ssid, sizeof(lhs->profile.ssid));
-}
-
-static void wifi_sort_candidates(wifi_saved_candidate_t *candidates, size_t count)
-{
-    if (candidates == NULL) {
-        return;
-    }
-
-    for (size_t i = 0; i < count; ++i) {
-        for (size_t j = i + 1; j < count; ++j) {
-            if (wifi_compare_candidates(&candidates[i], &candidates[j]) > 0) {
-                wifi_saved_candidate_t tmp = candidates[i];
-                candidates[i] = candidates[j];
-                candidates[j] = tmp;
-            }
-        }
-    }
-}
-
-static size_t wifi_collect_saved_candidates(wifi_saved_candidate_t *candidates,
-                                            size_t candidate_capacity,
-                                            esp32_wifi_sta_failure_reason_t *failure_reason)
-{
-    wifi_profile_store_entry_t profiles[WIFI_PROFILE_STORE_MAX_ENTRIES] = { 0 };
-    esp32_wifi_sta_scan_record_t scan_records[CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE] = { 0 };
-    size_t profile_count = 0;
-    size_t visible_ap_count = 0;
-    size_t candidate_count = 0;
-
-    if (failure_reason != NULL) {
-        *failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-    }
-
-    if (wifi_profile_store_load_entries(profiles, WIFI_PROFILE_STORE_MAX_ENTRIES, &profile_count) != ESP_OK ||
-        profile_count == 0) {
-        if (failure_reason != NULL) {
-            *failure_reason = ESP32_WIFI_STA_FAILURE_NO_SAVED_PROFILE;
-        }
-        return 0;
-    }
-
-    wifi_set_autoconnect_progress(CYD_WIFI_SETUP_AUTOCONNECT_SEARCHING, NULL);
-
-    if (esp32_wifi_sta_enter_scan_mode() != ESP_OK ||
-        esp32_wifi_sta_get_scan_records(scan_records,
-                                        CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE,
-                                        &visible_ap_count) != ESP_OK) {
-        if (failure_reason != NULL) {
-            *failure_reason = ESP32_WIFI_STA_FAILURE_TIMEOUT;
-        }
-        return 0;
-    }
-
-    for (size_t i = 0; i < profile_count && candidate_count < candidate_capacity; ++i) {
-        for (size_t j = 0; j < visible_ap_count; ++j) {
-            if (strncmp(profiles[i].ssid, scan_records[j].ssid, sizeof(profiles[i].ssid)) != 0) {
-                continue;
-            }
-            candidates[candidate_count].profile = profiles[i];
-            candidates[candidate_count].scan_record = scan_records[j];
-            ++candidate_count;
-            break;
-        }
-    }
-
-    wifi_sort_candidates(candidates, candidate_count);
-    if (candidate_count == 0 && failure_reason != NULL) {
-        *failure_reason = ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE;
-    }
-    return candidate_count;
-}
-
-static esp_err_t wifi_connect_saved_candidate(const wifi_saved_candidate_t *candidate,
-                                              TickType_t wait_ticks,
-                                              esp32_wifi_sta_failure_reason_t *failure_reason)
-{
-    esp32_wifi_sta_config_t config = {
-        .ssid = candidate->profile.ssid,
-        .password = candidate->profile.password,
-        .max_retry = CONFIG_ESP32_WIFI_STA_MAX_RETRY,
-        .authmode_threshold = WIFI_AUTH_OPEN,
-        .sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
-        .sae_h2e_identifier = CONFIG_ESP32_WIFI_STA_SAE_H2E_IDENTIFIER,
-    };
-
-    wifi_set_autoconnect_progress(CYD_WIFI_SETUP_AUTOCONNECT_TRYING, candidate->profile.ssid);
-
-    esp_err_t err = esp32_wifi_sta_init_with_config(&config);
-    if (err == ESP_OK) {
-        err = esp32_wifi_sta_start();
-    }
-    if (err == ESP_OK && wait_ticks > 0) {
-        err = esp32_wifi_sta_wait_connected(wait_ticks);
-    }
-    if (err == ESP_OK) {
-        err = wifi_profile_store_record_success(candidate->profile.ssid,
-                                                candidate->profile.password,
-                                                candidate->scan_record.authmode);
-    }
-    if (err != ESP_OK && failure_reason != NULL) {
-        *failure_reason = esp32_wifi_sta_get_last_failure_reason();
-    }
-    return err;
 }
 
 static void wifi_wait_ok_dialog(const char *title, const char *message)
@@ -724,49 +378,6 @@ static void wifi_wait_ok_dialog(const char *title, const char *message)
             return;
         }
     }
-}
-
-esp_err_t cyd_wifi_setup_connect_configured(TickType_t wait_ticks,
-                                            esp32_wifi_sta_failure_reason_t *failure_reason)
-{
-    wifi_saved_candidate_t candidates[WIFI_PROFILE_STORE_MAX_ENTRIES] = { 0 };
-    esp32_wifi_sta_failure_reason_t local_reason = ESP32_WIFI_STA_FAILURE_NONE;
-    size_t candidate_count = wifi_collect_saved_candidates(candidates,
-                                                           WIFI_PROFILE_STORE_MAX_ENTRIES,
-                                                           &local_reason);
-
-    if (failure_reason != NULL) {
-        *failure_reason = local_reason;
-    }
-
-    if (candidate_count == 0) {
-        wifi_set_autoconnect_progress(CYD_WIFI_SETUP_AUTOCONNECT_IDLE, NULL);
-        return local_reason == ESP32_WIFI_STA_FAILURE_NO_SAVED_PROFILE ? ESP_ERR_NOT_FOUND : ESP_FAIL;
-    }
-
-    for (size_t i = 0; i < candidate_count; ++i) {
-        esp_err_t err = wifi_connect_saved_candidate(&candidates[i], wait_ticks, &local_reason);
-        if (failure_reason != NULL) {
-            *failure_reason = local_reason;
-        }
-        if (err == ESP_OK) {
-            wifi_set_autoconnect_progress(CYD_WIFI_SETUP_AUTOCONNECT_IDLE, NULL);
-            return ESP_OK;
-        }
-    }
-
-    wifi_set_autoconnect_progress(CYD_WIFI_SETUP_AUTOCONNECT_IDLE, NULL);
-    return ESP_FAIL;
-}
-
-cyd_wifi_setup_autoconnect_progress_t cyd_wifi_setup_get_autoconnect_progress(void)
-{
-    cyd_wifi_setup_autoconnect_progress_t progress = { 0 };
-
-    portENTER_CRITICAL(&s_autoconnect_progress_lock);
-    progress = s_autoconnect_progress;
-    portEXIT_CRITICAL(&s_autoconnect_progress_lock);
-    return progress;
 }
 
 void cyd_wifi_setup_begin_scan_session(void)
@@ -849,43 +460,54 @@ esp_err_t cyd_wifi_setup_poll_scan_session(const cyd_input_event_t *event,
 
 void cyd_wifi_setup_begin_password_session(const esp32_wifi_sta_scan_record_t *record)
 {
+    cyd_text_input_config_t config = {
+        .title = "Wi-Fi Password",
+        .context_label = "SSID:",
+        .context_value = record != NULL ? record->ssid : "",
+        .input_label = "PASS:",
+        .initial_text = "",
+        .max_len = 64,
+        .obscure_input = true,
+        .mode = CYD_TEXT_INPUT_MODE_PASSWORD,
+    };
+
     memset(&s_password_session, 0, sizeof(s_password_session));
     s_password_session.initialized = true;
-    s_password_session.page = WIFI_KEYBOARD_LOWER;
     if (record != NULL) {
         s_password_session.record = *record;
     }
-    (void)wifi_show_password_screen(s_password_session.record.ssid,
-                                    s_password_session.password,
-                                    s_password_session.page,
-                                    s_password_session.show_password);
+    esp_err_t err = cyd_text_input_begin_session(&config);
+    if (err != ESP_OK) {
+        s_password_session.initialized = false;
+        ESP_LOGE(TAG, "start password input failed: %s", esp_err_to_name(err));
+    }
 }
 
 esp_err_t cyd_wifi_setup_poll_password_session(const cyd_input_event_t *event,
                                                cyd_wifi_setup_password_result_t *result)
 {
+    char password[65] = { 0 };
+    cyd_text_input_result_t input_result = CYD_TEXT_INPUT_RESULT_CONTINUE;
+
     ESP_RETURN_ON_FALSE(result != NULL, ESP_ERR_INVALID_ARG, TAG, "result required");
     *result = CYD_WIFI_SETUP_PASSWORD_CONTINUE;
     ESP_RETURN_ON_FALSE(s_password_session.initialized, ESP_ERR_INVALID_STATE, TAG, "password session not initialized");
 
-    if (event == NULL) {
+    ESP_RETURN_ON_ERROR(cyd_text_input_poll_session(event, &input_result, password, sizeof(password)),
+                        TAG,
+                        "password input failed");
+    if (input_result == CYD_TEXT_INPUT_RESULT_CONTINUE) {
         return ESP_OK;
     }
-
-    uint16_t action_id = 0;
-    if (!wifi_touch_event_confirmed_action(event, &s_password_session.touch_tracker, &action_id)) {
-        return ESP_OK;
-    }
-
-    wifi_password_key_t key = wifi_password_key_from_action(action_id, s_password_session.page);
-    size_t password_len = strlen(s_password_session.password);
-
-    switch (key.action) {
-    case WIFI_PASSWORD_ACTION_CANCEL:
+    s_password_session.initialized = false;
+    if (input_result == CYD_TEXT_INPUT_RESULT_CANCELLED) {
         *result = CYD_WIFI_SETUP_PASSWORD_CANCELLED;
         return ESP_OK;
-    case WIFI_PASSWORD_ACTION_SAVE: {
-        esp_err_t err = wifi_test_connect_and_save(s_password_session.record.ssid, s_password_session.password);
+    }
+    if (input_result == CYD_TEXT_INPUT_RESULT_SAVED) {
+        esp_err_t err = wifi_test_connect_and_save(s_password_session.record.ssid,
+                                                   password,
+                                                   s_password_session.record.authmode);
         if (err == ESP_OK) {
             vTaskDelay(pdMS_TO_TICKS(800));
             *result = CYD_WIFI_SETUP_PASSWORD_CONNECTED;
@@ -896,53 +518,6 @@ esp_err_t cyd_wifi_setup_poll_password_session(const cyd_input_event_t *event,
         *result = CYD_WIFI_SETUP_PASSWORD_CANCELLED;
         return ESP_OK;
     }
-    case WIFI_PASSWORD_ACTION_DELETE:
-        if (password_len > 0) {
-            s_password_session.password[password_len - 1] = '\0';
-        }
-        break;
-    case WIFI_PASSWORD_ACTION_SPACE:
-        if (password_len < WIFI_PASSWORD_MAX_LEN) {
-            s_password_session.password[password_len] = ' ';
-            s_password_session.password[password_len + 1] = '\0';
-        }
-        break;
-    case WIFI_PASSWORD_ACTION_LOWER:
-        s_password_session.page = WIFI_KEYBOARD_LOWER;
-        break;
-    case WIFI_PASSWORD_ACTION_UPPER:
-        s_password_session.page = WIFI_KEYBOARD_UPPER;
-        break;
-    case WIFI_PASSWORD_ACTION_SYMBOL:
-        s_password_session.page = s_password_session.page == WIFI_KEYBOARD_SYMBOL ? WIFI_KEYBOARD_SYMBOL_EXTRA : WIFI_KEYBOARD_SYMBOL;
-        break;
-    case WIFI_PASSWORD_ACTION_TOGGLE_SHOW:
-        s_password_session.show_password = !s_password_session.show_password;
-        break;
-    case WIFI_PASSWORD_ACTION_TOGGLE_CASE:
-        if (s_password_session.page == WIFI_KEYBOARD_SYMBOL || s_password_session.page == WIFI_KEYBOARD_SYMBOL_EXTRA) {
-            s_password_session.page = WIFI_KEYBOARD_LOWER;
-        } else {
-            s_password_session.page = s_password_session.page == WIFI_KEYBOARD_UPPER ? WIFI_KEYBOARD_LOWER : WIFI_KEYBOARD_UPPER;
-        }
-        break;
-    case WIFI_PASSWORD_ACTION_CHAR:
-        if (password_len < WIFI_PASSWORD_MAX_LEN) {
-            s_password_session.password[password_len] = key.ch;
-            s_password_session.password[password_len + 1] = '\0';
-        }
-        break;
-    case WIFI_PASSWORD_ACTION_NONE:
-    default:
-        break;
-    }
-
-    ESP_RETURN_ON_ERROR(wifi_show_password_screen(s_password_session.record.ssid,
-                                                  s_password_session.password,
-                                                  s_password_session.page,
-                                                  s_password_session.show_password),
-                        TAG,
-                        "show password failed");
     return ESP_OK;
 }
 
@@ -960,7 +535,7 @@ static esp_err_t cyd_wifi_setup_app_enter(void *ctx, const app_shell_app_t *from
     }
 
     if (!s_wifi_setup_app_state.active) {
-        ESP_RETURN_ON_ERROR(wifi_manager_begin_setup(), TAG, "begin setup failed");
+        ESP_RETURN_ON_ERROR(wifi_connection_begin_setup(), TAG, "begin setup failed");
         s_wifi_setup_app_state.active = true;
     }
 
@@ -978,13 +553,13 @@ static esp_err_t cyd_wifi_setup_app_leave(void *ctx)
         return ESP_OK;
     }
 
-    wifi_manager_state_t state = WIFI_MANAGER_STATE_STOPPED;
-    if (wifi_manager_get_state(&state) == ESP_OK && state == WIFI_MANAGER_STATE_CONNECTED) {
+    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
+    if (wifi_connection_get_state(&state) == ESP_OK && state == WIFI_CONNECTION_STATE_CONNECTED) {
         s_wifi_setup_app_state.active = false;
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(wifi_manager_complete_setup(false), TAG, "complete setup failed");
+    ESP_RETURN_ON_ERROR(wifi_connection_complete_setup(false), TAG, "complete setup failed");
     s_wifi_setup_app_state.active = false;
     return ESP_OK;
 }
@@ -1028,17 +603,14 @@ static esp_err_t cyd_wifi_setup_app_step(void *ctx)
         cyd_wifi_setup_password_result_t result = CYD_WIFI_SETUP_PASSWORD_CONTINUE;
 
         if (cyd_input_read_event(&event, pdMS_TO_TICKS(WIFI_IDLE_POLL_MS)) != ESP_OK) {
-            if (app_shell_request_home_if_idle()) {
-                return ESP_OK;
-            }
-            return ESP_OK;
+            return cyd_wifi_setup_poll_password_session(NULL, &result);
         }
 
         ESP_RETURN_ON_ERROR(cyd_wifi_setup_poll_password_session(&event, &result),
                             TAG,
                             "password session failed");
         if (result == CYD_WIFI_SETUP_PASSWORD_CONNECTED) {
-            ESP_RETURN_ON_ERROR(wifi_manager_complete_setup(true), TAG, "complete setup failed");
+            ESP_RETURN_ON_ERROR(wifi_connection_complete_setup(true), TAG, "complete setup failed");
             s_wifi_setup_app_state.active = false;
             time_sync_request_soon_and_release_wifi();
             return cyd_wifi_setup_switch_back();
@@ -1052,12 +624,19 @@ static esp_err_t cyd_wifi_setup_app_step(void *ctx)
     return ESP_OK;
 }
 
+static bool cyd_wifi_setup_idle_return_suppressed(void *ctx)
+{
+    (void)ctx;
+    return s_wifi_setup_app_state.active;
+}
+
 static const app_shell_app_t s_cyd_wifi_setup_app = {
     .id = "wifi_setup",
     .ctx = NULL,
     .enter = cyd_wifi_setup_app_enter,
     .step = cyd_wifi_setup_app_step,
     .leave = cyd_wifi_setup_app_leave,
+    .idle_return_suppressed = cyd_wifi_setup_idle_return_suppressed,
 };
 
 const app_shell_app_t *cyd_wifi_setup_get_app(void)

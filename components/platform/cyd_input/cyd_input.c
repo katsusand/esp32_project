@@ -9,7 +9,9 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "nvs_health.h"
 #include "nvs.h"
+#include "nvs_schema.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
 #include "cyd_display.h"
@@ -65,7 +67,7 @@
 #endif
 
 typedef struct {
-    uint32_t magic;
+    uint32_t version;
     uint16_t params[8];
 } cyd_touch_calibration_store_t;
 
@@ -97,9 +99,7 @@ typedef struct {
 } cyd_input_state_t;
 
 static const char *TAG = "cyd_input";
-static const char *NVS_NAMESPACE = "cyd_display";
-static const char *NVS_TOUCH_CAL_KEY = "touch_cal";
-static const uint32_t TOUCH_CAL_MAGIC = 0x43594454;
+static const uint32_t TOUCH_CAL_VERSION = 1U;
 static const uint16_t TOUCH_CAL_RAW_MAX = 4095;
 static const uint16_t TOUCH_CAL_MIN_SPAN = 100;
 static const int32_t TOUCH_CAL_MIN_AREA = 10000;
@@ -253,8 +253,10 @@ static esp_err_t cyd_input_touch_calibration_erase_from_nvs(void)
 {
 #if CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
     nvs_handle_t nvs_handle;
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
-    esp_err_t err = nvs_erase_key(nvs_handle, NVS_TOUCH_CAL_KEY);
+    ESP_RETURN_ON_ERROR(nvs_open_descriptor(NVS_KEY_CYD_DISPLAY_TOUCH_CAL.ns, NVS_READWRITE, &nvs_handle),
+                        TAG,
+                        "open NVS failed");
+    esp_err_t err = nvs_erase_key(nvs_handle, NVS_KEY_CYD_DISPLAY_TOUCH_CAL.key);
     if (err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND) {
         err = nvs_commit(nvs_handle);
     }
@@ -268,14 +270,11 @@ static esp_err_t cyd_input_touch_calibration_erase_from_nvs(void)
 static esp_err_t cyd_input_touch_calibration_recover_invalid_nvs(const char *reason)
 {
 #if CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
-    ESP_LOGE(TAG, "invalid touch calibration in NVS (%s); erasing and restarting", reason);
-    esp_err_t err = cyd_input_touch_calibration_erase_from_nvs();
-    ESP_RETURN_ON_ERROR(err, TAG, "erase invalid touch calibration failed");
+    ESP_LOGE(TAG, "invalid touch calibration in NVS (%s); initialize required", reason);
+    nvs_health_report_invalid(&NVS_KEY_CYD_DISPLAY_TOUCH_CAL, ESP_ERR_INVALID_ARG, reason);
     s_input.touch_calibration_loaded = false;
     s_input.touch_calibration_saved = false;
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
-    return ESP_ERR_INVALID_STATE;
+    return ESP_ERR_INVALID_ARG;
 #else
     (void)reason;
     return ESP_ERR_NOT_SUPPORTED;
@@ -870,14 +869,14 @@ static esp_err_t cyd_input_touch_calibration_load_from_nvs(void)
 {
 #if CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
     nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    esp_err_t err = nvs_open_descriptor(NVS_KEY_CYD_DISPLAY_TOUCH_CAL.ns, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
         return err;
     }
 
     cyd_touch_calibration_store_t blob = { 0 };
     size_t required_size = sizeof(blob);
-    err = nvs_get_blob(nvs_handle, NVS_TOUCH_CAL_KEY, &blob, &required_size);
+    err = nvs_get_blob(nvs_handle, NVS_KEY_CYD_DISPLAY_TOUCH_CAL.key, &blob, &required_size);
     nvs_close(nvs_handle);
     if (err == ESP_ERR_NVS_INVALID_LENGTH) {
         ESP_LOGW(TAG,
@@ -896,9 +895,9 @@ static esp_err_t cyd_input_touch_calibration_load_from_nvs(void)
                  (unsigned)sizeof(blob));
         return cyd_input_touch_calibration_recover_invalid_nvs("size mismatch");
     }
-    if (blob.magic != TOUCH_CAL_MAGIC) {
-        ESP_LOGW(TAG, "touch calibration magic mismatch: 0x%08lx", (unsigned long)blob.magic);
-        return cyd_input_touch_calibration_recover_invalid_nvs("magic mismatch");
+    if (blob.version != TOUCH_CAL_VERSION) {
+        ESP_LOGW(TAG, "touch calibration header mismatch: 0x%08lx", (unsigned long)blob.version);
+        return cyd_input_touch_calibration_recover_invalid_nvs("version mismatch");
     }
     if (!cyd_input_touch_calibration_params_valid(blob.params)) {
         ESP_LOGW(TAG,
@@ -928,14 +927,16 @@ static esp_err_t cyd_input_touch_calibration_save_to_nvs(const uint16_t *params)
 {
 #if CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
     cyd_touch_calibration_store_t blob = {
-        .magic = TOUCH_CAL_MAGIC,
+        .version = TOUCH_CAL_VERSION,
     };
 
     memcpy(blob.params, params, sizeof(blob.params));
 
     nvs_handle_t nvs_handle;
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
-    esp_err_t err = nvs_set_blob(nvs_handle, NVS_TOUCH_CAL_KEY, &blob, sizeof(blob));
+    ESP_RETURN_ON_ERROR(nvs_open_descriptor(NVS_KEY_CYD_DISPLAY_TOUCH_CAL.ns, NVS_READWRITE, &nvs_handle),
+                        TAG,
+                        "open NVS failed");
+    esp_err_t err = nvs_set_blob(nvs_handle, NVS_KEY_CYD_DISPLAY_TOUCH_CAL.key, &blob, sizeof(blob));
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
     }

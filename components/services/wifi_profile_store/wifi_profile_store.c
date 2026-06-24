@@ -2,13 +2,11 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "nvs.h"
+#include "nvs_health.h"
+#include "nvs_schema.h"
 #include "wifi_profile_store.h"
 
 #define TAG "wifi_profile_store"
-#define NVS_NAMESPACE "esp32_wifi_sta"
-#define NVS_PROFILES_KEY "profiles_v1"
-#define NVS_LEGACY_SSID_KEY "ssid"
-#define NVS_LEGACY_PASSWORD_KEY "password"
 #define WIFI_PROFILE_STORE_VERSION 1U
 
 typedef struct {
@@ -28,6 +26,36 @@ typedef struct {
 static bool wifi_profile_store_entry_valid(const wifi_profile_store_entry_disk_t *entry)
 {
     return entry != NULL && entry->ssid[0] != '\0';
+}
+
+static bool wifi_profile_store_authmode_valid(uint8_t authmode)
+{
+    return authmode <= (uint8_t)WIFI_AUTH_WAPI_PSK;
+}
+
+static bool wifi_profile_store_blob_valid(const wifi_profile_store_blob_t *blob)
+{
+    if (blob == NULL || blob->version != WIFI_PROFILE_STORE_VERSION) {
+        return false;
+    }
+
+    for (size_t i = 0; i < WIFI_PROFILE_STORE_MAX_ENTRIES; ++i) {
+        const wifi_profile_store_entry_disk_t *entry = &blob->entries[i];
+        bool has_ssid = memchr(entry->ssid, '\0', sizeof(entry->ssid)) != NULL;
+        bool has_password = memchr(entry->password, '\0', sizeof(entry->password)) != NULL;
+
+        if (!has_ssid || !has_password) {
+            return false;
+        }
+        if (!wifi_profile_store_entry_valid(entry)) {
+            continue;
+        }
+        if (!wifi_profile_store_authmode_valid(entry->authmode)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 static void wifi_profile_store_sort_entries(wifi_profile_store_entry_t *entries, size_t count)
@@ -55,54 +83,35 @@ static esp_err_t wifi_profile_store_read_blob(wifi_profile_store_blob_t *blob)
     ESP_RETURN_ON_FALSE(blob != NULL, ESP_ERR_INVALID_ARG, TAG, "blob is null");
     memset(blob, 0, sizeof(*blob));
 
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    esp_err_t err = nvs_open_descriptor(NVS_KEY_WIFI_PROFILE_STORE_PROFILES.ns, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
         return err;
     }
 
-    err = nvs_get_blob(nvs_handle, NVS_PROFILES_KEY, blob, &blob_size);
+    err = nvs_get_blob(nvs_handle, NVS_KEY_WIFI_PROFILE_STORE_PROFILES.key, blob, &blob_size);
     nvs_close(nvs_handle);
     if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_INVALID_LENGTH) {
+            nvs_health_report_invalid(&NVS_KEY_WIFI_PROFILE_STORE_PROFILES, err, "invalid Wi-Fi profile blob length");
+        }
         return err;
     }
-    if (blob_size != sizeof(*blob) || blob->version != WIFI_PROFILE_STORE_VERSION) {
+    if (blob_size != sizeof(*blob)) {
+        ESP_LOGW(TAG, "invalid Wi-Fi profile blob size");
+        nvs_health_report_invalid(&NVS_KEY_WIFI_PROFILE_STORE_PROFILES,
+                                  ESP_ERR_NVS_INVALID_LENGTH,
+                                  "invalid Wi-Fi profile blob size");
+        return ESP_ERR_NVS_INVALID_LENGTH;
+    }
+    if (!wifi_profile_store_blob_valid(blob)) {
         ESP_LOGW(TAG, "invalid Wi-Fi profile blob");
+        nvs_health_report_invalid(&NVS_KEY_WIFI_PROFILE_STORE_PROFILES,
+                                  ESP_ERR_INVALID_VERSION,
+                                  "invalid Wi-Fi profile blob");
         return ESP_ERR_INVALID_VERSION;
     }
 
     return ESP_OK;
-}
-
-static esp_err_t wifi_profile_store_load_legacy_entry(wifi_profile_store_entry_t *entry)
-{
-    nvs_handle_t nvs_handle;
-    size_t ssid_len = sizeof(entry->ssid);
-    size_t password_len = sizeof(entry->password);
-
-    ESP_RETURN_ON_FALSE(entry != NULL, ESP_ERR_INVALID_ARG, TAG, "entry is null");
-    memset(entry, 0, sizeof(*entry));
-
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = nvs_get_str(nvs_handle, NVS_LEGACY_SSID_KEY, entry->ssid, &ssid_len);
-    if (err == ESP_OK) {
-        esp_err_t password_err = nvs_get_str(nvs_handle, NVS_LEGACY_PASSWORD_KEY, entry->password, &password_len);
-        if (password_err == ESP_ERR_NVS_NOT_FOUND) {
-            entry->password[0] = '\0';
-        } else if (password_err != ESP_OK) {
-            err = password_err;
-        }
-    }
-    nvs_close(nvs_handle);
-
-    if (err == ESP_OK) {
-        entry->authmode = WIFI_AUTH_OPEN;
-        entry->last_success_seq = 1;
-    }
-    return err;
 }
 
 static esp_err_t wifi_profile_store_write_blob(const wifi_profile_store_blob_t *blob)
@@ -110,9 +119,11 @@ static esp_err_t wifi_profile_store_write_blob(const wifi_profile_store_blob_t *
     nvs_handle_t nvs_handle;
 
     ESP_RETURN_ON_FALSE(blob != NULL, ESP_ERR_INVALID_ARG, TAG, "blob is null");
-    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "open NVS failed");
+    ESP_RETURN_ON_ERROR(nvs_open_descriptor(NVS_KEY_WIFI_PROFILE_STORE_PROFILES.ns, NVS_READWRITE, &nvs_handle),
+                        TAG,
+                        "open NVS failed");
 
-    esp_err_t err = nvs_set_blob(nvs_handle, NVS_PROFILES_KEY, blob, sizeof(*blob));
+    esp_err_t err = nvs_set_blob(nvs_handle, NVS_KEY_WIFI_PROFILE_STORE_PROFILES.key, blob, sizeof(*blob));
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
     }
@@ -125,25 +136,10 @@ static esp_err_t wifi_profile_store_prepare_blob_for_write(wifi_profile_store_bl
     ESP_RETURN_ON_FALSE(blob != NULL, ESP_ERR_INVALID_ARG, TAG, "blob is null");
 
     esp_err_t err = wifi_profile_store_read_blob(blob);
-    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_INVALID_LENGTH || err == ESP_ERR_INVALID_VERSION) {
-        wifi_profile_store_entry_t legacy_entry = { 0 };
+    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_INVALID_LENGTH || err == ESP_ERR_INVALID_VERSION || err == ESP_ERR_INVALID_ARG) {
         memset(blob, 0, sizeof(*blob));
         blob->version = WIFI_PROFILE_STORE_VERSION;
-
-        err = wifi_profile_store_load_legacy_entry(&legacy_entry);
-        if (err == ESP_OK && legacy_entry.ssid[0] != '\0') {
-            wifi_profile_store_entry_disk_t *dst = &blob->entries[0];
-            dst->authmode = (uint8_t)legacy_entry.authmode;
-            dst->last_success_seq = legacy_entry.last_success_seq;
-            strlcpy(dst->ssid, legacy_entry.ssid, sizeof(dst->ssid));
-            strlcpy(dst->password, legacy_entry.password, sizeof(dst->password));
-            blob->success_seq = legacy_entry.last_success_seq;
-            return ESP_OK;
-        }
-        if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_OK) {
-            return ESP_OK;
-        }
-        return err;
+        return ESP_OK;
     }
 
     return err;
@@ -166,20 +162,8 @@ esp_err_t wifi_profile_store_load_entries(wifi_profile_store_entry_t *entries,
     }
 
     err = wifi_profile_store_read_blob(&blob);
-    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_INVALID_LENGTH || err == ESP_ERR_INVALID_VERSION) {
-        wifi_profile_store_entry_t legacy_entry = { 0 };
-        err = wifi_profile_store_load_legacy_entry(&legacy_entry);
-        if (err == ESP_OK && legacy_entry.ssid[0] != '\0') {
-            if (entries != NULL && entry_capacity > 0) {
-                entries[0] = legacy_entry;
-            }
-            *entry_count = 1;
-            return ESP_OK;
-        }
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            return ESP_OK;
-        }
-        return err == ESP_OK ? ESP_OK : err;
+    if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_INVALID_LENGTH || err == ESP_ERR_INVALID_VERSION || err == ESP_ERR_INVALID_ARG) {
+        return ESP_OK;
     }
     ESP_RETURN_ON_ERROR(err, TAG, "read Wi-Fi profile blob failed");
 
