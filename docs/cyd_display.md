@@ -2,11 +2,11 @@
 
 ## Overview
 
-`cyd_display` は、CYD の TFT 画面とタッチ座標変換を扱う表示コンポーネントです。
+`cyd_display` は、CYD の TFT 画面表示だけを扱う表示コンポーネントです。
 
 内部では LovyanGFX を使って LCD を初期化し、表示要求を FreeRTOS キューに積んで、専用の表示タスクで描画します。アプリ側は、画面全体を表す `cyd_display_screen_t` を送るか、便利関数でテキスト画面、モード画面、ログビューを表示します。
 
-English supplement: This component owns the display queue, render task, LovyanGFX device, and dirty-strip rendering state. Application code should submit screens through the public API instead of drawing directly with LovyanGFX.
+English supplement: This component owns the display queue, render task, LovyanGFX device, and dirty-strip rendering state. Touch transport and calibration state are intentionally owned outside this component.
 
 ## Public API
 
@@ -207,17 +207,9 @@ English supplement: `cyd_display_log_push()` keeps the view tailing the newest l
 
 English supplement: Dirty rendering relies on comparing current and previous widget structs. Avoid leaving uninitialized bytes in widgets because they may cause unnecessary redraws.
 
-## Touch Helpers
+## Hit Test Helpers
 
-`cyd_display` は、低レベルのタッチ読み取りと座標変換も提供します。
-
-```c
-int16_t x = 0;
-int16_t y = 0;
-bool touched = false;
-
-ESP_ERROR_CHECK(cyd_display_get_touch_raw(&x, &y, &touched));
-```
+`cyd_display` は、画面上の座標に対する hit-test helper を提供します。低レベルのタッチ読み取り自体は `cyd_input` と `xpt2046_softspi` 側の責務です。
 
 グリッド座標へ変換する場合は `cyd_display_touch_to_grid()` を使います。
 
@@ -242,6 +234,28 @@ if (cyd_display_touch_to_grid(x, y, &col, &row)) {
 `cyd_display_get_mode_button_grid_rect()` と `cyd_display_hit_test_mode_button()` は、最後に送信されたモード画面またはボタンウィジェットの内部マップを参照します。
 
 English supplement: Generic action hit testing reads button widgets from the current screen. Mode button hit testing uses the most recently rendered button map maintained by the display component.
+
+## Calibration Drawing Helpers
+
+タッチ補正フローそのものは `cyd_input` が担当しますが、補正ターゲットの描画は `cyd_display` が行います。
+
+```c
+ESP_ERROR_CHECK(cyd_display_claim_owner());
+ESP_ERROR_CHECK(cyd_display_show_touch_calibration_screen());
+ESP_ERROR_CHECK(cyd_display_draw_touch_calibration_target(0, 0, 14, true));
+ESP_ERROR_CHECK(cyd_display_draw_touch_calibration_target(0, 0, 14, false));
+ESP_ERROR_CHECK(cyd_display_invalidate());
+ESP_ERROR_CHECK(cyd_display_release_owner());
+```
+
+補助 API は以下です。
+
+- `cyd_display_show_touch_calibration_screen()`: 補正導入画面を即時描画する
+- `cyd_display_draw_touch_calibration_target()`: 1点ぶんのターゲットを即時描画または消去する
+- `cyd_display_invalidate()`: 次の通常画面を full redraw させる
+- `cyd_display_get_width()` / `cyd_display_get_height()`: 現在の論理表示サイズを返す
+
+English supplement: These helpers are display-only primitives used by `cyd_input_run_touch_calibration()`. They do not read the touch controller or store calibration data.
 
 ## Brightness
 
@@ -269,31 +283,15 @@ English supplement: `cyd_display_set_brightness()` applies the change immediatel
 
 ## Calibration
 
-タッチ補正を適用する場合は `cyd_display_apply_touch_calibration()` を使います。
-
-```c
-uint16_t params[8] = { 0 };
-ESP_ERROR_CHECK(cyd_display_apply_touch_calibration(params, 8));
-```
-
-タッチ補正フローを実行する場合は `cyd_display_calibrate_touch()` を使います。
-
-```c
-uint16_t params[8] = { 0 };
-ESP_ERROR_CHECK(cyd_display_calibrate_touch(params, 8));
-```
-
-補正値の保存や読み込みは `cyd_input` 側が担当します。通常のアプリでは `cyd_input_run_touch_calibration()` を使う方が扱いやすいです。
-
-English supplement: `cyd_display_calibrate_touch()` only obtains calibration parameters. Persistent storage is intentionally handled by `cyd_input`.
+通常の補正フローは `cyd_input_run_touch_calibration()` を使います。`cyd_display` はその中で target 描画だけを担当します。
 
 注意:
 
-- `cyd_display_calibrate_touch()` の戻り値を、そのまま永続保存用データとして扱ってよいとは限りません
-- このプロジェクトの既定構成では、LovyanGFX が補正中に使う一時回転と実行時の `CONFIG_CYD_TOUCH_OFFSET_ROTATION` 解釈が一致しないため、4 点の並びを無加工で `setTouchCalibrate()` に再利用すると X/Y の増減が反転した状態を保存してしまうことがあります
-- 永続保存まで含む通常フローでは `cyd_input_run_touch_calibration()` を使ってください
+- touch transport は `xpt2046_softspi` が所有する
+- 補正 4点の raw 取得、affine 計算、NVS 保存/復元は `cyd_input` が所有する
+- `cyd_display` は display-only を保つため、補正値の保存や touch controller 読み取りを行わない
 
-English supplement: `cyd_display_calibrate_touch()` is a low-level primitive. In this project, persistent touch calibration must go through `cyd_input_run_touch_calibration()` so the returned raw corner order can be normalized for runtime reuse.
+English supplement: Keep touch transport and calibration math out of `cyd_display`. The display component should remain reusable for display-only products.
 
 ## Configuration
 

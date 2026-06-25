@@ -1,0 +1,56 @@
+menu "SD Card Storage"
+
+    config SD_CARD_STORAGE_ENABLED
+        bool "Enable SD card storage over SPI"
+        default y
+        help
+            Mount a FAT-formatted SD card through the ESP-IDF SDSPI host.
+
+    config SD_CARD_STORAGE_SPI_HOST
+        int "SD card SPI host"
+        default 3
+        range 2 3
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            2 = SPI2_HOST, 3 = SPI3_HOST.
+
+    config SD_CARD_STORAGE_PIN_SCLK
+        int "SD card SCLK GPIO"
+        default 18
+        range -1 48
+        depends on SD_CARD_STORAGE_ENABLED
+
+    config SD_CARD_STORAGE_PIN_MOSI
+        int "SD card MOSI GPIO"
+        default 23
+        range -1 48
+        depends on SD_CARD_STORAGE_ENABLED
+
+    config SD_CARD_STORAGE_PIN_MISO
+        int "SD card MISO GPIO"
+        default 19
+        range -1 48
+        depends on SD_CARD_STORAGE_ENABLED
+
+    config SD_CARD_STORAGE_PIN_CS
+        int "SD card CS GPIO"
+        default 5
+        range -1 48
+        depends on SD_CARD_STORAGE_ENABLED
+
+    config SD_CARD_STORAGE_MOUNT_MAX_FILES
+        int "SD card max open files"
+        default 5
+        range 1 32
+        depends on SD_CARD_STORAGE_ENABLED
+
+    config SD_CARD_STORAGE_ALLOCATION_UNIT_SIZE
+        int "SD card allocation unit size"
+        default 16384
+        range 512 65536
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            English supplement: FAT mount allocation unit hint passed to
+            `esp_vfs_fat_sdspi_mount()`.
+
+endmenu

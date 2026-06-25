@@ -10,6 +10,7 @@
 #include "cyd_display.h"
 #include "cyd_speaker.h"
 #include "cyd_system_apps.h"
+#include "sd_card_storage.h"
 #include "system_boot.h"
 #include "time_tick.h"
 
@@ -139,6 +140,7 @@ esp_err_t cyd_clock_composition_start(void)
     const app_shell_app_t *initial_app = cyd_clock_app_get_app();
 
     ESP_RETURN_ON_ERROR(system_boot_start(&boot_result), TAG, "system boot failed");
+    ESP_RETURN_ON_ERROR(sd_card_storage_init(), TAG, "sd card init failed");
     ESP_RETURN_ON_ERROR(time_tick_start(), TAG, "time tick start failed");
     ESP_RETURN_ON_ERROR(app_scheduler_init(), TAG, "scheduler init failed");
     ESP_RETURN_ON_ERROR(app_scheduler_register_handler(CYD_CLOCK_ALARM_OWNER,

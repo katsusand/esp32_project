@@ -4,7 +4,7 @@
 
 `cyd_input` は、CYD のタッチ入力と基板上の簡易 GPIO ボタン入力をアプリから扱いやすくするための入力コンポーネントです。
 
-主な対象は XPT2046 タッチコントローラーです。`cyd_display` から取得したタッチ座標を周期的に読み取り、押下、離上、クリック、長押しのイベントへ変換します。
+主な対象は XPT2046 タッチコントローラーです。`xpt2046_softspi` から raw 座標を周期的に読み取り、`cyd_input` 内で補正して、押下、離上、クリック、長押しのイベントへ変換します。
 
 GPIO0 の BOOT ボタンも `CYD_INPUT_EVENT_GPIO_BUTTON` として扱えます。BOOT ボタンは ESP32 の UART download mode に入るための strapping pin でもあるため、リセット中または起動時に押し続けると通常のアプリ起動ではなくフラッシュ用モードへ入ります。アプリ起動後は active-low の通常入力として利用できます。
 
@@ -99,7 +99,7 @@ ESP_ERROR_CHECK(cyd_input_run_touch_calibration());
 ESP_ERROR_CHECK(cyd_input_clear_touch_calibration());
 ```
 
-English supplement: `cyd_input_init()` depends on display touch access. Initialize `cyd_display` before `cyd_input`.
+English supplement: `cyd_input_init()` depends on `cyd_display` for calibration target drawing and on `xpt2046_softspi` for raw touch transport. Initialize `cyd_display` before `cyd_input`.
 
 ## Event Model
 
@@ -224,7 +224,7 @@ English supplement: Treat BOOT as a user button only after firmware has started.
 
 ## Calibration
 
-タッチ補正は `cyd_display` のタッチ補正機能を使って実行されます。`CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION` が有効な場合、補正値は NVS に保存されます。
+タッチ補正は `cyd_input` が実行します。raw 読み取りは `xpt2046_softspi`、ターゲット描画は `cyd_display` を使います。`CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION` が有効な場合、補正値は NVS に保存されます。
 
 保存先は以下です。
 
@@ -235,7 +235,7 @@ English supplement: Treat BOOT as a user button only after firmware has started.
 
 保存済み補正値は versioned blob として保存します。blob サイズ、version/header、または raw 座標が異常な場合は、その値を信用せず `Initialize NVS` を要求する warning 対象として扱います。
 
-English supplement: Calibration data is stored by `cyd_input`, but the raw calibration operation is performed by `cyd_display_calibrate_touch()` and applied by `cyd_display_apply_touch_calibration()`.
+English supplement: Calibration data, affine math, and runtime touch mapping are owned by `cyd_input`. `cyd_display` is only responsible for drawing the targets used during calibration.
 
 このプロジェクトでは、保存済み補正がない場合でも `CONFIG_CYD_TOUCH_X_MIN/X_MAX/Y_MIN/Y_MAX` と `CONFIG_CYD_TOUCH_OFFSET_ROTATION` を使ったデフォルト変換で最低限の操作を可能にします。ただし、これは「保存済み補正」とは別状態です。起動時にキャリブレーション導線へ入れるかどうか、無操作復帰を許可するかどうかは、保存済み補正の有無で判定します。
 
@@ -247,19 +247,18 @@ English supplement: Calibration data is stored by `cyd_input`, but the raw calib
 
 キャリブレーション保存時の注意:
 
-- `cyd_display_calibrate_touch()` は内部で一時的に回転状態を変えて 4 点の raw 座標を取得する
-- その 4 点をこの基板設定のまま `setTouchCalibrate()` 用データとして無加工で保存すると、実行時に X/Y の増減が反転した状態で再現されることがある
-- このプロジェクトでは `cyd_input_run_touch_calibration()` が、取得した 4 点をランタイム向け順序へ正規化してから再適用・保存する
-- そのため、通常のアプリや system settings からタッチ補正を起動する場合は `cyd_input_run_touch_calibration()` を使い、`cyd_display_calibrate_touch()` と `cyd_display_apply_touch_calibration()` を直接つないで使わない
+- 保存 blob は従来どおり raw 4点 `uint16_t[8]` を versioned blob として保持する
+- `cyd_input_run_touch_calibration()` は画面 4隅の target を `cyd_display` で描き、各 target で安定した raw 値を平均して保存する
+- runtime では保存済み 4点、または `CONFIG_CYD_TOUCH_X_MIN/X_MAX/Y_MIN/Y_MAX` の default 4点から affine を組み立てて座標変換する
+- そのため、通常のアプリや system settings からタッチ補正を起動する場合は `cyd_input_run_touch_calibration()` を使う
 
-English supplement: On this board, the default raw touch mapping is correct with `CONFIG_CYD_DISPLAY_ROTATION=1` and `CONFIG_CYD_TOUCH_OFFSET_ROTATION=4`, but the raw corner order returned by LovyanGFX calibration is not directly reusable for persistence. `cyd_input_run_touch_calibration()` normalizes the corner order before saving so reboot behavior matches immediate post-calibration behavior.
+English supplement: This keeps the persisted `touch_cal` blob layout stable while removing the transport dependency from `cyd_display`.
 
 ## Configuration
 
-主な設定項目は `idf.py menuconfig` の `CYD Input` から変更できます。
+主な設定項目は `idf.py menuconfig` の `CYD Input` と `XPT2046 SoftSPI` から変更できます。
 
 - `CONFIG_CYD_TOUCH_ENABLED`: タッチ入力を有効にする
-- `CONFIG_CYD_TOUCH_SPI_HOST`: タッチコントローラーの SPI host
 - `CONFIG_CYD_TOUCH_PIN_SCLK`: タッチ SCLK GPIO
 - `CONFIG_CYD_TOUCH_PIN_MOSI`: タッチ MOSI GPIO
 - `CONFIG_CYD_TOUCH_PIN_MISO`: タッチ MISO GPIO

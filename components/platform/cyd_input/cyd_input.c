@@ -16,6 +16,7 @@
 #include "app_stack_monitor.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
+#include "xpt2046_softspi.h"
 
 #ifndef CONFIG_CYD_INPUT_LONG_PRESS_REPEAT_MS
 #define CONFIG_CYD_INPUT_LONG_PRESS_REPEAT_MS 1000
@@ -91,6 +92,7 @@ typedef struct {
     TickType_t boot_button_release_tick;
     int16_t last_touch_x;
     int16_t last_touch_y;
+    float touch_affine[6];
     cyd_input_touch_state_t touch_state;
     TickType_t last_activity_tick;
     SemaphoreHandle_t mutex;
@@ -124,6 +126,7 @@ static cyd_input_state_t s_input = {
     .boot_button_release_tick = 0,
     .last_touch_x = 0,
     .last_touch_y = 0,
+    .touch_affine = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f },
     .touch_state = {
         .pressed = false,
         .x = 0,
@@ -155,6 +158,149 @@ static uint16_t cyd_input_u16_max(uint16_t lhs, uint16_t rhs)
 static int32_t cyd_input_abs_i32(int32_t value)
 {
     return value < 0 ? -value : value;
+}
+
+static int32_t cyd_input_touch_calibration_width(void)
+{
+    int32_t width = CONFIG_CYD_DISPLAY_WIDTH;
+    int32_t height = CONFIG_CYD_DISPLAY_HEIGHT;
+
+    if ((CONFIG_CYD_TOUCH_OFFSET_ROTATION & 1) != 0) {
+        int32_t tmp = width;
+        width = height;
+        height = tmp;
+    }
+
+    return width;
+}
+
+static int32_t cyd_input_touch_calibration_height(void)
+{
+    int32_t width = CONFIG_CYD_DISPLAY_WIDTH;
+    int32_t height = CONFIG_CYD_DISPLAY_HEIGHT;
+
+    if ((CONFIG_CYD_TOUCH_OFFSET_ROTATION & 1) != 0) {
+        int32_t tmp = width;
+        width = height;
+        height = tmp;
+    }
+
+    return height;
+}
+
+static void cyd_input_touch_calibration_default_params(uint16_t *params)
+{
+    if (params == NULL) {
+        return;
+    }
+
+    params[0] = CONFIG_CYD_TOUCH_X_MIN;
+    params[1] = CONFIG_CYD_TOUCH_Y_MIN;
+    params[2] = CONFIG_CYD_TOUCH_X_MIN;
+    params[3] = CONFIG_CYD_TOUCH_Y_MAX;
+    params[4] = CONFIG_CYD_TOUCH_X_MAX;
+    params[5] = CONFIG_CYD_TOUCH_Y_MIN;
+    params[6] = CONFIG_CYD_TOUCH_X_MAX;
+    params[7] = CONFIG_CYD_TOUCH_Y_MAX;
+}
+
+static esp_err_t cyd_input_touch_calibration_set_runtime(const uint16_t *params)
+{
+    ESP_RETURN_ON_FALSE(params != NULL, ESP_ERR_INVALID_ARG, TAG, "touch params required");
+
+    uint32_t vect[6] = { 0, 0, 0, 0, 0, 0 };
+    float mat[3][3] = {
+        { 0.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f },
+    };
+    int32_t width = cyd_input_touch_calibration_width();
+    int32_t height = cyd_input_touch_calibration_height();
+
+    for (int i = 0; i < 4; ++i) {
+        int32_t tx = (i & 2) ? (width - 1) : 0;
+        int32_t ty = (i & 1) ? (height - 1) : 0;
+        int32_t px = params[i * 2];
+        int32_t py = params[i * 2 + 1];
+        float a = (float)(px * px);
+        mat[0][0] += a;
+        a = (float)(px * py);
+        mat[0][1] += a;
+        mat[1][0] += a;
+        a = (float)px;
+        mat[0][2] += a;
+        mat[2][0] += a;
+        a = (float)(py * py);
+        mat[1][1] += a;
+        a = (float)py;
+        mat[1][2] += a;
+        mat[2][1] += a;
+        mat[2][2] += 1.0f;
+
+        vect[0] += (uint32_t)(px * tx);
+        vect[1] += (uint32_t)(py * tx);
+        vect[2] += (uint32_t)tx;
+        vect[3] += (uint32_t)(px * ty);
+        vect[4] += (uint32_t)(py * ty);
+        vect[5] += (uint32_t)ty;
+    }
+
+    for (int k = 0; k < 3; ++k) {
+        float t = mat[k][k];
+        ESP_RETURN_ON_FALSE(t != 0.0f, ESP_ERR_INVALID_ARG, TAG, "touch calibration matrix is singular");
+
+        for (int i = 0; i < 3; ++i) {
+            mat[k][i] /= t;
+        }
+
+        mat[k][k] = 1.0f / t;
+        for (int j = 0; j < 3; ++j) {
+            if (j == k) {
+                continue;
+            }
+
+            float u = mat[j][k];
+            for (int i = 0; i < 3; ++i) {
+                if (i != k) {
+                    mat[j][i] -= mat[k][i] * u;
+                } else {
+                    mat[j][i] = -u / t;
+                }
+            }
+        }
+    }
+
+    float v0 = (float)vect[0];
+    float v1 = (float)vect[1];
+    float v2 = (float)vect[2];
+    s_input.touch_affine[0] = mat[0][0] * v0 + mat[0][1] * v1 + mat[0][2] * v2;
+    s_input.touch_affine[1] = mat[1][0] * v0 + mat[1][1] * v1 + mat[1][2] * v2;
+    s_input.touch_affine[2] = mat[2][0] * v0 + mat[2][1] * v1 + mat[2][2] * v2;
+
+    float v3 = (float)vect[3];
+    float v4 = (float)vect[4];
+    float v5 = (float)vect[5];
+    s_input.touch_affine[3] = mat[0][0] * v3 + mat[0][1] * v4 + mat[0][2] * v5;
+    s_input.touch_affine[4] = mat[1][0] * v3 + mat[1][1] * v4 + mat[1][2] * v5;
+    s_input.touch_affine[5] = mat[2][0] * v3 + mat[2][1] * v4 + mat[2][2] * v5;
+    return ESP_OK;
+}
+
+static void cyd_input_touch_transform_raw(int16_t raw_x, int16_t raw_y, int16_t *x, int16_t *y)
+{
+    int32_t tx = (int32_t)(s_input.touch_affine[0] * (float)raw_x +
+                           s_input.touch_affine[1] * (float)raw_y) +
+                 (int32_t)s_input.touch_affine[2];
+    int32_t ty = (int32_t)(s_input.touch_affine[3] * (float)raw_x +
+                           s_input.touch_affine[4] * (float)raw_y) +
+                 (int32_t)s_input.touch_affine[5];
+
+    if (x != NULL) {
+        *x = (int16_t)tx;
+    }
+    if (y != NULL) {
+        *y = (int16_t)ty;
+    }
 }
 
 static int32_t cyd_input_touch_calibration_triangle_area2(const uint16_t *params, size_t a, size_t b, size_t c)
@@ -209,43 +355,20 @@ static bool cyd_input_touch_calibration_params_valid(const uint16_t *params)
     return false;
 }
 
-static void cyd_input_touch_calibration_normalize_for_runtime(uint16_t *params)
-{
-    if (params == NULL) {
-        return;
-    }
-
-#if CONFIG_CYD_TOUCH_OFFSET_ROTATION == 4
-    /* calibrate_touch() samples corners while LovyanGFX temporarily changes
-       display rotation. With this project's touch default path
-       (display rotation 1, touch offset rotation 4), the returned corner
-       sequence ends up 180 degrees out when reused later via
-       setTouchCalibrate(), which flips both axes. Normalize the corners back
-       into the runtime order expected by setCalibrate():
-       top-left, bottom-left, top-right, bottom-right. */
-    const uint16_t normalized[8] = {
-        params[6], params[7],
-        params[4], params[5],
-        params[2], params[3],
-        params[0], params[1],
-    };
-    memcpy(params, normalized, sizeof(normalized));
-#endif
-}
-
 static esp_err_t cyd_input_touch_calibration_apply_default(void)
 {
-    /* Fallback to the pre-calibration behavior provided by the XPT2046 config
-       in cyd_display.cpp. Do not call setTouchCalibrate() here, or the axis
-       range gets applied twice. */
+    uint16_t params[8] = { 0 };
+    cyd_input_touch_calibration_default_params(params);
+    ESP_RETURN_ON_ERROR(cyd_input_touch_calibration_set_runtime(params), TAG, "set default touch calibration failed");
     s_input.touch_calibration_loaded = true;
     s_input.touch_calibration_saved = false;
     ESP_LOGW(TAG,
-             "no saved touch calibration, using default XPT2046 config x=[%d,%d] y=[%d,%d]",
+             "no saved touch calibration, using default XPT2046 config x=[%d,%d] y=[%d,%d] rot_off=%d",
              CONFIG_CYD_TOUCH_X_MIN,
              CONFIG_CYD_TOUCH_X_MAX,
              CONFIG_CYD_TOUCH_Y_MIN,
-             CONFIG_CYD_TOUCH_Y_MAX);
+             CONFIG_CYD_TOUCH_Y_MAX,
+             CONFIG_CYD_TOUCH_OFFSET_ROTATION);
     return ESP_OK;
 }
 
@@ -746,6 +869,104 @@ static void cyd_input_handle_boot_button_sample(TickType_t now)
     cyd_input_emit_boot_button_event(CYD_INPUT_BUTTON_ACTION_LONG_PRESS, true, hold_seconds, now);
 }
 
+static esp_err_t cyd_input_touch_read_sample(int16_t *x, int16_t *y, bool *pressed)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    int16_t raw_x = 0;
+    int16_t raw_y = 0;
+    bool raw_pressed = false;
+
+    ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(&raw_x, &raw_y, &raw_pressed), TAG, "touch raw read failed");
+    if (raw_pressed) {
+        cyd_input_touch_transform_raw(raw_x, raw_y, x, y);
+    } else {
+        if (x != NULL) {
+            *x = 0;
+        }
+        if (y != NULL) {
+            *y = 0;
+        }
+    }
+    if (pressed != NULL) {
+        *pressed = raw_pressed;
+    }
+    return ESP_OK;
+#else
+    if (x != NULL) {
+        *x = 0;
+    }
+    if (y != NULL) {
+        *y = 0;
+    }
+    if (pressed != NULL) {
+        *pressed = false;
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+static esp_err_t cyd_input_touch_collect_calibration_point(uint16_t *raw_x, uint16_t *raw_y)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    static const int32_t RAW_ERR = 20;
+    int32_t x_accum = 0;
+    int32_t y_accum = 0;
+    int16_t sample_x = 0;
+    int16_t sample_y = 0;
+    int16_t confirm_x = 0;
+    int16_t confirm_y = 0;
+    bool sample_pressed = false;
+    bool confirm_pressed = false;
+
+    ESP_RETURN_ON_FALSE(raw_x != NULL && raw_y != NULL, ESP_ERR_INVALID_ARG, TAG, "calibration point required");
+
+    for (int j = 0; j < 8; ++j) {
+        do {
+            do {
+                vTaskDelay(pdMS_TO_TICKS(2));
+                ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(&sample_x, &sample_y, &sample_pressed),
+                                    TAG,
+                                    "touch raw read failed");
+            } while (!sample_pressed);
+
+            vTaskDelay(pdMS_TO_TICKS(10));
+            ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(&confirm_x, &confirm_y, &confirm_pressed),
+                                TAG,
+                                "touch raw confirm failed");
+        } while (!confirm_pressed ||
+                 cyd_input_abs_i32((int32_t)sample_x - (int32_t)confirm_x) > RAW_ERR ||
+                 cyd_input_abs_i32((int32_t)sample_y - (int32_t)confirm_y) > RAW_ERR);
+
+        x_accum += sample_x;
+        x_accum += confirm_x;
+        y_accum += sample_y;
+        y_accum += confirm_y;
+    }
+
+    *raw_x = (uint16_t)(x_accum >> 4);
+    *raw_y = (uint16_t)(y_accum >> 4);
+    return ESP_OK;
+#else
+    (void)raw_x;
+    (void)raw_y;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+static esp_err_t cyd_input_touch_wait_for_release(void)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    bool pressed = false;
+    do {
+        vTaskDelay(pdMS_TO_TICKS(1));
+        ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(NULL, NULL, &pressed), TAG, "touch release read failed");
+    } while (pressed);
+    return ESP_OK;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
 static void cyd_input_task(void *arg)
 {
     (void)arg;
@@ -793,7 +1014,7 @@ static void cyd_input_task(void *arg)
         int16_t raw_x = 0;
         int16_t raw_y = 0;
         bool raw_pressed = false;
-        esp_err_t err = cyd_display_get_touch_raw(&raw_x, &raw_y, &raw_pressed);
+        esp_err_t err = cyd_input_touch_read_sample(&raw_x, &raw_y, &raw_pressed);
         TickType_t now = xTaskGetTickCount();
 
         if (err == ESP_OK) {
@@ -913,7 +1134,9 @@ static esp_err_t cyd_input_touch_calibration_load_from_nvs(void)
         return cyd_input_touch_calibration_recover_invalid_nvs("invalid params");
     }
 
-    ESP_RETURN_ON_ERROR(cyd_display_apply_touch_calibration(blob.params, 8), TAG, "apply touch calibration failed");
+    ESP_RETURN_ON_ERROR(cyd_input_touch_calibration_set_runtime(blob.params),
+                        TAG,
+                        "apply touch calibration failed");
     s_input.touch_calibration_loaded = true;
     s_input.touch_calibration_saved = true;
     ESP_LOGI(TAG, "loaded touch calibration from NVS");
@@ -967,6 +1190,8 @@ esp_err_t cyd_input_init(void)
     ESP_RETURN_ON_ERROR(cyd_input_boot_button_configure(), TAG, "BOOT button init failed");
 
 #if CONFIG_CYD_TOUCH_ENABLED
+    ESP_RETURN_ON_ERROR(xpt2046_softspi_init(), TAG, "touch transport init failed");
+
     if (CONFIG_CYD_TOUCH_PIN_INT >= 0) {
         gpio_config_t int_cfg = {
             .pin_bit_mask = 1ULL << CONFIG_CYD_TOUCH_PIN_INT,
@@ -1013,7 +1238,7 @@ esp_err_t cyd_input_init(void)
     }
 
     ESP_LOGI(TAG,
-             "CYD touch input task started: poll=%d ms idle_poll=%d ms queue=%d irq_wake=%d irq_gpio=%d log=%d irq_log=%d",
+             "CYD touch input task started: poll=%d ms idle_poll=%d ms queue=%d irq_wake=%d irq_gpio=%d log=%d irq_log=%d transport=softspi",
              CONFIG_CYD_TOUCH_POLL_PERIOD_MS,
              CONFIG_CYD_TOUCH_IDLE_POLL_PERIOD_MS,
              CONFIG_CYD_INPUT_EVENT_QUEUE_LENGTH,
@@ -1145,6 +1370,11 @@ esp_err_t cyd_input_run_touch_calibration(void)
 #if CONFIG_CYD_TOUCH_ENABLED
     uint16_t params[8] = { 0 };
     bool task_suspended = false;
+    static const uint8_t CAL_RADIUS = 14;
+    int32_t width = cyd_display_get_width();
+    int32_t height = cyd_display_get_height();
+    const int32_t target_x[4] = { 0, 0, width - 1, width - 1 };
+    const int32_t target_y[4] = { 0, height - 1, 0, height - 1 };
 
     if (s_input.task_handle != NULL) {
         vTaskSuspend(s_input.task_handle);
@@ -1154,11 +1384,32 @@ esp_err_t cyd_input_run_touch_calibration(void)
         gpio_intr_disable((gpio_num_t)CONFIG_CYD_TOUCH_PIN_INT);
     }
 
-    esp_err_t err = cyd_display_calibrate_touch(params, 8);
+    esp_err_t err = cyd_display_show_touch_calibration_screen();
     if (err == ESP_OK) {
-        cyd_input_touch_calibration_normalize_for_runtime(params);
-        err = cyd_display_apply_touch_calibration(params, 8);
+        vTaskDelay(pdMS_TO_TICKS(800));
     }
+    for (size_t i = 0; err == ESP_OK && i < 4; ++i) {
+        err = cyd_display_draw_touch_calibration_target(target_x[i], target_y[i], CAL_RADIUS, true);
+        if (err != ESP_OK) {
+            break;
+        }
+
+        err = cyd_input_touch_collect_calibration_point(&params[i * 2], &params[i * 2 + 1]);
+        if (err != ESP_OK) {
+            break;
+        }
+
+        err = cyd_display_draw_touch_calibration_target(target_x[i], target_y[i], CAL_RADIUS, false);
+        if (err != ESP_OK) {
+            break;
+        }
+
+        err = cyd_input_touch_wait_for_release();
+    }
+    if (err == ESP_OK) {
+        err = cyd_input_touch_calibration_set_runtime(params);
+    }
+    (void)cyd_display_invalidate();
     cyd_input_reset_touch_runtime_state();
     if (task_suspended) {
         vTaskResume(s_input.task_handle);

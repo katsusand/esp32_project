@@ -82,7 +82,7 @@ English supplement: Feature-scoped data may legitimately exist even when a build
   keys:
   - `touch_cal`
   file: [components/platform/cyd_input/cyd_input.c](/Users/katsuandkoseto/dev/github/katsusand/esp32_project/components/platform/cyd_input/cyd_input.c:100)
-  note: タッチ補正 blob。現状は `cyd_display` namespace に同居している。versioned blob のみ受け付ける
+  note: タッチ補正 blob。transport は `xpt2046_softspi`、補正ロジックと保存 owner は `cyd_input`。現状は `cyd_display` namespace に同居している。versioned blob のみ受け付ける
 
 - namespace: `app_shell`
   owner: `app_shell`

@@ -80,9 +80,6 @@ class LGFX_CYD : public lgfx::LGFX_Device
     #endif
     lgfx::Bus_SPI _bus_instance;
     lgfx::Light_PWM _light_instance;
-#if CONFIG_CYD_TOUCH_ENABLED
-    lgfx::Touch_XPT2046 _touch_instance;
-#endif
 
 public:
     LGFX_CYD(void)
@@ -133,27 +130,6 @@ public:
             _light_instance.config(cfg);
             _panel_instance.setLight(&_light_instance);
         }
-
-#if CONFIG_CYD_TOUCH_ENABLED
-        {
-            auto cfg = _touch_instance.config();
-            cfg.x_min = CONFIG_CYD_TOUCH_X_MIN;
-            cfg.x_max = CONFIG_CYD_TOUCH_X_MAX;
-            cfg.y_min = CONFIG_CYD_TOUCH_Y_MIN;
-            cfg.y_max = CONFIG_CYD_TOUCH_Y_MAX;
-            cfg.pin_int = -1;
-            cfg.bus_shared = false;
-            cfg.offset_rotation = CONFIG_CYD_TOUCH_OFFSET_ROTATION;
-            cfg.spi_host = cyd_spi_host_from_config(CONFIG_CYD_TOUCH_SPI_HOST);
-            cfg.freq = 1000000;
-            cfg.pin_sclk = CONFIG_CYD_TOUCH_PIN_SCLK;
-            cfg.pin_mosi = CONFIG_CYD_TOUCH_PIN_MOSI;
-            cfg.pin_miso = CONFIG_CYD_TOUCH_PIN_MISO;
-            cfg.pin_cs = CONFIG_CYD_TOUCH_PIN_CS;
-            _touch_instance.config(cfg);
-            _panel_instance.setTouch(&_touch_instance);
-        }
-#endif
 
         setPanel(&_panel_instance);
     }
@@ -291,6 +267,13 @@ static void cyd_display_draw_left_line(TDisplay &display,
                                        int32_t y,
                                        uint8_t text_size,
                                        uint16_t color);
+template <typename TDisplay>
+static void cyd_display_draw_calibration_marker(TDisplay &display,
+                                                int32_t x,
+                                                int32_t y,
+                                                int32_t radius,
+                                                uint16_t fg_color,
+                                                uint16_t bg_color);
 static void cyd_display_clear_mode_button_map(void);
 static int32_t cyd_display_col_to_px(uint8_t col);
 static int32_t cyd_display_row_to_px(uint8_t row);
@@ -415,6 +398,45 @@ static void cyd_display_draw_left_line(TDisplay &display,
     display.setTextSize(text_size);
     display.setTextColor(color, TFT_BLACK);
     display.drawString(text.c_str(), x, y);
+}
+
+template <typename TDisplay>
+static void cyd_display_draw_calibration_marker(TDisplay &display,
+                                                int32_t x,
+                                                int32_t y,
+                                                int32_t radius,
+                                                uint16_t fg_color,
+                                                uint16_t bg_color)
+{
+    int32_t left = x - radius;
+    int32_t top = y - radius;
+    int32_t size = radius * 2 + 1;
+    display.fillRect(left, top, size, size, bg_color);
+    if (fg_color == bg_color) {
+        return;
+    }
+
+    int32_t line_half_width = radius >> 3;
+    if (line_half_width < 1) {
+        line_half_width = 1;
+    }
+
+    display.setClipRect(left, top, size, size);
+    display.fillRect(x - line_half_width,
+                     y - radius,
+                     line_half_width * 2 + 1,
+                     radius * 2 + 1,
+                     fg_color);
+    display.fillRect(x - radius,
+                     y - line_half_width,
+                     radius * 2 + 1,
+                     line_half_width * 2 + 1,
+                     fg_color);
+    for (int32_t i = -radius; i <= radius; ++i) {
+        display.drawFastHLine(x + i - line_half_width, y + i, line_half_width * 2 + 1, fg_color);
+        display.drawFastHLine(x - i - line_half_width, y + i, line_half_width * 2 + 1, fg_color);
+    }
+    display.clearClipRect();
 }
 
 static void cyd_display_clear_mode_button_map(void)
@@ -1126,16 +1148,6 @@ extern "C" esp_err_t cyd_display_init(void)
              CYD_DISPLAY_INVERT,
              CYD_DISPLAY_RGB_ORDER,
              CYD_DISPLAY_READABLE);
-#if CONFIG_CYD_TOUCH_ENABLED
-    ESP_LOGI(TAG,
-             "CYD touch configured: XPT2046 SCLK=%d MOSI=%d MISO=%d CS=%d INT=%d lgfx_int=-1 host=%d",
-             CONFIG_CYD_TOUCH_PIN_SCLK,
-             CONFIG_CYD_TOUCH_PIN_MOSI,
-             CONFIG_CYD_TOUCH_PIN_MISO,
-             CONFIG_CYD_TOUCH_PIN_CS,
-             CONFIG_CYD_TOUCH_PIN_INT,
-             CONFIG_CYD_TOUCH_SPI_HOST);
-#endif
 
     return ESP_OK;
 }
@@ -1248,75 +1260,57 @@ extern "C" esp_err_t cyd_display_log_scroll(int delta)
     return cyd_display_submit_log_cmd(&cmd);
 }
 
-extern "C" esp_err_t cyd_display_get_touch_raw(int16_t *x, int16_t *y, bool *touched)
+extern "C" esp_err_t cyd_display_show_touch_calibration_screen(void)
 {
-    ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
-
-#if CONFIG_CYD_TOUCH_ENABLED
-    lgfx::touch_point_t tp;
-    bool is_touched = s_display.getTouch(&tp) > 0;
-    if (x != nullptr) {
-        *x = is_touched ? tp.x : 0;
-    }
-    if (y != nullptr) {
-        *y = is_touched ? tp.y : 0;
-    }
-    if (touched != nullptr) {
-        *touched = is_touched;
-    }
-    return ESP_OK;
-#else
-    if (x != nullptr) {
-        *x = 0;
-    }
-    if (y != nullptr) {
-        *y = 0;
-    }
-    if (touched != nullptr) {
-        *touched = false;
-    }
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
-}
-
-extern "C" esp_err_t cyd_display_apply_touch_calibration(const uint16_t *params, size_t param_count)
-{
-#if CONFIG_CYD_TOUCH_ENABLED
-    ESP_RETURN_ON_FALSE(params != nullptr, ESP_ERR_INVALID_ARG, TAG, "params required");
-    ESP_RETURN_ON_FALSE(param_count == 8, ESP_ERR_INVALID_SIZE, TAG, "expected 8 touch params");
-    ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
-    uint16_t calibration[8];
-    memcpy(calibration, params, sizeof(calibration));
-    s_display.setTouchCalibrate(calibration);
-    return ESP_OK;
-#else
-    (void)params;
-    (void)param_count;
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
-}
-
-extern "C" esp_err_t cyd_display_calibrate_touch(uint16_t *params, size_t param_count)
-{
-#if CONFIG_CYD_TOUCH_ENABLED
-    ESP_RETURN_ON_FALSE(params != nullptr, ESP_ERR_INVALID_ARG, TAG, "params required");
-    ESP_RETURN_ON_FALSE(param_count == 8, ESP_ERR_INVALID_SIZE, TAG, "expected 8 touch params");
     ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
     ESP_RETURN_ON_ERROR(cyd_display_check_owner(), TAG, "display owner required");
 
     s_display.fillScreen(TFT_BLACK);
-    cyd_display_draw_centered_line(s_display, "Touch Calibration", s_display.width() / 2, s_display.height() / 2 - 18, 2, TFT_YELLOW);
-    cyd_display_draw_centered_line(s_display, "Tap the 4 targets", s_display.width() / 2, s_display.height() / 2 + 18, 1, TFT_WHITE);
-    vTaskDelay(pdMS_TO_TICKS(800));
+    cyd_display_draw_centered_line(s_display,
+                                   "Touch Calibration",
+                                   s_display.width() / 2,
+                                   s_display.height() / 2 - 18,
+                                   2,
+                                   TFT_YELLOW);
+    cyd_display_draw_centered_line(s_display,
+                                   "Tap the 4 targets",
+                                   s_display.width() / 2,
+                                   s_display.height() / 2 + 18,
+                                   1,
+                                   TFT_WHITE);
+    return ESP_OK;
+}
 
-    s_display.calibrateTouch(params, TFT_YELLOW, TFT_BLACK, 14);
+extern "C" esp_err_t cyd_display_draw_touch_calibration_target(int32_t x, int32_t y, uint8_t radius, bool visible)
+{
+    ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
+    ESP_RETURN_ON_ERROR(cyd_display_check_owner(), TAG, "display owner required");
+    ESP_RETURN_ON_FALSE(radius > 0, ESP_ERR_INVALID_ARG, TAG, "radius required");
+
+    cyd_display_draw_calibration_marker(s_display,
+                                        x,
+                                        y,
+                                        radius,
+                                        visible ? TFT_YELLOW : TFT_BLACK,
+                                        TFT_BLACK);
+    return ESP_OK;
+}
+
+extern "C" esp_err_t cyd_display_invalidate(void)
+{
+    ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
     s_has_previous_screen = false;
     return ESP_OK;
-#else
-    (void)params;
-    (void)param_count;
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
+}
+
+extern "C" int32_t cyd_display_get_width(void)
+{
+    return s_display.width();
+}
+
+extern "C" int32_t cyd_display_get_height(void)
+{
+    return s_display.height();
 }
 
 extern "C" esp_err_t cyd_display_show_text(const char *title, const char *message)
