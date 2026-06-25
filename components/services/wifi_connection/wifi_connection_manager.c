@@ -8,6 +8,7 @@
 #include "esp_timer.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
+#include "error_log_store.h"
 #include "esp32_wifi_sta.h"
 #include "wifi_connection.h"
 #include "wifi_connection.h"
@@ -241,6 +242,7 @@ static esp_err_t wifi_connection_try_connect(wifi_connection_state_t state)
                  "Wi-Fi connection connect failed: %s reason=%d",
                  esp_err_to_name(err),
                  (int)failure_reason);
+        (void)error_log_store_append_esp_err(TAG, "Wi-Fi connection connect failed", err);
     }
     return err;
 }

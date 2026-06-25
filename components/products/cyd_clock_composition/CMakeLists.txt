@@ -4,6 +4,7 @@ set(CYD_CLOCK_COMPOSITION_REQUIRES
     cyd_clock_app
     cyd_system_apps
     cyd_speaker
+    error_log_store
     nvs_flash
     nvs_health
     nvs_schema

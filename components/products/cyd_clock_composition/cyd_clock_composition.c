@@ -10,6 +10,7 @@
 #include "cyd_display.h"
 #include "cyd_speaker.h"
 #include "cyd_system_apps.h"
+#include "error_log_store.h"
 #include "sd_card_storage.h"
 #include "system_boot.h"
 #include "time_tick.h"
@@ -138,28 +139,64 @@ esp_err_t cyd_clock_composition_start(void)
 {
     system_boot_result_t boot_result = { 0 };
     const app_shell_app_t *initial_app = cyd_clock_app_get_app();
+    esp_err_t err = ESP_OK;
 
-    ESP_RETURN_ON_ERROR(system_boot_start(&boot_result), TAG, "system boot failed");
-    ESP_RETURN_ON_ERROR(sd_card_storage_init(), TAG, "sd card init failed");
-    ESP_RETURN_ON_ERROR(time_tick_start(), TAG, "time tick start failed");
-    ESP_RETURN_ON_ERROR(app_scheduler_init(), TAG, "scheduler init failed");
-    ESP_RETURN_ON_ERROR(app_scheduler_register_handler(CYD_CLOCK_ALARM_OWNER,
-                                                       cyd_clock_composition_alarm_handler,
-                                                       NULL),
-                        TAG,
-                        "alarm handler register failed");
-    ESP_RETURN_ON_ERROR(cyd_clock_composition_ensure_alarm_schedules(),
-                        TAG,
-                        "alarm schedule init failed");
+    err = system_boot_start(&boot_result);
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "system boot failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "system boot failed");
+    }
+    err = sd_card_storage_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "sd card init unavailable; continuing without SD logging: %s", esp_err_to_name(err));
+    }
+    err = time_tick_start();
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "time tick start failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "time tick start failed");
+    }
+    err = app_scheduler_init();
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "scheduler init failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "scheduler init failed");
+    }
+    err = app_scheduler_register_handler(CYD_CLOCK_ALARM_OWNER,
+                                         cyd_clock_composition_alarm_handler,
+                                         NULL);
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "alarm handler register failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "alarm handler register failed");
+    }
+    err = cyd_clock_composition_ensure_alarm_schedules();
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "alarm schedule init failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "alarm schedule init failed");
+    }
 
 #if APP_WIFI_STA_ENABLED && CONFIG_ESP32_WIFI_STA_AUTO_START
     if (boot_result.setup_shortcut_requested) {
         wifi_connection_request_setup_on_start();
     }
-    ESP_RETURN_ON_ERROR(status_indicator_start(), TAG, "status indicator start failed");
-    ESP_RETURN_ON_ERROR(wifi_connection_start(), TAG, "Wi-Fi connection start failed");
-    ESP_RETURN_ON_ERROR(radio_manager_start(), TAG, "radio manager start failed");
-    ESP_RETURN_ON_ERROR(time_sync_start(), TAG, "time sync start failed");
+    err = status_indicator_start();
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "status indicator start failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "status indicator start failed");
+    }
+    err = wifi_connection_start();
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "Wi-Fi connection start failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "Wi-Fi connection start failed");
+    }
+    err = radio_manager_start();
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "radio manager start failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "radio manager start failed");
+    }
+    err = time_sync_start();
+    if (err != ESP_OK) {
+        (void)error_log_store_append_esp_err(TAG, "time sync start failed", err);
+        ESP_RETURN_ON_ERROR(err, TAG, "time sync start failed");
+    }
 #endif
 
     cyd_clock_composition_preflight_nvs_health();

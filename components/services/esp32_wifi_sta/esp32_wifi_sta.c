@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "error_log_store.h"
 #include "sdkconfig.h"
 #include "esp32_wifi_sta.h"
 #include "wifi_profile_store.h"
@@ -285,6 +286,7 @@ static void esp32_wifi_sta_on_wifi_event(void *arg, esp_event_base_t event_base,
                  "Wi-Fi connect failed: reason=%d mapped=%d",
                  (int)s_wifi_sta.last_disconnect_reason,
                  (int)s_wifi_sta.last_failure_reason);
+        (void)error_log_store_append_message(TAG, "Wi-Fi connect failed after retry limit");
     }
 }
 
