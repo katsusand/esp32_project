@@ -160,12 +160,35 @@ static int32_t cyd_input_abs_i32(int32_t value)
     return value < 0 ? -value : value;
 }
 
+static uint8_t cyd_input_rotation_compose(uint8_t base, uint8_t offset)
+{
+    return (uint8_t)(((base + offset) & 3U) | ((base & 4U) ^ (offset & 4U)));
+}
+
+static uint8_t cyd_input_display_internal_rotation(void)
+{
+    return cyd_input_rotation_compose(CONFIG_CYD_DISPLAY_ROTATION,
+                                      CONFIG_CYD_DISPLAY_OFFSET_ROTATION);
+}
+
+static uint8_t cyd_input_touch_runtime_rotation(void)
+{
+    return cyd_input_rotation_compose(cyd_input_display_internal_rotation(),
+                                      CONFIG_CYD_TOUCH_OFFSET_ROTATION);
+}
+
 static int32_t cyd_input_touch_calibration_width(void)
 {
     int32_t width = CONFIG_CYD_DISPLAY_WIDTH;
     int32_t height = CONFIG_CYD_DISPLAY_HEIGHT;
 
-    if ((CONFIG_CYD_TOUCH_OFFSET_ROTATION & 1) != 0) {
+    if ((cyd_input_display_internal_rotation() & 1U) != 0U) {
+        int32_t tmp = width;
+        width = height;
+        height = tmp;
+    }
+
+    if ((CONFIG_CYD_TOUCH_OFFSET_ROTATION & 1U) != 0U) {
         int32_t tmp = width;
         width = height;
         height = tmp;
@@ -179,13 +202,63 @@ static int32_t cyd_input_touch_calibration_height(void)
     int32_t width = CONFIG_CYD_DISPLAY_WIDTH;
     int32_t height = CONFIG_CYD_DISPLAY_HEIGHT;
 
-    if ((CONFIG_CYD_TOUCH_OFFSET_ROTATION & 1) != 0) {
+    if ((cyd_input_display_internal_rotation() & 1U) != 0U) {
+        int32_t tmp = width;
+        width = height;
+        height = tmp;
+    }
+
+    if ((CONFIG_CYD_TOUCH_OFFSET_ROTATION & 1U) != 0U) {
         int32_t tmp = width;
         width = height;
         height = tmp;
     }
 
     return height;
+}
+
+static void cyd_input_touch_apply_runtime_rotation(int32_t *x, int32_t *y)
+{
+    if (x == NULL || y == NULL) {
+        return;
+    }
+
+    int32_t tx = *x;
+    int32_t ty = *y;
+    uint8_t rotation = cyd_input_touch_runtime_rotation();
+    bool vflip = ((1U << rotation) & 0x96U) != 0U;
+
+    if (rotation != 0U) {
+        if ((rotation & 1U) != 0U) {
+            int32_t tmp = tx;
+            tx = ty;
+            ty = tmp;
+        }
+        if ((rotation & 2U) != 0U) {
+            tx = (CONFIG_CYD_DISPLAY_WIDTH - 1) - tx;
+        }
+        if (vflip) {
+            ty = (CONFIG_CYD_DISPLAY_HEIGHT - 1) - ty;
+        }
+    }
+
+    *x = tx;
+    *y = ty;
+}
+
+static void cyd_input_touch_get_calibration_target(size_t index, int32_t *x, int32_t *y)
+{
+    int32_t tx = (index & 2U) ? (cyd_input_touch_calibration_width() - 1) : 0;
+    int32_t ty = (index & 1U) ? (cyd_input_touch_calibration_height() - 1) : 0;
+
+    cyd_input_touch_apply_runtime_rotation(&tx, &ty);
+
+    if (x != NULL) {
+        *x = tx;
+    }
+    if (y != NULL) {
+        *y = ty;
+    }
 }
 
 static void cyd_input_touch_calibration_default_params(uint16_t *params)
@@ -294,6 +367,8 @@ static void cyd_input_touch_transform_raw(int16_t raw_x, int16_t raw_y, int16_t 
     int32_t ty = (int32_t)(s_input.touch_affine[3] * (float)raw_x +
                            s_input.touch_affine[4] * (float)raw_y) +
                  (int32_t)s_input.touch_affine[5];
+
+    cyd_input_touch_apply_runtime_rotation(&tx, &ty);
 
     if (x != NULL) {
         *x = (int16_t)tx;
@@ -1371,10 +1446,12 @@ esp_err_t cyd_input_run_touch_calibration(void)
     uint16_t params[8] = { 0 };
     bool task_suspended = false;
     static const uint8_t CAL_RADIUS = 14;
-    int32_t width = cyd_display_get_width();
-    int32_t height = cyd_display_get_height();
-    const int32_t target_x[4] = { 0, 0, width - 1, width - 1 };
-    const int32_t target_y[4] = { 0, height - 1, 0, height - 1 };
+    int32_t target_x[4] = { 0 };
+    int32_t target_y[4] = { 0 };
+
+    for (size_t i = 0; i < 4; ++i) {
+        cyd_input_touch_get_calibration_target(i, &target_x[i], &target_y[i]);
+    }
 
     if (s_input.task_handle != NULL) {
         vTaskSuspend(s_input.task_handle);

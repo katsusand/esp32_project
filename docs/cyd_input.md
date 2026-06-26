@@ -248,11 +248,21 @@ English supplement: Calibration data, affine math, and runtime touch mapping are
 キャリブレーション保存時の注意:
 
 - 保存 blob は従来どおり raw 4点 `uint16_t[8]` を versioned blob として保持する
-- `cyd_input_run_touch_calibration()` は画面 4隅の target を `cyd_display` で描き、各 target で安定した raw 値を平均して保存する
-- runtime では保存済み 4点、または `CONFIG_CYD_TOUCH_X_MIN/X_MAX/Y_MIN/Y_MAX` の default 4点から affine を組み立てて座標変換する
+- 保存順序は `raw -> affine -> final runtime rotation/flip -> UI coordinates` のうち、affine 手前の「touch calibration frame」4隅で固定する
+- 具体的な 4点順序は `(0,0)`, `(0,h-1)`, `(w-1,0)`, `(w-1,h-1)` で、raw blob では `uint16_t[8] = {x0,y0,x1,y1,x2,y2,x3,y3}` として保存する
+- `cyd_input_run_touch_calibration()` は、その 4隅に対応する UI 上の target を `cyd_display` で描き、各 target で安定した raw 値を平均して保存する
+- 現在の CYD 既定値 (`CONFIG_CYD_DISPLAY_ROTATION=1`, `CONFIG_CYD_TOUCH_OFFSET_ROTATION=4`) では、見えている target 順序は `left-top`, `right-top`, `left-bottom`, `right-bottom` になる
+- runtime では保存済み 4点、または `CONFIG_CYD_TOUCH_X_MIN/X_MAX/Y_MIN/Y_MAX` の default 4点から affine を組み立て、その後で display/touch rotation 合成を適用して最終 UI 座標へ変換する
 - そのため、通常のアプリや system settings からタッチ補正を起動する場合は `cyd_input_run_touch_calibration()` を使う
 
 English supplement: This keeps the persisted `touch_cal` blob layout stable while removing the transport dependency from `cyd_display`.
+
+互換性の注意:
+
+- `xpt2046_softspi` 分離直後の旧 `esp32_project` 実装は、saved `touch_cal` を visible screen corner 順序で事実上解釈していた
+- 現在の実装と `espnow_logger` は、LovyanGFX と同じく touch calibration frame 順序で解釈する
+- そのため、旧 `esp32_project` が保存した `touch_cal` blob は、新ルールとは互換性がない可能性がある
+- この旧 blob は canonical blob と layout/version が同一で自動判別できないため、安全側として一度 `cyd_input_clear_touch_calibration()` または `Initialize NVS` 後に再キャリブレーションする
 
 ## Configuration
 
