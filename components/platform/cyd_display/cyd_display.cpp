@@ -92,7 +92,7 @@ public:
             cfg.freq_read = 16000000;
             cfg.spi_3wire = false;
             cfg.use_lock = true;
-            cfg.dma_channel = SPI_DMA_CH_AUTO;
+            cfg.dma_channel = SPI_DMA_DISABLED;
             cfg.pin_sclk = CONFIG_CYD_DISPLAY_PIN_SCLK;
             cfg.pin_mosi = CONFIG_CYD_DISPLAY_PIN_MOSI;
             cfg.pin_miso = CONFIG_CYD_DISPLAY_PIN_MISO;
