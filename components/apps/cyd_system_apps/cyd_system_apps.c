@@ -23,6 +23,9 @@
 #include "wifi_profile_store.h"
 
 #define TAG "cyd_system_apps"
+#ifndef APP_WIFI_STA_ENABLED
+#define APP_WIFI_STA_ENABLED 1
+#endif
 #define CYD_SYSTEM_APPS_INPUT_POLL_MS 50
 #define CYD_INFO_APP_ACTION_BACK 0x2101
 #define CYD_INFO_APP_ACTION_TOGGLE_PAGE 0x2102
@@ -59,11 +62,11 @@
 #define CYD_SYSTEM_APPS_TITLE_ROW 0
 #define CYD_SYSTEM_APPS_TITLE_SPAN_COLS 32
 #define CYD_SYSTEM_APPS_TITLE_SPAN_ROWS 2
-#define CYD_SETTINGS_PAGE_BUTTON_ROW 26
+#define CYD_SETTINGS_PAGE_BUTTON_ROW 27
 #define CYD_SETTINGS_PAGE_BUTTON_SPAN_COLS 7
 #define CYD_SETTINGS_PAGE_BUTTON_SPAN_ROWS 3
 #define CYD_SETTINGS_PAGE_LABEL_COL 12
-#define CYD_SETTINGS_PAGE_LABEL_ROW 25
+#define CYD_SETTINGS_PAGE_LABEL_ROW 27
 #define CYD_SETTINGS_PAGE_LABEL_SPAN_COLS 16
 #define CYD_SETTINGS_PAGE_LABEL_SPAN_ROWS 3
 #define CYD_SETTINGS_ITEM_LABEL_COL 2
@@ -140,10 +143,18 @@ typedef struct {
 typedef enum {
     CYD_SETTINGS_PAGE_GENERAL = 0,
     CYD_SETTINGS_PAGE_TIME,
-    CYD_SETTINGS_PAGE_NETWORK,
+    CYD_SETTINGS_PAGE_NETWORK1,
+    CYD_SETTINGS_PAGE_NETWORK2,
     CYD_SETTINGS_PAGE_NVS,
     CYD_SETTINGS_PAGE_COUNT,
 } cyd_settings_page_t;
+
+typedef enum {
+    CYD_SETTINGS_PAGE_GROUP_GENERAL = 0,
+    CYD_SETTINGS_PAGE_GROUP_TIME,
+    CYD_SETTINGS_PAGE_GROUP_NETWORK,
+    CYD_SETTINGS_PAGE_GROUP_NVS,
+} cyd_settings_page_group_t;
 
 typedef enum {
     CYD_SETTINGS_VIEW_PAGES = 0,
@@ -169,6 +180,7 @@ typedef enum {
 
 typedef struct {
     bool valid;
+    time_t now;
     wifi_connection_state_t wifi_state;
     time_sync_state_t time_sync_state;
     bool has_last_attempt;
@@ -198,8 +210,14 @@ static size_t s_settings_selected_profile = 0;
 static bool s_settings_sync_now_pending = false;
 static cyd_settings_status_snapshot_t s_settings_status_snapshot = { 0 };
 static bool s_settings_force_initialize = false;
+static cyd_settings_page_t s_settings_active_pages[CYD_SETTINGS_PAGE_COUNT];
+static size_t s_settings_active_page_count = 0;
+static size_t s_settings_active_page_index = 0;
 
 static esp_err_t cyd_settings_refresh(void);
+
+static bool cyd_settings_page_is_enabled(cyd_settings_page_t page);
+static bool cyd_settings_page_uses_live_status(cyd_settings_page_t page);
 
 static bool cyd_system_apps_touch_confirmed_action(const cyd_input_event_t *event,
                                                    cyd_system_apps_touch_tracker_t *tracker,
@@ -272,7 +290,8 @@ static bool cyd_settings_touch_stepper_action(const cyd_input_event_t *event, ui
 
     if (s_settings_page != CYD_SETTINGS_PAGE_GENERAL &&
         s_settings_page != CYD_SETTINGS_PAGE_TIME &&
-        s_settings_page != CYD_SETTINGS_PAGE_NETWORK) {
+        s_settings_page != CYD_SETTINGS_PAGE_NETWORK1 &&
+        s_settings_page != CYD_SETTINGS_PAGE_NETWORK2) {
         return false;
     }
 
@@ -515,13 +534,19 @@ static void cyd_settings_capture_status_snapshot(cyd_settings_status_snapshot_t 
     wifi_connection_state_t wifi_state = WIFI_CONNECTION_STATE_STOPPED;
     esp_err_t last_attempt_status = ESP_OK;
     time_t last_success_at = 0;
+    time_t now = 0;
 
     if (snapshot == NULL) {
         return;
     }
 
+    if (s_settings_view == CYD_SETTINGS_VIEW_PAGES && s_settings_page == CYD_SETTINGS_PAGE_TIME) {
+        time(&now);
+    }
+
     *snapshot = (cyd_settings_status_snapshot_t){
         .valid = true,
+        .now = now,
         .wifi_state = WIFI_CONNECTION_STATE_STOPPED,
         .time_sync_state = time_sync_get_state(),
         .has_last_attempt = time_sync_get_last_attempt_status(&last_attempt_status),
@@ -547,6 +572,7 @@ static bool cyd_settings_status_snapshot_equal(const cyd_settings_status_snapsho
     }
 
     return left->wifi_state == right->wifi_state &&
+           left->now == right->now &&
            left->time_sync_state == right->time_sync_state &&
            left->has_last_attempt == right->has_last_attempt &&
            left->last_attempt_status == right->last_attempt_status &&
@@ -555,11 +581,104 @@ static bool cyd_settings_status_snapshot_equal(const cyd_settings_status_snapsho
            left->sync_now_pending == right->sync_now_pending;
 }
 
-static bool cyd_settings_page_uses_live_status(void)
+static bool cyd_settings_page_is_network(cyd_settings_page_t page)
 {
-    return s_settings_view == CYD_SETTINGS_VIEW_PAGES &&
-           (s_settings_page == CYD_SETTINGS_PAGE_TIME ||
-            s_settings_page == CYD_SETTINGS_PAGE_NETWORK);
+    return page == CYD_SETTINGS_PAGE_NETWORK1 || page == CYD_SETTINGS_PAGE_NETWORK2;
+}
+
+static bool cyd_settings_page_is_enabled(cyd_settings_page_t page)
+{
+    switch (page) {
+    case CYD_SETTINGS_PAGE_NETWORK1:
+    case CYD_SETTINGS_PAGE_NETWORK2:
+        return APP_WIFI_STA_ENABLED != 0;
+    case CYD_SETTINGS_PAGE_GENERAL:
+    case CYD_SETTINGS_PAGE_TIME:
+    case CYD_SETTINGS_PAGE_NVS:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static cyd_settings_page_group_t cyd_settings_page_group(cyd_settings_page_t page)
+{
+    switch (page) {
+    case CYD_SETTINGS_PAGE_GENERAL:
+        return CYD_SETTINGS_PAGE_GROUP_GENERAL;
+    case CYD_SETTINGS_PAGE_TIME:
+        return CYD_SETTINGS_PAGE_GROUP_TIME;
+    case CYD_SETTINGS_PAGE_NETWORK1:
+    case CYD_SETTINGS_PAGE_NETWORK2:
+        return CYD_SETTINGS_PAGE_GROUP_NETWORK;
+    case CYD_SETTINGS_PAGE_NVS:
+        return CYD_SETTINGS_PAGE_GROUP_NVS;
+    default:
+        return CYD_SETTINGS_PAGE_GROUP_GENERAL;
+    }
+}
+
+static size_t cyd_settings_network_page_index(cyd_settings_page_t page)
+{
+    size_t index = 0;
+
+    for (size_t i = 0; i < CYD_SETTINGS_PAGE_COUNT; ++i) {
+        cyd_settings_page_t candidate = (cyd_settings_page_t)i;
+        if (!cyd_settings_page_is_network(candidate) || !cyd_settings_page_is_enabled(candidate)) {
+            continue;
+        }
+
+        ++index;
+        if (candidate == page) {
+            return index;
+        }
+    }
+
+    return 0;
+}
+
+static void cyd_settings_rebuild_active_pages(void)
+{
+    size_t count = 0;
+    size_t active_index = 0;
+    bool found_current = false;
+
+    for (size_t i = 0; i < CYD_SETTINGS_PAGE_COUNT; ++i) {
+        cyd_settings_page_t page = (cyd_settings_page_t)i;
+        if (!cyd_settings_page_is_enabled(page)) {
+            continue;
+        }
+
+        s_settings_active_pages[count] = page;
+        if (page == s_settings_page) {
+            active_index = count;
+            found_current = true;
+        }
+        ++count;
+    }
+
+    s_settings_active_page_count = count;
+    if (count == 0) {
+        s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
+        s_settings_active_page_index = 0;
+        return;
+    }
+
+    if (!found_current) {
+        s_settings_page = s_settings_active_pages[0];
+        active_index = 0;
+    }
+    s_settings_active_page_index = active_index;
+}
+
+static bool cyd_settings_page_uses_live_status(cyd_settings_page_t page)
+{
+    return page == CYD_SETTINGS_PAGE_TIME || cyd_settings_page_is_network(page);
+}
+
+static bool cyd_settings_current_page_uses_live_status(void)
+{
+    return s_settings_view == CYD_SETTINGS_VIEW_PAGES && cyd_settings_page_uses_live_status(s_settings_page);
 }
 
 static esp_err_t cyd_info_app_show_page_nav(cyd_display_screen_t *screen)
@@ -667,7 +786,8 @@ static const char *cyd_settings_page_title(cyd_settings_page_t page)
         return "GENERAL";
     case CYD_SETTINGS_PAGE_TIME:
         return "TIME";
-    case CYD_SETTINGS_PAGE_NETWORK:
+    case CYD_SETTINGS_PAGE_NETWORK1:
+    case CYD_SETTINGS_PAGE_NETWORK2:
         return "NETWORK";
     case CYD_SETTINGS_PAGE_NVS:
         return "NVS";
@@ -761,17 +881,29 @@ static esp_err_t cyd_settings_load_profiles(void)
 static esp_err_t cyd_settings_app_add_page_nav(cyd_display_screen_t *screen)
 {
     char page_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    bool can_go_prev = s_settings_page > CYD_SETTINGS_PAGE_GENERAL;
-    bool can_go_next = (size_t)s_settings_page + 1 < CYD_SETTINGS_PAGE_COUNT;
+    bool can_go_prev = s_settings_active_page_index > 0;
+    bool can_go_next = s_settings_active_page_index + 1 < s_settings_active_page_count;
+    const char *page_title = cyd_settings_page_title(s_settings_page);
 
     ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, TAG, "screen is null");
 
-    snprintf(page_line,
-             sizeof(page_line),
-             "%s  %u/%u",
-             cyd_settings_page_title(s_settings_page),
-             (unsigned)s_settings_page + 1,
-             (unsigned)CYD_SETTINGS_PAGE_COUNT);
+    if (cyd_settings_page_group(s_settings_page) == CYD_SETTINGS_PAGE_GROUP_NETWORK) {
+        size_t network_index = cyd_settings_network_page_index(s_settings_page);
+        snprintf(page_line,
+                 sizeof(page_line),
+                 "%s%u  %u/%u",
+                 page_title,
+                 (unsigned)network_index,
+                 (unsigned)s_settings_active_page_index + 1,
+                 (unsigned)s_settings_active_page_count);
+    } else {
+        snprintf(page_line,
+                 sizeof(page_line),
+                 "%s  %u/%u",
+                 page_title,
+                 (unsigned)s_settings_active_page_index + 1,
+                 (unsigned)s_settings_active_page_count);
+    }
 
     cyd_ui_add_button_with_fg_enabled(screen,
                                       "<",
@@ -1203,54 +1335,32 @@ static esp_err_t cyd_settings_render_general_page(cyd_display_screen_t *screen)
 
 static esp_err_t cyd_settings_render_time_page(cyd_display_screen_t *screen)
 {
-    char time_sync_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    char time_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    char date_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     char timezone_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char sync_status_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char wifi_status_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    cyd_ui_stepper_row_t rows[2] = { 0 };
+    char clock_state_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    cyd_ui_stepper_row_t rows[1] = { 0 };
     size_t timezone_index = cyd_settings_find_timezone_index(time_sync_get_timezone());
-    uint16_t time_sync_minutes = time_sync_get_interval_minutes();
-    bool can_time_sync_decrease = time_sync_minutes > CYD_SETTINGS_TIME_SYNC_MINUTES_MIN;
-    bool can_time_sync_increase = time_sync_minutes < CYD_SETTINGS_TIME_SYNC_MINUTES_MAX;
+    time_t now = 0;
+    struct tm local_time = { 0 };
     bool can_timezone_decrease = timezone_index > 0;
     bool can_timezone_increase =
         timezone_index + 1 < (sizeof(CYD_SETTINGS_TIMEZONE_OPTIONS) / sizeof(CYD_SETTINGS_TIMEZONE_OPTIONS[0]));
 
-    snprintf(time_sync_value, sizeof(time_sync_value), "%um", (unsigned)time_sync_minutes);
+    time(&now);
+    localtime_r(&now, &local_time);
+    strftime(time_value, sizeof(time_value), "%H:%M:%S", &local_time);
+    strftime(date_value, sizeof(date_value), "%Y-%m-%d", &local_time);
     snprintf(timezone_value, sizeof(timezone_value), "%s", CYD_SETTINGS_TIMEZONE_OPTIONS[timezone_index].label);
-    cyd_system_apps_format_sync_attempt(sync_status_line, sizeof(sync_status_line));
-    cyd_system_apps_format_wifi_status(wifi_status_line, sizeof(wifi_status_line));
+    snprintf(clock_state_line,
+             sizeof(clock_state_line),
+             "clock: %s",
+             local_time.tm_year + 1900 >= 2024 ? "set" : "local only");
 
     rows[0] = (cyd_ui_stepper_row_t){
-        .label_text = "TimeSyncInterval:",
-        .value_text = time_sync_value,
-        .row = 6,
-        .label_col = CYD_SETTINGS_ITEM_LABEL_COL,
-        .label_span_cols = CYD_SETTINGS_ITEM_LABEL_SPAN_COLS,
-        .label_scale = 1,
-        .value_col = CYD_SETTINGS_ITEM_VALUE_COL,
-        .value_span_cols = CYD_SETTINGS_ITEM_VALUE_SPAN_COLS,
-        .value_scale = 2,
-        .button_left_col = CYD_SETTINGS_ITEM_BUTTON_LEFT_COL,
-        .button_right_col = CYD_SETTINGS_ITEM_BUTTON_RIGHT_COL,
-        .button_span_cols = CYD_SETTINGS_ITEM_BUTTON_SPAN_COLS,
-        .button_span_rows = CYD_SETTINGS_ITEM_BUTTON_SPAN_ROWS,
-        .button_scale = CYD_SETTINGS_ITEM_BUTTON_SCALE,
-        .has_button_fg_color = true,
-        .button_fg_color = CYD_UI_COLOR_BLACK,
-        .has_button_bg_color = true,
-        .button_bg_color = CYD_UI_COLOR_GREEN,
-        .has_button_border_color = true,
-        .button_border_color = CYD_UI_COLOR_LIGHTGREY,
-        .decrease_action_id = CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN,
-        .increase_action_id = CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP,
-        .can_decrease = can_time_sync_decrease,
-        .can_increase = can_time_sync_increase,
-    };
-    rows[1] = (cyd_ui_stepper_row_t){
         .label_text = "TimeZone:",
         .value_text = timezone_value,
-        .row = 10,
+        .row = 15,
         .label_col = CYD_SETTINGS_ITEM_LABEL_COL,
         .label_span_cols = CYD_SETTINGS_ITEM_LABEL_SPAN_COLS,
         .label_scale = 1,
@@ -1278,30 +1388,37 @@ static esp_err_t cyd_settings_render_time_page(cyd_display_screen_t *screen)
         ESP_RETURN_ON_ERROR(cyd_ui_add_stepper_row(screen, &rows[i]), TAG, "add settings row failed");
     }
 
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      "SYNC NOW",
-                                      8,
-                                      15,
-                                      24,
-                                      3,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      CYD_SETTINGS_APP_ACTION_SYNC_NOW,
-                                      cyd_settings_sync_now_enabled());
     cyd_ui_add_text(screen,
-                    sync_status_line,
+                    "Current Time",
                     2,
-                    20,
+                    5,
                     36,
                     2,
                     CYD_DISPLAY_ALIGN_LEFT,
                     1,
-                    CYD_UI_COLOR_DARKGREY);
+                    CYD_UI_COLOR_WHITE);
     cyd_ui_add_text(screen,
-                    wifi_status_line,
+                    time_value,
                     2,
-                    23,
+                    7,
+                    36,
+                    3,
+                    CYD_DISPLAY_ALIGN_LEFT,
+                    2,
+                    CYD_UI_COLOR_CYAN);
+    cyd_ui_add_text(screen,
+                    date_value,
+                    2,
+                    11,
+                    36,
+                    2,
+                    CYD_DISPLAY_ALIGN_LEFT,
+                    1,
+                    CYD_UI_COLOR_WHITE);
+    cyd_ui_add_text(screen,
+                    clock_state_line,
+                    2,
+                    21,
                     36,
                     2,
                     CYD_DISPLAY_ALIGN_LEFT,
@@ -1311,7 +1428,7 @@ static esp_err_t cyd_settings_render_time_page(cyd_display_screen_t *screen)
     return ESP_OK;
 }
 
-static esp_err_t cyd_settings_render_network_page(cyd_display_screen_t *screen)
+static esp_err_t cyd_settings_render_network1_page(cyd_display_screen_t *screen)
 {
     char wifi_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
 
@@ -1336,6 +1453,84 @@ static esp_err_t cyd_settings_render_network_page(cyd_display_screen_t *screen)
                       CYD_UI_COLOR_BLUE,
                       CYD_UI_COLOR_CYAN,
                       CYD_SETTINGS_APP_ACTION_WIFI);
+    return ESP_OK;
+}
+
+static esp_err_t cyd_settings_render_network2_page(cyd_display_screen_t *screen)
+{
+    char time_sync_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    char sync_state_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    char sync_status_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    uint16_t time_sync_minutes = time_sync_get_interval_minutes();
+    bool can_time_sync_decrease = time_sync_minutes > CYD_SETTINGS_TIME_SYNC_MINUTES_MIN;
+    bool can_time_sync_increase = time_sync_minutes < CYD_SETTINGS_TIME_SYNC_MINUTES_MAX;
+    cyd_ui_stepper_row_t row = { 0 };
+
+    snprintf(time_sync_value, sizeof(time_sync_value), "%um", (unsigned)time_sync_minutes);
+    snprintf(sync_state_line,
+             sizeof(sync_state_line),
+             "sync state: %s",
+             cyd_system_apps_time_sync_state_text(time_sync_get_state()));
+    cyd_system_apps_format_sync_attempt(sync_status_line, sizeof(sync_status_line));
+
+    row = (cyd_ui_stepper_row_t){
+        .label_text = "TimeSyncInterval:",
+        .value_text = time_sync_value,
+        .row = 6,
+        .label_col = CYD_SETTINGS_ITEM_LABEL_COL,
+        .label_span_cols = CYD_SETTINGS_ITEM_LABEL_SPAN_COLS,
+        .label_scale = 1,
+        .value_col = CYD_SETTINGS_ITEM_VALUE_COL,
+        .value_span_cols = CYD_SETTINGS_ITEM_VALUE_SPAN_COLS,
+        .value_scale = 2,
+        .button_left_col = CYD_SETTINGS_ITEM_BUTTON_LEFT_COL,
+        .button_right_col = CYD_SETTINGS_ITEM_BUTTON_RIGHT_COL,
+        .button_span_cols = CYD_SETTINGS_ITEM_BUTTON_SPAN_COLS,
+        .button_span_rows = CYD_SETTINGS_ITEM_BUTTON_SPAN_ROWS,
+        .button_scale = CYD_SETTINGS_ITEM_BUTTON_SCALE,
+        .has_button_fg_color = true,
+        .button_fg_color = CYD_UI_COLOR_BLACK,
+        .has_button_bg_color = true,
+        .button_bg_color = CYD_UI_COLOR_GREEN,
+        .has_button_border_color = true,
+        .button_border_color = CYD_UI_COLOR_LIGHTGREY,
+        .decrease_action_id = CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN,
+        .increase_action_id = CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP,
+        .can_decrease = can_time_sync_decrease,
+        .can_increase = can_time_sync_increase,
+    };
+    ESP_RETURN_ON_ERROR(cyd_ui_add_stepper_row(screen, &row), TAG, "add network sync row failed");
+
+    cyd_ui_add_button_with_fg_enabled(screen,
+                                      "SYNC NOW",
+                                      8,
+                                      12,
+                                      24,
+                                      3,
+                                      CYD_UI_COLOR_WHITE,
+                                      CYD_UI_COLOR_BLUE,
+                                      CYD_UI_COLOR_CYAN,
+                                      CYD_SETTINGS_APP_ACTION_SYNC_NOW,
+                                      cyd_settings_sync_now_enabled());
+    cyd_ui_add_text(screen,
+                    sync_state_line,
+                    2,
+                    18,
+                    36,
+                    2,
+                    CYD_DISPLAY_ALIGN_LEFT,
+                    1,
+                    CYD_UI_COLOR_WHITE);
+    cyd_ui_add_text(screen,
+                    sync_status_line,
+                    2,
+                    21,
+                    36,
+                    2,
+                    CYD_DISPLAY_ALIGN_LEFT,
+                    1,
+                    CYD_UI_COLOR_DARKGREY);
+
     return ESP_OK;
 }
 
@@ -1397,8 +1592,11 @@ static esp_err_t cyd_settings_render_pages(cyd_display_screen_t *screen)
     if (s_settings_page == CYD_SETTINGS_PAGE_TIME) {
         return cyd_settings_render_time_page(screen);
     }
-    if (s_settings_page == CYD_SETTINGS_PAGE_NETWORK) {
-        return cyd_settings_render_network_page(screen);
+    if (s_settings_page == CYD_SETTINGS_PAGE_NETWORK1) {
+        return cyd_settings_render_network1_page(screen);
+    }
+    if (s_settings_page == CYD_SETTINGS_PAGE_NETWORK2) {
+        return cyd_settings_render_network2_page(screen);
     }
     if (s_settings_page == CYD_SETTINGS_PAGE_NVS) {
         return cyd_settings_render_nvs_page(screen);
@@ -1541,7 +1739,7 @@ static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_a
     s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
     s_settings_view = CYD_SETTINGS_VIEW_PAGES;
     if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_STORED_SSIDS) {
-        s_settings_page = CYD_SETTINGS_PAGE_NETWORK;
+        s_settings_page = CYD_SETTINGS_PAGE_NETWORK1;
         s_settings_view = CYD_SETTINGS_VIEW_STORED_SSIDS;
     } else if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_TOUCH_CALIB_CONFIRM) {
         s_settings_page = CYD_SETTINGS_PAGE_NVS;
@@ -1553,6 +1751,12 @@ static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_a
     s_settings_selected_profile = 0;
     s_settings_sync_now_pending = false;
     s_settings_status_snapshot = (cyd_settings_status_snapshot_t){ 0 };
+    if (!cyd_settings_page_is_enabled(s_settings_page)) {
+        s_settings_direct_view = CYD_SETTINGS_DIRECT_VIEW_NONE;
+        s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
+        s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+    }
+    cyd_settings_rebuild_active_pages();
     ESP_RETURN_ON_ERROR(cyd_settings_load_profiles(), TAG, "load stored profiles failed");
     s_settings_touch_tracker = (cyd_system_apps_touch_tracker_t){ 0 };
     return cyd_settings_refresh();
@@ -1560,6 +1764,7 @@ static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_a
 
 static esp_err_t cyd_settings_refresh(void)
 {
+    cyd_settings_rebuild_active_pages();
     ESP_RETURN_ON_ERROR(cyd_settings_app_show(), TAG, "show settings failed");
     cyd_settings_capture_status_snapshot(&s_settings_status_snapshot);
     return ESP_OK;
@@ -1569,7 +1774,7 @@ static esp_err_t cyd_settings_refresh_if_live_status_changed(void)
 {
     cyd_settings_status_snapshot_t snapshot = { 0 };
 
-    if (!cyd_settings_page_uses_live_status()) {
+    if (!cyd_settings_current_page_uses_live_status()) {
         return ESP_OK;
     }
 
@@ -1682,16 +1887,18 @@ static esp_err_t cyd_settings_handle_page_nav_action(uint16_t action_id, bool *h
         return ESP_OK;
     }
 
-    if (action_id == CYD_SETTINGS_APP_ACTION_PREV_PAGE && s_settings_page > CYD_SETTINGS_PAGE_GENERAL) {
-        --s_settings_page;
+    if (action_id == CYD_SETTINGS_APP_ACTION_PREV_PAGE && s_settings_active_page_index > 0) {
+        --s_settings_active_page_index;
+        s_settings_page = s_settings_active_pages[s_settings_active_page_index];
         ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
         *handled = true;
         return ESP_OK;
     }
 
     if (action_id == CYD_SETTINGS_APP_ACTION_NEXT_PAGE &&
-        (size_t)s_settings_page + 1 < CYD_SETTINGS_PAGE_COUNT) {
-        s_settings_page = (cyd_settings_page_t)((size_t)s_settings_page + 1);
+        s_settings_active_page_index + 1 < s_settings_active_page_count) {
+        ++s_settings_active_page_index;
+        s_settings_page = s_settings_active_pages[s_settings_active_page_index];
         ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
         *handled = true;
         return ESP_OK;
@@ -1754,12 +1961,13 @@ static esp_err_t cyd_settings_handle_time_page_action(uint16_t action_id, bool *
     ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
     *handled = false;
 
-    if (s_settings_page != CYD_SETTINGS_PAGE_TIME || s_settings_view != CYD_SETTINGS_VIEW_PAGES) {
+    if (s_settings_view != CYD_SETTINGS_VIEW_PAGES) {
         return ESP_OK;
     }
 
-    if (action_id == CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN ||
-        action_id == CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP) {
+    if (s_settings_page == CYD_SETTINGS_PAGE_NETWORK2 &&
+        (action_id == CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN ||
+         action_id == CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP)) {
         uint16_t interval_minutes = time_sync_get_interval_minutes();
         interval_minutes = (action_id == CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN)
                                ? cyd_settings_time_sync_decrease(interval_minutes)
@@ -1771,8 +1979,9 @@ static esp_err_t cyd_settings_handle_time_page_action(uint16_t action_id, bool *
         return ESP_OK;
     }
 
-    if (action_id == CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN ||
-        action_id == CYD_SETTINGS_APP_ACTION_TIMEZONE_UP) {
+    if (s_settings_page == CYD_SETTINGS_PAGE_TIME &&
+        (action_id == CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN ||
+         action_id == CYD_SETTINGS_APP_ACTION_TIMEZONE_UP)) {
         size_t timezone_index = cyd_settings_find_timezone_index(time_sync_get_timezone());
 
         if (action_id == CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN) {
@@ -1791,7 +2000,8 @@ static esp_err_t cyd_settings_handle_time_page_action(uint16_t action_id, bool *
         return ESP_OK;
     }
 
-    if (action_id == CYD_SETTINGS_APP_ACTION_SYNC_NOW) {
+    if (s_settings_page == CYD_SETTINGS_PAGE_NETWORK2 &&
+        action_id == CYD_SETTINGS_APP_ACTION_SYNC_NOW) {
         ESP_RETURN_ON_ERROR(cyd_settings_request_sync_now(), TAG, "request sync now failed");
         ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
         *handled = true;

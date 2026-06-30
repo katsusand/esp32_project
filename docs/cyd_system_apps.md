@@ -69,24 +69,28 @@ English supplement: Direct-view selection is one-shot and thread-safe; callers s
   `Volume`: スピーカー音量を変更する
   optional extension button: app 固有設定 app への導線を表示できる
 - `TIME` page
-  `TimeSyncInterval`: NTP 同期間隔を分単位で変更する
+  現在時刻表示
+  現在日付表示
   `Timezone`: POSIX timezone 設定をプリセットから切り替える
-  `SYNC NOW`: その場で同期を要求する
-  `Touch Calib`: タッチ補正画面を任意に実行する
-- `NETWORK` page
+  RTC / 内部時計ベースの状態表示
+- `NETWORK1` page
   現在の Wi-Fi 状態表示
   `Stored SSIDs`: 保存済みSSID一覧、優先化、削除
   `Wi-Fi Setup`: `wifi_setup app` へ切り替える
+- `NETWORK2` page
+  `TimeSyncInterval`: NTP 同期間隔を分単位で変更する
+  `SYNC NOW`: その場で同期を要求する
+  NTP / 時刻同期状態表示
 - `NVS` page
   `Clear Touch Calib`: 保存済みタッチ補正だけ消す
   `Initialize NVS`: 保存済み NVS データを全消去して再起動する
 - `<<`: `enter()` の `from_app` として受け取った return app へ戻る
 
-ページ切り替えは画面下部の `<` / `>` ボタンで行います。これにより settings 画面は、system-level setting を page 単位で増やしやすい構成になっています。
+ページ切り替えは画面下部の `<` / `>` ボタンで行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消え、`GENERAL -> TIME -> NVS` だけが残ります。
 
-`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`Volume` は `100 / 70 / 50 / 35 / 25 / 18 / 12 / 8 / 5` の 9 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `time_sync` に即時同期要求を送り、進行状況は settings 画面上に反映されます。`Touch Calib` は manual なタッチ補正画面を起動し、完了後に settings へ戻ります。保存は `settings app` を離れるタイミングで行われます。
+`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`Volume` は `100 / 70 / 50 / 35 / 25 / 18 / 12 / 8 / 5` の 9 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
 
-`Stored SSIDs` は `NETWORK` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
+`Stored SSIDs` は `NETWORK1` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
 
 `NVS` page の `Clear Touch Calib` は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。`Initialize NVS` は確認画面を経て `nvs_flash_erase()` を実行し、保存済み Wi-Fi profile や各種設定値も含めて初期化したうえで再起動します。
 
@@ -138,3 +142,13 @@ English supplement: Stepper buttons are handled on `PRESS`/`REPEAT`, while norma
 見た目上は `-` / `+` が描画されていても、handler 配線が抜けると反応しません。
 
 English supplement: If a control should auto-repeat while held, route it through the stepper path and explicitly wire its handler in `cyd_settings_app_step()`.
+
+### Page Composition Rule
+
+`NETWORK` page は 1 枚固定ではなく、`NETWORK1`, `NETWORK2`, ... の連番 page 群として増やせる前提です。
+
+- Wi-Fi 依存 page は `APP_WIFI_STA_ENABLED` に連動して enable/disable する
+- page title / page count / prev-next navigation は、有効 page 列から動的に決める
+- `Stored SSIDs` の direct view のような network 遷移は、対応 page が enable のときだけ使う
+
+English supplement: Treat settings pages as a composed list of enabled page definitions. This keeps Wi-Fi-free products natural while allowing future `NETWORK3+` expansion without reworking the navigation model.
