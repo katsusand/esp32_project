@@ -12,7 +12,9 @@
 #include "cyd_status_led.h"
 
 #define CYD_STATUS_LED_QUEUE_LEN 8
-#define CYD_STATUS_LED_TASK_STACK 3072
+/* 3072 left only 960 bytes spare on hardware, below the 1024 warning
+   threshold. Same +1 KB remedy applied to wifi_connection. */
+#define CYD_STATUS_LED_TASK_STACK 4096
 #define CYD_STATUS_LED_TASK_PRIO 3
 #define CYD_STATUS_LED_UPDATE_MS 25
 

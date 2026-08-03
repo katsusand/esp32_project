@@ -278,6 +278,29 @@ bool cyd_ui_add_sparkline(cyd_display_screen_t *screen,
     return cyd_ui_add_widget(screen, &widget);
 }
 
+bool cyd_ui_add_icon(cyd_display_screen_t *screen,
+                     const cyd_display_bitmap_t *bitmap,
+                     uint8_t col,
+                     uint8_t row,
+                     uint8_t span_cols,
+                     uint8_t span_rows)
+{
+    if (bitmap == NULL || bitmap->data == NULL || bitmap->width_px == 0 || bitmap->height_px == 0) {
+        return false;
+    }
+
+    cyd_display_widget_t widget = {
+        .type = CYD_DISPLAY_WIDGET_ICON,
+        .col = col,
+        .row = row,
+        .span_cols = span_cols,
+        .span_rows = span_rows,
+        .enabled = true,
+        .bitmap = bitmap,
+    };
+    return cyd_ui_add_widget(screen, &widget);
+}
+
 esp_err_t cyd_ui_add_stepper_row(cyd_display_screen_t *screen,
                                  const cyd_ui_stepper_row_t *row)
 {

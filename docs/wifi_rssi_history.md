@@ -90,13 +90,30 @@ English contract: the lease scope is the view, not the service lifetime. Enablin
 
 この設計上、ページを離れている間はサンプルが増えません。再訪時はそれまでの履歴の続きから描かれるため、時間軸に不連続が生じます。診断ビューとしては許容範囲と判断しています。
 
-lease 取得中（radio 起動待ち）は接続前なので、その間のサンプルは欠測値になります。結果として、ページを開いた直後は左端から線が始まらず、Wi-Fi が上がった時点から描画が始まります。これは意図した表示です。
+**lease 取得を待っている間は、サンプルが 1 件も増えません。** 欠測値が記録されるわけでもありません。
+
+task のループが次の形だからです。
+
+```c
+wifi_rssi_history_apply_lease();     /* radio が上がるまでここでブロックする */
+if (s_lease_held) {
+    wifi_rssi_history_sample_once(); /* lease を持っている間だけ記録する */
+}
+```
+
+`radio_manager_acquire()` がブロックしている間、task は sampling に到達しません。lease が下りた時点では既に associate 済みなので、結果として欠測値も出ません。
+
+したがって `WIFI_RSSI_HISTORY_GAP_DBM` が実際に記録されるのは、**lease を保持している最中に AP が落ちた場合**だけです。画面には「waiting for Wi-Fi...」が出るので、待っていること自体は分かります。
+
+常時記録が要る用途なら、lease の有無に関わらず毎周期サンプルする形に変える必要があります。現状は「グラフを見ている間だけの診断ビュー」という位置づけなので、この挙動のままにしています。
+
+English contract: no samples accumulate while the lease is pending, because the task is parked inside the blocking acquire. Gap values therefore only appear when the AP drops while the lease is held. An always-on logger would need to sample regardless of lease state.
 
 サンプルは ring buffer ではなく**線形配列で、新しいものが末尾**です。1 サンプルごとに数百バイトの `memmove` が発生しますが、これは「読み手全員に ring の順序を教える」よりも安いという判断です。sparkline widget にそのまま渡せる形を優先しています。
 
 ## Concurrency
 
-sampler は esp_timer task から書き、読み手は `app_shell` task（および描画時は `cyd_display` task）です。
+sampler は `wifi_rssi` task から書き、読み手は `app_shell` task（および描画時は `cyd_display` task）です。
 
 `count` と `revision` の整合性だけ critical section で保護し、**サンプル配列そのものは描画中にロックしません**。書き込みと描画が競合した場合の結果は「一部だけ新しい値のフレームが 1 回出る」だけで、トレンドグラフでは実害が無いためです。
 

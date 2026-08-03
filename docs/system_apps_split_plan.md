@@ -81,6 +81,18 @@ clock-specific diagnostics を common system UI から外す。
 - [x] scheduler 診断表示を `cyd_clock_settings_app` の `SCHED` page へ移動
 - [x] `cyd_system_apps` から `app_scheduler` 依存を除去
 
+### Step E
+
+共通 component の実装ファイルを app の責務ごとに分ける。
+
+- [x] info app を `system_info_app.c` へ移動
+- [x] settings app を `system_settings_app.c` へ移動
+- [x] touch calibration app を `system_touch_calibration_app.c` へ移動
+- [x] 共有する入力処理と表示整形を component-private な common layer へ移動
+- [x] 公開 API、app ID、単一の ESP-IDF component という境界を維持
+
+English supplement: This is a translation-unit split only. It does not split the public component or change app identity.
+
 ## Remaining Candidates
 
 分離自体の未完了 TODO はありません。

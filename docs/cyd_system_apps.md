@@ -8,8 +8,21 @@
 
 - `info`: firmware / IDF / chip / heap / Wi-Fi 状態を表示する
 - `settings`: 設定系画面への入口を表示する
+- `touch_calibration`: touch calibration を実行して遷移元へ戻る
 
 English supplement: These apps are intentionally lightweight shell apps. They should not own background services; they only present UI and switch to domain apps such as `wifi_setup`.
+
+## Source Layout
+
+公開 API は `include/cyd_system_apps.h` にまとめたまま、実装は app の責務ごとに分離しています。
+
+- `system_info_app.c`: `INFO` / `DIAG` / `DIAG2` / `RSSI` の描画と lifecycle
+- `system_settings_app.c`: settings の state、描画、action dispatch、direct-view API
+- `system_touch_calibration_app.c`: touch calibration の実行と戻り遷移
+- `cyd_system_apps_common.c`: info / settings が共有する入力確定処理と状態表示整形
+- `cyd_system_apps_internal.h`: component 内だけで使う定数・型・宣言
+
+English supplement: The source split does not create separate ESP-IDF components. Pointer identity, app IDs, and the public API remain unchanged inside the existing `cyd_system_apps` component.
 
 ## Public API
 
@@ -83,7 +96,6 @@ English supplement: the RSSI page is the reference example of a live graph drive
 
 - `GENERAL` page
   `LcdBrightness`: LCD バックライトの明るさを変更する
-  `Volume`: スピーカー音量を変更する
   `Touch Calib`: touch calibration app へ切り替える
 - `TIME` page
   現在時刻表示
@@ -108,7 +120,7 @@ English supplement: the RSSI page is the reference example of a live graph drive
 
 ページ切り替えは画面下部の `<` / `>` ボタンで行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消えます。`APPS` page は、設定画面を持つ app が 1 つも無いときだけ消えます。
 
-`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`Volume` は `100 / 70 / 50 / 35 / 25 / 18 / 12 / 8 / 5` の 9 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
+`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
 
 `Stored SSIDs` は `NETWORK1` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
 
@@ -119,6 +131,14 @@ NVS blob の version / size / 文字列終端などが現在 firmware の想定�
 English supplement: Structurally incompatible persistent data now routes the product into a forced initialize flow instead of silently trusting or rewriting the broken payload.
 
 `Wi-Fi Setup` へ入ると、`wifi_setup app` は `from_app` として `settings app` を受け取ります。これにより、Wi-Fi 設定完了後は settings 画面へ戻ります。
+
+### Returning From A Sub-Screen
+
+settings が自分で開いた画面（`Wi-Fi Setup` / `Touch Calib` / app 固有設定）から戻ったときは、**離れたときのページを復元**します。判定は `cyd_settings_is_own_subscreen()` です。
+
+`Stored SSIDs` のようなサブ*ビュー*は同じ app 内に留まるため `enter()` を通らず、もともとページが保持されていました。一方で別 app へ遷移する `Wi-Fi Setup` や `Clock Settings` は `enter()` を通るため、以前は無条件に `GENERAL` へ戻っていました。`NETWORK1` から Wi-Fi 設定へ入って戻ると 1 ページ目に飛ばされる、という非対称な挙動になっていたのを揃えています。
+
+English contract: a sub-screen round trip resumes the page it started from. Entering settings fresh from another app starts at the first page. Preserved pages that became disabled fall back to the first page via the existing enabled check.
 
 app 固有設定がある場合は、app の registry entry に `settings_app` を付けると `APPS` page に並びます。時計アプリでは `Clock` entry の `settings_app` として `Clock Settings` が付いています。
 
@@ -146,8 +166,9 @@ English supplement: Settings is a menu app, not persistent configuration storage
    これは `PRESS` と `REPEAT` をそのまま action として返します。
    `-` / `+` の長押し連続変更を成立させるため、`RELEASE` を待ちません。
 
-実装上の入口は `cyd_settings_app_step()` です。
-最初にステッパー経路を評価し、該当しなければ通常ボタン経路へ進みます。
+実装上の入口は `cyd_settings_app_step()` です。最初にステッパー経路を評価し、該当しなければ通常ボタン経路へ進みます。
+
+どちらの経路も、最終的には `cyd_settings_handle_active_screen_action()` に集約されます。この関数はサブビューが表示中ならそのビューのハンドラへ、そうでなければ**アクティブなページのハンドラだけ**へ振り分けます。ページ送り `<` / `>` だけは、どのページにも属さない shell chrome として先に処理します。
 
 English supplement: Stepper buttons are handled on `PRESS`/`REPEAT`, while normal buttons are handled on confirmed `RELEASE`. They are not interchangeable.
 
@@ -157,34 +178,50 @@ English supplement: Stepper buttons are handled on `PRESS`/`REPEAT`, while norma
 
 #### 新しいページを追加するとき
 
-1. `cyd_settings_page_t` に enum を追加する
-2. `cyd_settings_page_is_enabled()` / `cyd_settings_page_group()` / page title に分岐を足す
-3. `cyd_settings_render_pages()` から render 関数を呼ぶ
-4. **そのページ専用の `cyd_settings_handle_*_page_action()` を作る**
-5. **`cyd_settings_app_step()` の dispatch 連鎖に 4 を追加する**
+`CYD_SETTINGS_PAGES[]` テーブルに 1 行足し、render と handle_action を書きます。**それだけです。**
 
-page-specific handler は先頭で `s_settings_page != <自分のページ>` を早期 return します。したがって**他ページのハンドラに action 処理を間借りさせると動きません**。
+```c
+{
+    .id = CYD_SETTINGS_PAGE_FOO,
+    .title = "FOO",
+    .group = CYD_SETTINGS_PAGE_GROUP_FOO,
+    .uses_live_status = false,
+    .has_steppers = false,
+    .is_enabled = NULL,                       /* NULL は常に表示 */
+    .render = cyd_settings_render_foo_page,
+    .handle_action = cyd_settings_handle_foo_page_action,
+},
+```
 
-`APPS` page の不具合はこれでした。action 処理を `cyd_settings_handle_general_page_action()` の中に置いたまま、ボタンは `APPS` page に描いていたため、`GENERAL` page でしか処理されない状態になっていました。
+テーブルの並び順がページの巡回順です。ページ順、タイトル、グループ、live status ポーリングの要否、ステッパー経路の有効化、ビルド構成での有無、描画とアクション処理が、すべてこの 1 行から引かれます。
+
+`handle_action` は**アクティブなページに対してだけ**呼ばれます。したがって「他ページのハンドラに間借りさせて動かない」という状態は作れません。ハンドラ側で `s_settings_page != 自分のページ` を確認する必要もありません。
+
+以前はこれが 7 箇所に散っており、1 箇所忘れると「描画されるのに押せないボタン」ができました。`APPS` page の不具合が実例です。
+
+English contract: a page is described in exactly one place. `handle_action` runs only for the active page, so a handler cannot be reached from a page it does not belong to.
+
+#### サブビュー（確認画面など）を追加するとき
+
+サブビューは**ページではなくビューで**振り分けます。`cyd_settings_handle_active_screen_action()` の `switch (s_settings_view)` に足してください。
+
+ページ側に間借りさせてはいけません。`system_settings_open_clear_nvs_confirm()` のように他アプリから直接サブビューへ入る経路があり、その場合アクティブページは `GENERAL` のままだからです。
 
 #### 新しいステッパー項目を追加するとき
 
-1. `cyd_settings_is_stepper_action()`
-   新しい action id をステッパー扱いとして登録する
-2. `cyd_settings_touch_stepper_action()`
-   そのページでステッパー経路を有効にする
-3. `cyd_settings_app_step()`
-   ステッパー経路で呼ぶ page-specific handler へ配線する
+1. `cyd_settings_is_stepper_action()` に action id を登録する
+2. テーブルの該当ページで `.has_steppers = true` にする
+3. そのページの `handle_action` で処理する
 
-過去の不具合は 3 が漏れていたため発生しました。
+過去の不具合は、旧構造で 3 の配線が漏れていたため発生しました。
 
 #### 監査方法
 
 定義済みハンドラと dispatch 済みハンドラを突き合わせれば、配線漏れは機械的に見つかります。
 
 ```bash
-grep -n "^static esp_err_t cyd_settings_handle_.*_action" components/apps/cyd_system_apps/cyd_system_apps.c
-sed -n '/static esp_err_t cyd_settings_app_step/,/^}/p' components/apps/cyd_system_apps/cyd_system_apps.c   | grep -o "cyd_settings_handle_[a-z0-9_]*_action" | sort -u
+grep -n "^static esp_err_t cyd_settings_handle_.*_action" components/apps/cyd_system_apps/system_settings_app.c
+sed -n '/static esp_err_t cyd_settings_app_step/,/^}/p' components/apps/cyd_system_apps/system_settings_app.c | grep -o "cyd_settings_handle_[a-z0-9_]*_action" | sort -u
 ```
 
 English supplement: rendering, action handling, and dispatch wiring live in three separate places. A missing wire produces a button that draws correctly but does nothing, which misleads debugging toward the rendering code. Page-specific handlers early-return on the active page, so an action handled inside another page's handler is unreachable.

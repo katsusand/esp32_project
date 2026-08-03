@@ -7,6 +7,7 @@
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "nvs.h"
 #include "nvs_health.h"
 #include "nvs_schema.h"
@@ -540,6 +541,36 @@ static void cyd_display_update_button_map_from_screen(const cyd_display_screen_t
  * Maps a value onto 0..span_px. Saturates instead of extrapolating so a sample
  * outside [min_value, max_value] cannot draw beyond the widget box.
  */
+/*
+ * Screens are queued by value but the pointers inside them are not copied, so a
+ * caller that handed over a temporary buffer leaves a dangling pointer for this
+ * task to dereference. These checks cannot prove a pointer is still *logically*
+ * valid, but they do turn "wild pointer, immediate crash" into a logged warning
+ * and a skipped widget, which is the difference between a debuggable device and
+ * a reboot loop in the field.
+ */
+static bool cyd_display_ptr_readable(const void *p)
+{
+    return p != nullptr && (esp_ptr_in_drom(p) || esp_ptr_byte_accessible(p));
+}
+
+static bool cyd_display_bitmap_is_usable(const cyd_display_bitmap_t *bitmap)
+{
+    if (!cyd_display_ptr_readable(bitmap)) {
+        return false;
+    }
+    if (bitmap->width_px == 0 || bitmap->height_px == 0) {
+        return false;
+    }
+    if (!cyd_display_ptr_readable(bitmap->data)) {
+        return false;
+    }
+
+    /* Last pixel too: a truncated buffer only faults partway through pushImage. */
+    size_t pixel_count = static_cast<size_t>(bitmap->width_px) * bitmap->height_px;
+    return cyd_display_ptr_readable(&bitmap->data[pixel_count - 1U]);
+}
+
 static int32_t cyd_display_map_value(int32_t value, int32_t min_value, int32_t max_value, int32_t span_px)
 {
     if (max_value <= min_value || span_px <= 0) {
@@ -599,7 +630,9 @@ static void cyd_display_draw_sparkline(TDisplay &display,
         display.drawFastHLine(x, baseline_y, w, line.baseline_color);
     }
 
-    if (line.samples != nullptr && line.count > 0 && w > 0 && h > 0) {
+    if (line.samples != nullptr && !cyd_display_ptr_readable(line.samples)) {
+        ESP_LOGW(TAG, "sparkline samples unreadable (%p); check the lifetime contract", line.samples);
+    } else if (line.samples != nullptr && line.count > 0 && w > 0 && h > 0) {
         /*
          * This runs once per strip the widget overlaps, so segments fully above
          * or below the current target are skipped rather than relying on the
@@ -710,12 +743,14 @@ static void cyd_display_render_screen_to_target(TDisplay &display,
                 break;
 
             case CYD_DISPLAY_WIDGET_ICON:
-                if (widget.bitmap != nullptr && widget.bitmap->data != nullptr) {
+                if (cyd_display_bitmap_is_usable(widget.bitmap)) {
                     display.pushImage(x,
                                       y,
                                       widget.bitmap->width_px,
                                       widget.bitmap->height_px,
                                       widget.bitmap->data);
+                } else if (widget.bitmap != nullptr) {
+                    ESP_LOGW(TAG, "icon bitmap unreadable (%p); check the lifetime contract", widget.bitmap);
                 }
                 break;
 

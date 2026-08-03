@@ -147,6 +147,21 @@ bool cyd_ui_add_sparkline(cyd_display_screen_t *screen,
                           uint16_t bg_color,
                           uint16_t border_color);
 
+/*
+ * RGB565 image block.
+ *
+ * English contract: `bitmap` and its pixels are NOT copied. Both must stay
+ * valid until the submitted frame has been rendered on the display task, so
+ * pass `static const` data or a buffer owned for the app's lifetime. A local
+ * buffer in the calling function is a use-after-free. See cyd_display_bitmap_t.
+ */
+bool cyd_ui_add_icon(cyd_display_screen_t *screen,
+                     const cyd_display_bitmap_t *bitmap,
+                     uint8_t col,
+                     uint8_t row,
+                     uint8_t span_cols,
+                     uint8_t span_rows);
+
 esp_err_t cyd_ui_submit(const cyd_display_screen_t *screen);
 
 #ifdef __cplusplus

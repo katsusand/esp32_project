@@ -43,8 +43,24 @@ typedef enum {
     CYD_DISPLAY_ALIGN_RIGHT,
 } cyd_display_align_t;
 
+/*
+ * RGB565 pixel block, referenced by an ICON widget.
+ *
+ * English contract, and it is load-bearing: neither this struct nor `data` is
+ * copied when a screen is submitted. A screen is queued to the display task by
+ * value, and the pixels are read later, on that other task. Both pointers must
+ * therefore stay valid until the frame has been rendered.
+ *
+ * In practice that means `static const` in flash, or a heap buffer owned for at
+ * least the app's lifetime. A buffer local to the function that builds the
+ * screen is a use-after-free: submit() returns long before the pixels are read.
+ *
+ * `data` holds width_px * height_px RGB565 pixels. The element type is
+ * uint16_t on purpose: LovyanGFX picks the source format from the pointer type,
+ * and a uint8_t buffer would be interpreted as RGB332 instead.
+ */
 typedef struct {
-    const uint8_t *data;
+    const uint16_t *data;
     uint8_t width_px;
     uint8_t height_px;
 } cyd_display_bitmap_t;

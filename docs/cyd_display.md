@@ -198,6 +198,38 @@ English contract: both rules are load-bearing. Rule 2 in particular fails silent
 
 値が `[min_value, max_value]` の外にある場合は外挿せず飽和させるので、箱の外にはみ出して描画されることはありません。
 
+### Pointer Lifetime
+
+`ICON` の `cyd_display_bitmap_t` と `SPARKLINE` の `samples` は、**画面 submit 時にコピーされません**。
+
+画面はキューへ値渡しされますが、ポインタはポインタのままです。実際にピクセルやサンプルが読まれるのは、数ミリ秒後の `cyd_display` task 上です。したがって両方とも、そのフレームが描画され終わるまで生存している必要があります。
+
+```c
+/* NG: submit() が返った時点で dangling */
+void draw(void) {
+    uint16_t pixels[16 * 16];
+    cyd_display_bitmap_t icon = { .data = pixels, .width_px = 16, .height_px = 16 };
+    cyd_ui_add_icon(screen, &icon, 2, 2, 2, 2);   /* icon も pixels もローカル */
+    cyd_ui_submit(screen);
+}
+```
+
+`static const`（flash 常駐）か、app 寿命で保持するヒープバッファを渡してください。
+
+English contract: submit() copies the screen struct, not what its pointers reference. A local buffer is a use-after-free.
+
+描画側では、参照前に `esp_ptr_in_drom()` / `esp_ptr_byte_accessible()` でアドレスの参照可否とサイズを検証しています。契約違反を*論理的に*検出することはできませんが、明らかに不正なポインタは warning ログを出して widget をスキップするので、いきなりクラッシュする代わりに原因が残ります。
+
+```text
+W (12345) cyd_display: icon bitmap unreadable (0x3ffb1234); check the lifetime contract
+```
+
+### Pixel Format
+
+`cyd_display_bitmap_t.data` は `const uint16_t *`（RGB565）です。
+
+LovyanGFX は**ポインタの型でソース形式を決めます**。[LGFXBase.hpp](third_party/lovyangfx_upstream/src/lgfx/v1/LGFXBase.hpp) の `create_pc()` を見ると、`const uint8_t *` は `rgb332_t`（8bit色）として解釈され、`const uint16_t *` が RGB565 です。`uint8_t` バッファを渡すと色が壊れるため、型で明示しています。
+
 ### Dropouts
 
 欠測がある系列では `has_gap_value` / `gap_value` を使います。`gap_value` と一致するサンプルは描画されず、そこで折れ線が途切れます。

@@ -50,7 +50,7 @@ bool wifi_rssi_history_is_monitoring(void);
  * collected, which is the normal state before the first successful Wi-Fi
  * association.
  *
- * The sampler writes from the esp_timer task while a reader may be rendering.
+ * The sampler writes from this service's own task while a reader may be rendering.
  * A concurrent write only produces one partially updated frame, which is
  * acceptable for a trend graph, so no lock is held across rendering.
  */
