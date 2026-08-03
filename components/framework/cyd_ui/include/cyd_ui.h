@@ -103,6 +103,50 @@ bool cyd_ui_add_button_with_fg_enabled(cyd_display_screen_t *screen,
                                        bool enabled);
 esp_err_t cyd_ui_add_stepper_row(cyd_display_screen_t *screen,
                                  const cyd_ui_stepper_row_t *row);
+
+/* Panel / separator / background plate. radius 0 draws square corners. */
+bool cyd_ui_add_rect(cyd_display_screen_t *screen,
+                     uint8_t col,
+                     uint8_t row,
+                     uint8_t span_cols,
+                     uint8_t span_rows,
+                     uint16_t bg_color,
+                     uint16_t border_color,
+                     bool filled,
+                     uint8_t radius);
+
+/* Level meter / gauge. value is saturated into [min_value, max_value]. */
+bool cyd_ui_add_bar(cyd_display_screen_t *screen,
+                    uint8_t col,
+                    uint8_t row,
+                    uint8_t span_cols,
+                    uint8_t span_rows,
+                    int16_t value,
+                    int16_t min_value,
+                    int16_t max_value,
+                    bool vertical,
+                    uint16_t fg_color,
+                    uint16_t bg_color,
+                    uint16_t border_color);
+
+/*
+ * Trend graph.
+ *
+ * English contract: `samples` is not copied and must stay valid until the
+ * screen has been submitted; app-owned static storage is the intended pattern.
+ * Bump `revision` on every content change or the dirty-rect diff will treat the
+ * graph as unchanged and never redraw it. See cyd_display_sparkline_t.
+ */
+bool cyd_ui_add_sparkline(cyd_display_screen_t *screen,
+                          uint8_t col,
+                          uint8_t row,
+                          uint8_t span_cols,
+                          uint8_t span_rows,
+                          const cyd_display_sparkline_t *sparkline,
+                          uint16_t fg_color,
+                          uint16_t bg_color,
+                          uint16_t border_color);
+
 esp_err_t cyd_ui_submit(const cyd_display_screen_t *screen);
 
 #ifdef __cplusplus

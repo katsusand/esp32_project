@@ -189,6 +189,95 @@ bool cyd_ui_add_button_with_fg_enabled(cyd_display_screen_t *screen,
     return cyd_ui_add_widget(screen, &widget);
 }
 
+bool cyd_ui_add_rect(cyd_display_screen_t *screen,
+                     uint8_t col,
+                     uint8_t row,
+                     uint8_t span_cols,
+                     uint8_t span_rows,
+                     uint16_t bg_color,
+                     uint16_t border_color,
+                     bool filled,
+                     uint8_t radius)
+{
+    cyd_display_widget_t widget = {
+        .type = CYD_DISPLAY_WIDGET_RECT,
+        .col = col,
+        .row = row,
+        .span_cols = span_cols,
+        .span_rows = span_rows,
+        .bg_color = bg_color,
+        .border_color = border_color,
+        .enabled = true,
+        .rect = {
+            .filled = filled,
+            .radius = radius,
+        },
+    };
+    return cyd_ui_add_widget(screen, &widget);
+}
+
+bool cyd_ui_add_bar(cyd_display_screen_t *screen,
+                    uint8_t col,
+                    uint8_t row,
+                    uint8_t span_cols,
+                    uint8_t span_rows,
+                    int16_t value,
+                    int16_t min_value,
+                    int16_t max_value,
+                    bool vertical,
+                    uint16_t fg_color,
+                    uint16_t bg_color,
+                    uint16_t border_color)
+{
+    cyd_display_widget_t widget = {
+        .type = CYD_DISPLAY_WIDGET_BAR,
+        .col = col,
+        .row = row,
+        .span_cols = span_cols,
+        .span_rows = span_rows,
+        .fg_color = fg_color,
+        .bg_color = bg_color,
+        .border_color = border_color,
+        .enabled = true,
+        .bar = {
+            .value = value,
+            .min_value = min_value,
+            .max_value = max_value,
+            .vertical = vertical,
+        },
+    };
+    return cyd_ui_add_widget(screen, &widget);
+}
+
+bool cyd_ui_add_sparkline(cyd_display_screen_t *screen,
+                          uint8_t col,
+                          uint8_t row,
+                          uint8_t span_cols,
+                          uint8_t span_rows,
+                          const cyd_display_sparkline_t *sparkline,
+                          uint16_t fg_color,
+                          uint16_t bg_color,
+                          uint16_t border_color)
+{
+    if (sparkline == NULL) {
+        return false;
+    }
+
+    cyd_display_widget_t widget = {
+        .type = CYD_DISPLAY_WIDGET_SPARKLINE,
+        .col = col,
+        .row = row,
+        .span_cols = span_cols,
+        .span_rows = span_rows,
+        .fg_color = fg_color,
+        .bg_color = bg_color,
+        .border_color = border_color,
+        .enabled = true,
+        .sparkline = *sparkline,
+    };
+    return cyd_ui_add_widget(screen, &widget);
+}
+
 esp_err_t cyd_ui_add_stepper_row(cyd_display_screen_t *screen,
                                  const cyd_ui_stepper_row_t *row)
 {

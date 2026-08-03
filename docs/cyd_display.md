@@ -141,7 +141,12 @@ typedef struct {
     uint16_t action_id;
     bool enabled;
     const cyd_display_bitmap_t *bitmap;
-    char text[CYD_DISPLAY_TEXT_MAX_LEN + 1];
+    union {
+        char text[CYD_DISPLAY_TEXT_MAX_LEN + 1];
+        cyd_display_rect_style_t rect;
+        cyd_display_bar_t bar;
+        cyd_display_sparkline_t sparkline;
+    };
 } cyd_display_widget_t;
 ```
 
@@ -150,8 +155,56 @@ typedef struct {
 - `CYD_DISPLAY_WIDGET_TEXT`: テキスト
 - `CYD_DISPLAY_WIDGET_BUTTON`: ボタン
 - `CYD_DISPLAY_WIDGET_ICON`: ビットマップアイコン
+- `CYD_DISPLAY_WIDGET_RECT`: 矩形 / 角丸パネル / 区切り
+- `CYD_DISPLAY_WIDGET_BAR`: レベルメーター / ゲージ
+- `CYD_DISPLAY_WIDGET_SPARKLINE`: 時系列折れ線グラフ
 
 テキストは `CYD_DISPLAY_TEXT_MAX_LEN`、つまり 40 文字までです。超える場合は呼び出し側で短くしてください。
+
+### Payload Union
+
+種別ごとのペイロードは排他なので anonymous union に入れています。**これは必須の制約です。**
+
+画面バッファは 1 枚あたり `CYD_DISPLAY_MAX_WIDGETS` 個の widget を持つため、union に入れずに struct メンバーを増やすと、その分が全画面バッファに乗算されます。union 化により、種別を 3 つ追加しても `sizeof(cyd_display_widget_t)` は 72 バイトのまま変わっていません。
+
+English contract: new widget payloads MUST go into the union. `cyd_display.cpp` holds static_asserts that fail the build if any payload variant outgrows the text buffer.
+
+### Graph Widgets
+
+`CYD_DISPLAY_WIDGET_SPARKLINE` はグリッドの箱の中を**ピクセル精度**で描きます。グリッドはレイアウト用の座標系であり、描画解像度の制約ではありません。
+
+```c
+typedef struct {
+    const int16_t *samples;
+    uint16_t count;
+    uint16_t revision;
+    int16_t min_value;
+    int16_t max_value;
+    bool fill;
+    bool has_baseline;
+    int16_t baseline_value;
+    uint16_t baseline_color;
+} cyd_display_sparkline_t;
+```
+
+使用時の規則が 2 つあります。両方守らないと正しく動きません。
+
+1. **`samples` はコピーされません。** 画面は display task へ値渡しでキューイングされるため、配列は submit 後も生存している必要があります。app 所有の static 配列が想定パターンです。
+2. **中身を書き換えたら `revision` を必ず加算してください。** dirty-rect 差分は widget を値で比較するため、ポインタの先までは見ません。`revision` が変わらないグラフは「変化なし」と判定され、**永久に再描画されません**。
+
+English contract: both rules are load-bearing. Rule 2 in particular fails silently — the graph simply never updates.
+
+`samples[]` への書き込みと display task の読み出しが競合しても、結果は「一部だけ新しい値のフレームが 1 回出る」だけです。トレンドグラフでは実害が無いため、ロックは不要です。
+
+値が `[min_value, max_value]` の外にある場合は外挿せず飽和させるので、箱の外にはみ出して描画されることはありません。
+
+### Dropouts
+
+欠測がある系列では `has_gap_value` / `gap_value` を使います。`gap_value` と一致するサンプルは描画されず、そこで折れ線が途切れます。
+
+欠測を「記録しない」で済ませると、その区間が時間軸から消えてグラフが詰まってしまい、**「値が途切れていた」のか「その間ずっと安定していた」のか区別できなくなります**。欠測は欠測として記録し、描画側で途切れさせるのが正しい扱いです。
+
+実例は `wifi_rssi_history` を参照してください。Wi-Fi 未接続時に `WIFI_RSSI_HISTORY_GAP_DBM` を記録しています。
 
 `CYD_DISPLAY_WIDGET_BUTTON` で `enabled=false` の場合、描画はされますが `cyd_display_hit_test_action()` とモードボタンマップの対象から外れます。無効状態の色は呼び出し側が指定します。
 

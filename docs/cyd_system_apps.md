@@ -33,6 +33,10 @@ ESP_ERROR_CHECK(app_shell_switch_to(system_settings_app_get_app()));
 
 English supplement: Return apps come from the `from_app` pointer passed to `enter()`, avoiding compile-time dependency from system apps back to the clock app.
 
+戻る操作は `app_shell_return_to()` を通します。`from_app` が NULL のときは home app へフォールバックするため、戻り先が無い画面でも `<<` が死にません。
+
+settings は「settings 自身が開いた画面」から戻ってきた場合だけ、戻り先を更新しません。判定は `cyd_settings_is_app_settings_screen()` で、**app 固有設定画面のみ**が対象です。ここで registry の app 本体まで対象にすると、clock から settings に入ったときに戻り先が記録されず `<<` が効かなくなります。
+
 保存済みSSID一覧、touch calibration消去確認、NVS消去確認は、次のAPIで次回のsettings遷移先として直接指定できます。
 
 ```c
@@ -57,8 +61,21 @@ English supplement: Direct-view selection is one-shot and thread-safe; callers s
 - free heap
 - Wi-Fi manager state / active users / last user
 - Wi-Fi connected duration / max duration / warning / last failure
+- Wi-Fi RSSI トレンドグラフ
+
+ページは `INFO -> DIAG -> DIAG2 -> RSSI` の順に、画面下部のボタンで巡回します。
 
 左上の `<<` ボタンで、`enter()` の `from_app` として受け取った return app へ戻ります。
+
+### RSSI Page
+
+`RSSI` ページは `wifi_rssi_history` が集めた RSSI を sparkline widget で描きます。スケールは -100 〜 -30 dBm 固定で、-75 dBm に赤の基準線を引いています。自動スケールにしないのは、時間をまたいで見比べられるようにするためです。
+
+他のページがタッチ時にしか再描画しないのに対し、このページだけは `step()` で `wifi_rssi_history_get()` の `revision` を監視し、変化があったときだけ再描画します。毎回描き直さないことで、dirty-rect 差分がそのまま効きます。
+
+`APP_WIFI_STA=0` ビルドや Wi-Fi 未接続時は、グラフの代わりに「データなし」を表示します。
+
+English supplement: the RSSI page is the reference example of a live graph driven by a sampling service. See `docs/wifi_rssi_history.md`.
 
 ## Settings App
 
@@ -67,7 +84,7 @@ English supplement: Direct-view selection is one-shot and thread-safe; callers s
 - `GENERAL` page
   `LcdBrightness`: LCD バックライトの明るさを変更する
   `Volume`: スピーカー音量を変更する
-  optional extension button: app 固有設定 app への導線を表示できる
+  `Touch Calib`: touch calibration app へ切り替える
 - `TIME` page
   現在時刻表示
   現在日付表示
@@ -84,9 +101,12 @@ English supplement: Direct-view selection is one-shot and thread-safe; callers s
 - `NVS` page
   `Clear Touch Calib`: 保存済みタッチ補正だけ消す
   `Initialize NVS`: 保存済み NVS データを全消去して再起動する
+- `APPS` page
+  設定画面を持つ app の一覧。ボタンでその app の設定画面へ遷移する
+  app 自体ではなく **app 固有設定への導線**であり、設定画面を持たない app は出ない
 - `<<`: `enter()` の `from_app` として受け取った return app へ戻る
 
-ページ切り替えは画面下部の `<` / `>` ボタンで行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消え、`GENERAL -> TIME -> NVS` だけが残ります。
+ページ切り替えは画面下部の `<` / `>` ボタンで行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消えます。`APPS` page は、設定画面を持つ app が 1 つも無いときだけ消えます。
 
 `LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`Volume` は `100 / 70 / 50 / 35 / 25 / 18 / 12 / 8 / 5` の 9 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
 
@@ -100,7 +120,11 @@ English supplement: Structurally incompatible persistent data now routes the pro
 
 `Wi-Fi Setup` へ入ると、`wifi_setup app` は `from_app` として `settings app` を受け取ります。これにより、Wi-Fi 設定完了後は settings 画面へ戻ります。
 
-app 固有設定がある場合は、`system_settings_set_extension()` で `label + app_shell_app_t` を差し込めます。現在の時計アプリでは `Clock Settings` への導線がこれで追加されます。
+app 固有設定がある場合は、app の registry entry に `settings_app` を付けると `APPS` page に並びます。時計アプリでは `Clock` entry の `settings_app` として `Clock Settings` が付いています。
+
+設定画面を独立した entry として登録しないのは意図的です。そうすると launcher に `Clock` と `Clock Settings` が対等に並んでしまい、また clock を載せない製品でも設定画面だけ残り得るためです。
+
+以前は `system_settings_set_extension()` という 1 スロットの API で、**設定を拡張できる app は 1 つだけ**でした。registry 化により件数の制限が `CYD_SETTINGS_APPS_VISIBLE_MAX` まで緩和されています。詳細は `docs/app_registry.md` を参照してください。
 
 時計固有の alarm 設定と scheduler 診断表示は `Clock Settings` 側にあります。`cyd_system_apps` は `app_scheduler` に依存しません。
 
@@ -129,7 +153,21 @@ English supplement: Stepper buttons are handled on `PRESS`/`REPEAT`, while norma
 
 ### Maintenance Rule
 
-`settings` に新しい `-` / `+` ステッパー項目を追加するときは、次の 3 箇所を必ずセットで更新します。
+`settings` は「描画」と「action 処理」と「dispatch 配線」が別々の場所にあります。**どれか 1 つでも漏れると、ボタンは正しく描画されるのに反応しません。** 症状が「見えているのに押せない」なので、描画側を疑って時間を溶かしやすい形です。
+
+#### 新しいページを追加するとき
+
+1. `cyd_settings_page_t` に enum を追加する
+2. `cyd_settings_page_is_enabled()` / `cyd_settings_page_group()` / page title に分岐を足す
+3. `cyd_settings_render_pages()` から render 関数を呼ぶ
+4. **そのページ専用の `cyd_settings_handle_*_page_action()` を作る**
+5. **`cyd_settings_app_step()` の dispatch 連鎖に 4 を追加する**
+
+page-specific handler は先頭で `s_settings_page != <自分のページ>` を早期 return します。したがって**他ページのハンドラに action 処理を間借りさせると動きません**。
+
+`APPS` page の不具合はこれでした。action 処理を `cyd_settings_handle_general_page_action()` の中に置いたまま、ボタンは `APPS` page に描いていたため、`GENERAL` page でしか処理されない状態になっていました。
+
+#### 新しいステッパー項目を追加するとき
 
 1. `cyd_settings_is_stepper_action()`
    新しい action id をステッパー扱いとして登録する
@@ -138,10 +176,18 @@ English supplement: Stepper buttons are handled on `PRESS`/`REPEAT`, while norma
 3. `cyd_settings_app_step()`
    ステッパー経路で呼ぶ page-specific handler へ配線する
 
-今回の不具合は 3 が漏れていたため発生しました。
-見た目上は `-` / `+` が描画されていても、handler 配線が抜けると反応しません。
+過去の不具合は 3 が漏れていたため発生しました。
 
-English supplement: If a control should auto-repeat while held, route it through the stepper path and explicitly wire its handler in `cyd_settings_app_step()`.
+#### 監査方法
+
+定義済みハンドラと dispatch 済みハンドラを突き合わせれば、配線漏れは機械的に見つかります。
+
+```bash
+grep -n "^static esp_err_t cyd_settings_handle_.*_action" components/apps/cyd_system_apps/cyd_system_apps.c
+sed -n '/static esp_err_t cyd_settings_app_step/,/^}/p' components/apps/cyd_system_apps/cyd_system_apps.c   | grep -o "cyd_settings_handle_[a-z0-9_]*_action" | sort -u
+```
+
+English supplement: rendering, action handling, and dispatch wiring live in three separate places. A missing wire produces a button that draws correctly but does nothing, which misleads debugging toward the rendering code. Page-specific handlers early-return on the active page, so an action handled inside another page's handler is unreachable.
 
 ### Page Composition Rule
 

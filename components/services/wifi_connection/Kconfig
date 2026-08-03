@@ -2,13 +2,17 @@ menu "Wi-Fi Connection"
 
     config WIFI_CONNECTION_TASK_STACK_SIZE
         int "Wi-Fi connection task stack size"
-        default 8192
+        default 9216
         range 7168 32768
         depends on ESP32_WIFI_STA_ENABLED
         help
             Wi-Fi connection task の stack size です。
+            8192 では接続直後の spare が 320 バイトまで落ちることを実機で確認したため、
+            1 KB 積み増しています。
             English: this task manages STA state and connection requests,
             while the foreground setup UI runs on the app_shell task.
+            Measured spare dropped to 320 bytes right after association at 8192,
+            hence the extra 1 KB.
 
     config WIFI_CONNECTION_TASK_PRIORITY
         int "Wi-Fi connection task priority"

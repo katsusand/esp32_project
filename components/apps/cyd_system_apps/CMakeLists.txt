@@ -1,3 +1,3 @@
 idf_component_register(SRCS "cyd_system_apps.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES app_shell cyd_display cyd_input cyd_ui cyd_wifi_setup esp_app_format esp_hw_support esp_system heap nvs_flash nvs_health time_sync wifi_connection wifi_profile_store radio_manager)
+                    REQUIRES app_registry app_shell cyd_display cyd_input cyd_ui cyd_wifi_setup esp_app_format esp_hw_support esp_system heap nvs_flash nvs_health time_sync wifi_connection wifi_profile_store wifi_rssi_history radio_manager)

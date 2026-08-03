@@ -32,6 +32,9 @@ typedef enum {
     CYD_DISPLAY_WIDGET_TEXT,
     CYD_DISPLAY_WIDGET_BUTTON,
     CYD_DISPLAY_WIDGET_ICON,
+    CYD_DISPLAY_WIDGET_RECT,
+    CYD_DISPLAY_WIDGET_BAR,
+    CYD_DISPLAY_WIDGET_SPARKLINE,
 } cyd_display_widget_type_t;
 
 typedef enum {
@@ -45,6 +48,50 @@ typedef struct {
     uint8_t width_px;
     uint8_t height_px;
 } cyd_display_bitmap_t;
+
+typedef struct {
+    bool filled;
+    uint8_t radius;
+} cyd_display_rect_style_t;
+
+typedef struct {
+    int16_t value;
+    int16_t min_value;
+    int16_t max_value;
+    bool vertical;
+} cyd_display_bar_t;
+
+/*
+ * Time-series polyline drawn at pixel resolution inside its grid box.
+ *
+ * English contract, both rules matter:
+ *  - `samples` is NOT copied. A screen is queued to the display task by value,
+ *    so the array must outlive the submit; app-owned static storage is the
+ *    intended pattern. Concurrent writes only produce a partially updated
+ *    frame, which is acceptable for trend graphs, so no lock is required.
+ *  - `revision` must be incremented whenever the sample contents change. The
+ *    dirty-rect diff compares widgets by value and cannot see through the
+ *    pointer, so a graph with a static revision would never be redrawn.
+ */
+typedef struct {
+    const int16_t *samples;
+    uint16_t count;
+    uint16_t revision;
+    int16_t min_value;
+    int16_t max_value;
+    bool fill;
+    bool has_baseline;
+    int16_t baseline_value;
+    uint16_t baseline_color;
+    /*
+     * Optional dropout marker. Samples equal to `gap_value` are not plotted and
+     * break the polyline instead of being drawn as a real reading. This keeps
+     * the time axis honest when a source has outages: the gap stays visible as
+     * a gap rather than silently compressing the graph.
+     */
+    bool has_gap_value;
+    int16_t gap_value;
+} cyd_display_sparkline_t;
 
 typedef struct {
     cyd_display_widget_type_t type;
@@ -61,7 +108,17 @@ typedef struct {
     uint16_t action_id;
     bool enabled;
     const cyd_display_bitmap_t *bitmap;
-    char text[CYD_DISPLAY_TEXT_MAX_LEN + 1];
+    /*
+     * Payload is per-type and mutually exclusive. Keeping it in an anonymous
+     * union is what stops new widget types from growing all
+     * CYD_DISPLAY_MAX_WIDGETS entries of every screen buffer.
+     */
+    union {
+        char text[CYD_DISPLAY_TEXT_MAX_LEN + 1];
+        cyd_display_rect_style_t rect;
+        cyd_display_bar_t bar;
+        cyd_display_sparkline_t sparkline;
+    };
 } cyd_display_widget_t;
 
 typedef struct {

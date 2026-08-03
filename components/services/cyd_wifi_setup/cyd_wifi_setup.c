@@ -566,8 +566,7 @@ static esp_err_t cyd_wifi_setup_app_leave(void *ctx)
 
 static esp_err_t cyd_wifi_setup_switch_back(void)
 {
-    ESP_RETURN_ON_FALSE(s_wifi_setup_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "return app not set");
-    return app_shell_switch_to(s_wifi_setup_return_app);
+    return app_shell_return_to(s_wifi_setup_return_app);
 }
 
 static esp_err_t cyd_wifi_setup_app_step(void *ctx)

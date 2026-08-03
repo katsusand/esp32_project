@@ -1,4 +1,6 @@
 set(CYD_CLOCK_COMPOSITION_REQUIRES
+    app_launcher
+    app_registry
     app_scheduler
     app_shell
     cyd_clock_app
@@ -18,7 +20,8 @@ if(NOT DEFINED ENV{APP_WIFI_STA} OR NOT "$ENV{APP_WIFI_STA}" MATCHES "^(0|false|
         status_indicator
         time_sync
         wifi_connection
-        wifi_profile_store)
+        wifi_profile_store
+        wifi_rssi_history)
 endif()
 
 idf_component_register(SRCS "cyd_clock_composition.c"

@@ -19,6 +19,18 @@
 namespace {
 
 static const char *TAG = "cyd_display";
+
+/*
+ * Every screen buffer holds CYD_DISPLAY_MAX_WIDGETS widgets, so any payload
+ * variant that outgrows the text buffer silently inflates all of them. New
+ * widget types belong in the union, not as extra struct members.
+ */
+static_assert(sizeof(cyd_display_rect_style_t) <= (CYD_DISPLAY_TEXT_MAX_LEN + 1),
+              "rect payload must fit inside the widget text buffer");
+static_assert(sizeof(cyd_display_bar_t) <= (CYD_DISPLAY_TEXT_MAX_LEN + 1),
+              "bar payload must fit inside the widget text buffer");
+static_assert(sizeof(cyd_display_sparkline_t) <= (CYD_DISPLAY_TEXT_MAX_LEN + 1),
+              "sparkline payload must fit inside the widget text buffer");
 static constexpr uint8_t CYD_DISPLAY_MIN_SAFE_BRIGHTNESS = 13;
 static constexpr int32_t GRID_CELL_PX = CYD_DISPLAY_GRID_CELL_PX;
 static constexpr int32_t SCREEN_MARGIN_X = GRID_CELL_PX;
@@ -524,6 +536,116 @@ static void cyd_display_update_button_map_from_screen(const cyd_display_screen_t
     }
 }
 
+/*
+ * Maps a value onto 0..span_px. Saturates instead of extrapolating so a sample
+ * outside [min_value, max_value] cannot draw beyond the widget box.
+ */
+static int32_t cyd_display_map_value(int32_t value, int32_t min_value, int32_t max_value, int32_t span_px)
+{
+    if (max_value <= min_value || span_px <= 0) {
+        return 0;
+    }
+    if (value <= min_value) {
+        return 0;
+    }
+    if (value >= max_value) {
+        return span_px;
+    }
+    return ((value - min_value) * span_px) / (max_value - min_value);
+}
+
+template <typename TDisplay>
+static void cyd_display_draw_bar(TDisplay &display,
+                                 const cyd_display_widget_t &widget,
+                                 int32_t x,
+                                 int32_t y,
+                                 int32_t w,
+                                 int32_t h)
+{
+    display.fillRect(x, y, w, h, cyd_display_resolve_bg(widget));
+
+    if (widget.bar.vertical) {
+        int32_t filled = cyd_display_map_value(widget.bar.value, widget.bar.min_value, widget.bar.max_value, h);
+        if (filled > 0) {
+            display.fillRect(x, y + (h - filled), w, filled, widget.fg_color);
+        }
+    } else {
+        int32_t filled = cyd_display_map_value(widget.bar.value, widget.bar.min_value, widget.bar.max_value, w);
+        if (filled > 0) {
+            display.fillRect(x, y, filled, h, widget.fg_color);
+        }
+    }
+
+    if (widget.border_color != 0) {
+        display.drawRect(x, y, w, h, widget.border_color);
+    }
+}
+
+template <typename TDisplay>
+static void cyd_display_draw_sparkline(TDisplay &display,
+                                       const cyd_display_widget_t &widget,
+                                       int32_t x,
+                                       int32_t y,
+                                       int32_t w,
+                                       int32_t h)
+{
+    const cyd_display_sparkline_t &line = widget.sparkline;
+
+    display.fillRect(x, y, w, h, cyd_display_resolve_bg(widget));
+
+    if (line.has_baseline) {
+        int32_t baseline_y = y + (h - 1) -
+                             cyd_display_map_value(line.baseline_value, line.min_value, line.max_value, h - 1);
+        display.drawFastHLine(x, baseline_y, w, line.baseline_color);
+    }
+
+    if (line.samples != nullptr && line.count > 0 && w > 0 && h > 0) {
+        /*
+         * This runs once per strip the widget overlaps, so segments fully above
+         * or below the current target are skipped rather than relying on the
+         * clip inside drawLine.
+         */
+        int32_t target_h = display.height();
+        int32_t prev_x = 0;
+        int32_t prev_y = 0;
+        bool has_prev = false;
+
+        for (uint16_t i = 0; i < line.count; ++i) {
+            /* A dropout breaks the polyline: the next valid sample starts a new
+               segment instead of drawing a line across the missing span. */
+            if (line.has_gap_value && line.samples[i] == line.gap_value) {
+                has_prev = false;
+                continue;
+            }
+
+            int32_t sample_x = (line.count == 1)
+                                   ? x
+                                   : x + ((static_cast<int32_t>(i) * (w - 1)) / (line.count - 1));
+            int32_t sample_y = y + (h - 1) -
+                               cyd_display_map_value(line.samples[i], line.min_value, line.max_value, h - 1);
+
+            if (line.fill) {
+                display.drawFastVLine(sample_x, sample_y, (y + h) - sample_y, widget.fg_color);
+            }
+
+            if (!has_prev) {
+                display.drawPixel(sample_x, sample_y, widget.fg_color);
+            } else if (!((prev_y < 0 && sample_y < 0) ||
+                         (prev_y >= target_h && sample_y >= target_h))) {
+                display.drawLine(prev_x, prev_y, sample_x, sample_y, widget.fg_color);
+            }
+
+            prev_x = sample_x;
+            prev_y = sample_y;
+            has_prev = true;
+        }
+    }
+
+    if (widget.border_color != 0) {
+        display.drawRect(x, y, w, h, widget.border_color);
+    }
+}
+
 template <typename TDisplay>
 static void cyd_display_render_screen_to_target(TDisplay &display,
                                                 const cyd_display_screen_t &screen,
@@ -597,10 +719,71 @@ static void cyd_display_render_screen_to_target(TDisplay &display,
                 }
                 break;
 
+            case CYD_DISPLAY_WIDGET_RECT:
+                if (widget.rect.filled) {
+                    if (widget.rect.radius > 0) {
+                        display.fillRoundRect(x, y, w, h, widget.rect.radius, cyd_display_resolve_bg(widget));
+                    } else {
+                        display.fillRect(x, y, w, h, cyd_display_resolve_bg(widget));
+                    }
+                }
+                if (widget.border_color != 0) {
+                    if (widget.rect.radius > 0) {
+                        display.drawRoundRect(x, y, w, h, widget.rect.radius, widget.border_color);
+                    } else {
+                        display.drawRect(x, y, w, h, widget.border_color);
+                    }
+                }
+                break;
+
+            case CYD_DISPLAY_WIDGET_BAR:
+                cyd_display_draw_bar(display, widget, x, y, w, h);
+                break;
+
+            case CYD_DISPLAY_WIDGET_SPARKLINE:
+                cyd_display_draw_sparkline(display, widget, x, y, w, h);
+                break;
+
             case CYD_DISPLAY_WIDGET_NONE:
             default:
                 break;
         }
+    }
+}
+
+/*
+ * Payload comparison is per-type on purpose. memcmp over the union would read
+ * padding bytes for the non-text variants and report spurious differences.
+ */
+static bool cyd_display_widget_payload_equals(const cyd_display_widget_t &lhs, const cyd_display_widget_t &rhs)
+{
+    switch (lhs.type) {
+        case CYD_DISPLAY_WIDGET_RECT:
+            return lhs.rect.filled == rhs.rect.filled &&
+                   lhs.rect.radius == rhs.rect.radius;
+
+        case CYD_DISPLAY_WIDGET_BAR:
+            return lhs.bar.value == rhs.bar.value &&
+                   lhs.bar.min_value == rhs.bar.min_value &&
+                   lhs.bar.max_value == rhs.bar.max_value &&
+                   lhs.bar.vertical == rhs.bar.vertical;
+
+        case CYD_DISPLAY_WIDGET_SPARKLINE:
+            /* revision is what makes in-place sample updates visible here. */
+            return lhs.sparkline.samples == rhs.sparkline.samples &&
+                   lhs.sparkline.count == rhs.sparkline.count &&
+                   lhs.sparkline.revision == rhs.sparkline.revision &&
+                   lhs.sparkline.min_value == rhs.sparkline.min_value &&
+                   lhs.sparkline.max_value == rhs.sparkline.max_value &&
+                   lhs.sparkline.fill == rhs.sparkline.fill &&
+                   lhs.sparkline.has_baseline == rhs.sparkline.has_baseline &&
+                   lhs.sparkline.baseline_value == rhs.sparkline.baseline_value &&
+                   lhs.sparkline.baseline_color == rhs.sparkline.baseline_color &&
+                   lhs.sparkline.has_gap_value == rhs.sparkline.has_gap_value &&
+                   lhs.sparkline.gap_value == rhs.sparkline.gap_value;
+
+        default:
+            return memcmp(lhs.text, rhs.text, sizeof(lhs.text)) == 0;
     }
 }
 
@@ -620,7 +803,7 @@ static bool cyd_display_widget_equals(const cyd_display_widget_t &lhs, const cyd
            lhs.action_id == rhs.action_id &&
            lhs.enabled == rhs.enabled &&
            lhs.bitmap == rhs.bitmap &&
-           memcmp(lhs.text, rhs.text, sizeof(lhs.text)) == 0;
+           cyd_display_widget_payload_equals(lhs, rhs);
 }
 
 static bool cyd_display_widget_bounds_px(const cyd_display_widget_t &widget, cyd_display_dirty_rect_t *rect)

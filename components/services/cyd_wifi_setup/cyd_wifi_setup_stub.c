@@ -27,9 +27,8 @@ static esp_err_t cyd_wifi_setup_disabled_step(void *ctx)
     cyd_input_event_t event = { 0 };
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(50)) == ESP_OK &&
         event.type == CYD_INPUT_EVENT_TOUCH &&
-        event.data.touch.action == CYD_INPUT_TOUCH_ACTION_RELEASE &&
-        s_wifi_setup_return_app != NULL) {
-        ESP_RETURN_ON_ERROR(app_shell_switch_to(s_wifi_setup_return_app), TAG, "switch back failed");
+        event.data.touch.action == CYD_INPUT_TOUCH_ACTION_RELEASE) {
+        ESP_RETURN_ON_ERROR(app_shell_return_to(s_wifi_setup_return_app), TAG, "switch back failed");
     }
     return ESP_OK;
 }

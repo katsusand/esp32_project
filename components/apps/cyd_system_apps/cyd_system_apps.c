@@ -12,6 +12,7 @@
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "nvs_health.h"
+#include "app_registry.h"
 #include "app_shell.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
@@ -21,6 +22,7 @@
 #include "time_sync.h"
 #include "wifi_connection.h"
 #include "wifi_profile_store.h"
+#include "wifi_rssi_history.h"
 
 #define TAG "cyd_system_apps"
 #ifndef APP_WIFI_STA_ENABLED
@@ -48,7 +50,10 @@
 #define CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB 0x2213
 #define CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CANCEL 0x2214
 #define CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CONFIRM 0x2215
-#define CYD_SETTINGS_APP_ACTION_EXTENSION 0x2216
+#define CYD_SETTINGS_APP_ACTION_APP_BASE 0x2400
+/* Rows the APPS page can show at once. The page has no scrolling yet, so this
+   is also the cap on how many registered apps are reachable from settings. */
+#define CYD_SETTINGS_APPS_VISIBLE_MAX 5
 #define CYD_SETTINGS_APP_ACTION_SYNC_NOW 0x2217
 #define CYD_SETTINGS_APP_ACTION_CLEAR_NVS 0x221a
 #define CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CANCEL 0x221b
@@ -58,6 +63,12 @@
 #define CYD_SYSTEM_APPS_BACK_ROW 0
 #define CYD_SYSTEM_APPS_BACK_SPAN_COLS 6
 #define CYD_SYSTEM_APPS_BACK_SPAN_ROWS 3
+/* Fixed RSSI scale. -30 dBm is effectively "next to the AP", -100 dBm is the
+   practical noise floor, so a fixed scale keeps the graph comparable over time
+   instead of auto-ranging on every sample. */
+#define CYD_INFO_RSSI_MAX_DBM (-30)
+#define CYD_INFO_RSSI_MIN_DBM (-100)
+#define CYD_INFO_RSSI_WEAK_DBM (-75)
 #define CYD_SYSTEM_APPS_TITLE_COL 8
 #define CYD_SYSTEM_APPS_TITLE_ROW 0
 #define CYD_SYSTEM_APPS_TITLE_SPAN_COLS 32
@@ -146,6 +157,7 @@ typedef enum {
     CYD_SETTINGS_PAGE_NETWORK1,
     CYD_SETTINGS_PAGE_NETWORK2,
     CYD_SETTINGS_PAGE_NVS,
+    CYD_SETTINGS_PAGE_APPS,
     CYD_SETTINGS_PAGE_COUNT,
 } cyd_settings_page_t;
 
@@ -154,6 +166,7 @@ typedef enum {
     CYD_SETTINGS_PAGE_GROUP_TIME,
     CYD_SETTINGS_PAGE_GROUP_NETWORK,
     CYD_SETTINGS_PAGE_GROUP_NVS,
+    CYD_SETTINGS_PAGE_GROUP_APPS,
 } cyd_settings_page_group_t;
 
 typedef enum {
@@ -175,6 +188,7 @@ typedef enum {
     CYD_INFO_PAGE_INFO = 0,
     CYD_INFO_PAGE_DIAG,
     CYD_INFO_PAGE_DIAG2,
+    CYD_INFO_PAGE_RSSI,
     CYD_INFO_PAGE_COUNT,
 } cyd_info_page_t;
 
@@ -195,10 +209,11 @@ static cyd_display_screen_t s_settings_screen;
 static const app_shell_app_t *s_info_return_app;
 static const app_shell_app_t *s_settings_return_app;
 static const app_shell_app_t *s_touch_calibration_return_app;
-static const system_settings_extension_t *s_settings_extension;
 static cyd_system_apps_touch_tracker_t s_info_touch_tracker;
 static cyd_system_apps_touch_tracker_t s_settings_touch_tracker;
 static cyd_info_page_t s_info_page = CYD_INFO_PAGE_INFO;
+static uint16_t s_info_rssi_shown_revision;
+static bool s_info_rssi_has_history;
 static cyd_settings_page_t s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
 static cyd_settings_view_t s_settings_view = CYD_SETTINGS_VIEW_PAGES;
 static cyd_settings_direct_view_t s_settings_pending_direct_view;
@@ -217,6 +232,28 @@ static size_t s_settings_active_page_index = 0;
 static esp_err_t cyd_settings_refresh(void);
 
 static bool cyd_settings_page_is_enabled(cyd_settings_page_t page);
+
+/*
+ * True for screens that settings itself launches, so coming back from one does
+ * not overwrite the real return target.
+ *
+ * Only settings screens qualify. A registered app is a legitimate place to have
+ * arrived from -- matching those here is what broke `<<`, because entering
+ * settings from the clock stopped recording the clock as the return app.
+ */
+static bool cyd_settings_is_app_settings_screen(const app_shell_app_t *app)
+{
+    if (app == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < app_registry_count(); ++i) {
+        const app_registry_entry_t *entry = app_registry_at(i);
+        if (entry != NULL && entry->settings_app == app) {
+            return true;
+        }
+    }
+    return false;
+}
 static bool cyd_settings_page_uses_live_status(cyd_settings_page_t page);
 
 static bool cyd_system_apps_touch_confirmed_action(const cyd_input_event_t *event,
@@ -456,6 +493,8 @@ static const char *cyd_info_app_next_page_label(void)
     case CYD_INFO_PAGE_DIAG:
         return "DIAG2";
     case CYD_INFO_PAGE_DIAG2:
+        return "RSSI";
+    case CYD_INFO_PAGE_RSSI:
     default:
         return "INFO";
     }
@@ -592,6 +631,10 @@ static bool cyd_settings_page_is_enabled(cyd_settings_page_t page)
     case CYD_SETTINGS_PAGE_NETWORK1:
     case CYD_SETTINGS_PAGE_NETWORK2:
         return APP_WIFI_STA_ENABLED != 0;
+    case CYD_SETTINGS_PAGE_APPS:
+        /* Only present once an installed app actually owns a settings screen;
+           an empty page would be a dead end in the page rotation. */
+        return app_registry_settings_count() > 0;
     case CYD_SETTINGS_PAGE_GENERAL:
     case CYD_SETTINGS_PAGE_TIME:
     case CYD_SETTINGS_PAGE_NVS:
@@ -613,6 +656,8 @@ static cyd_settings_page_group_t cyd_settings_page_group(cyd_settings_page_t pag
         return CYD_SETTINGS_PAGE_GROUP_NETWORK;
     case CYD_SETTINGS_PAGE_NVS:
         return CYD_SETTINGS_PAGE_GROUP_NVS;
+    case CYD_SETTINGS_PAGE_APPS:
+        return CYD_SETTINGS_PAGE_GROUP_APPS;
     default:
         return CYD_SETTINGS_PAGE_GROUP_GENERAL;
     }
@@ -679,6 +724,15 @@ static bool cyd_settings_page_uses_live_status(cyd_settings_page_t page)
 static bool cyd_settings_current_page_uses_live_status(void)
 {
     return s_settings_view == CYD_SETTINGS_VIEW_PAGES && cyd_settings_page_uses_live_status(s_settings_page);
+}
+
+/*
+ * The RSSI graph needs the radio powered, but radio_manager shuts it down once
+ * no client holds a lease. Hold one only while that page is on screen.
+ */
+static void cyd_info_app_apply_rssi_monitoring(void)
+{
+    (void)wifi_rssi_history_set_monitoring(s_info_page == CYD_INFO_PAGE_RSSI);
 }
 
 static esp_err_t cyd_info_app_show_page_nav(cyd_display_screen_t *screen)
@@ -791,6 +845,8 @@ static const char *cyd_settings_page_title(cyd_settings_page_t page)
         return "NETWORK";
     case CYD_SETTINGS_PAGE_NVS:
         return "NVS";
+    case CYD_SETTINGS_PAGE_APPS:
+        return "APPS";
     default:
         return "SETTINGS";
     }
@@ -1069,6 +1125,84 @@ static esp_err_t cyd_info_app_show(void)
         return cyd_ui_submit(screen);
     }
 
+    if (s_info_page == CYD_INFO_PAGE_RSSI) {
+        cyd_display_screen_t *screen = &s_info_screen;
+        const int16_t *samples = NULL;
+        uint16_t sample_count = 0;
+        uint16_t revision = 0;
+        int16_t latest_rssi = 0;
+        char rssi_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+        bool has_history = wifi_rssi_history_get(&samples, &sample_count, &revision);
+
+        if (wifi_rssi_history_get_latest(&latest_rssi)) {
+            snprintf(rssi_line,
+                     sizeof(rssi_line),
+                     "now %d dBm  (%u samples)",
+                     (int)latest_rssi,
+                     (unsigned)sample_count);
+        } else if (wifi_rssi_history_is_monitoring()) {
+            /* Monitoring is on but nothing has associated yet. Say so, rather
+               than "no data", so the radio bring-up wait looks intentional. */
+            snprintf(rssi_line, sizeof(rssi_line), "waiting for Wi-Fi...");
+        } else {
+            snprintf(rssi_line, sizeof(rssi_line), "no data: Wi-Fi unavailable");
+        }
+
+        cyd_ui_screen_clear(screen);
+        cyd_ui_add_text(screen,
+                        "RSSI",
+                        CYD_SYSTEM_APPS_TITLE_COL,
+                        CYD_SYSTEM_APPS_TITLE_ROW,
+                        CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
+                        CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
+                        CYD_DISPLAY_ALIGN_RIGHT,
+                        2,
+                        CYD_UI_COLOR_CYAN);
+        cyd_ui_add_text(screen, rssi_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+
+        if (has_history) {
+            cyd_display_sparkline_t graph = {
+                .samples = samples,
+                .count = sample_count,
+                .revision = revision,
+                .min_value = CYD_INFO_RSSI_MIN_DBM,
+                .max_value = CYD_INFO_RSSI_MAX_DBM,
+                .fill = true,
+                .has_baseline = true,
+                .baseline_value = CYD_INFO_RSSI_WEAK_DBM,
+                .baseline_color = CYD_UI_COLOR_RED,
+                .has_gap_value = true,
+                .gap_value = WIFI_RSSI_HISTORY_GAP_DBM,
+            };
+            cyd_ui_add_sparkline(screen,
+                                 2,
+                                 9,
+                                 36,
+                                 13,
+                                 &graph,
+                                 CYD_UI_COLOR_GREEN,
+                                 CYD_UI_COLOR_BLACK,
+                                 CYD_UI_COLOR_DARKGREY);
+            cyd_ui_add_text(screen, "-30", 2, 8, 6, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_DARKGREY);
+            cyd_ui_add_text(screen, "-100", 2, 22, 6, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_DARKGREY);
+            s_info_rssi_shown_revision = revision;
+        }
+        s_info_rssi_has_history = has_history;
+
+        ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
+        cyd_ui_add_button(screen,
+                          "<<",
+                          CYD_SYSTEM_APPS_BACK_COL,
+                          CYD_SYSTEM_APPS_BACK_ROW,
+                          CYD_SYSTEM_APPS_BACK_SPAN_COLS,
+                          CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
+                          CYD_UI_COLOR_BLUE,
+                          CYD_UI_COLOR_CYAN,
+                          CYD_INFO_APP_ACTION_BACK);
+
+        return cyd_ui_submit(screen);
+    }
+
     const esp_app_desc_t *app_desc = esp_app_get_description();
     esp_chip_info_t chip_info = { 0 };
     char app_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
@@ -1308,26 +1442,46 @@ static esp_err_t cyd_settings_render_general_page(cyd_display_screen_t *screen)
 
     cyd_ui_add_button(screen,
                       "Touch Calib",
-                      s_settings_extension != NULL ? 2 : 6,
+                      6,
                       18,
-                      s_settings_extension != NULL ? 17 : 28,
+                      28,
                       3,
                       CYD_UI_COLOR_BLUE,
                       CYD_UI_COLOR_CYAN,
                       CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE);
 
-    if (s_settings_extension != NULL &&
-        s_settings_extension->label != NULL &&
-        s_settings_extension->app != NULL) {
+    return ESP_OK;
+}
+
+/*
+ * Lists the settings screens owned by installed apps, not the apps themselves.
+ * An app without a settings screen is absent here, and an app that is not
+ * registered takes its settings screen with it.
+ */
+static esp_err_t cyd_settings_render_apps_page(cyd_display_screen_t *screen)
+{
+    size_t count = app_registry_settings_count();
+
+    ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, TAG, "screen is null");
+
+    if (count > CYD_SETTINGS_APPS_VISIBLE_MAX) {
+        count = CYD_SETTINGS_APPS_VISIBLE_MAX;
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        const app_registry_entry_t *entry = app_registry_settings_at(i);
+        if (entry == NULL) {
+            continue;
+        }
         cyd_ui_add_button(screen,
-                          s_settings_extension->label,
-                          21,
-                          18,
-                          17,
+                          entry->title,
+                          4,
+                          (uint8_t)(5 + (i * 4)),
+                          32,
                           3,
                           CYD_UI_COLOR_DIMGREY,
                           CYD_UI_COLOR_LIGHTGREY,
-                          CYD_SETTINGS_APP_ACTION_EXTENSION);
+                          (uint16_t)(CYD_SETTINGS_APP_ACTION_APP_BASE + i));
     }
 
     return ESP_OK;
@@ -1601,6 +1755,9 @@ static esp_err_t cyd_settings_render_pages(cyd_display_screen_t *screen)
     if (s_settings_page == CYD_SETTINGS_PAGE_NVS) {
         return cyd_settings_render_nvs_page(screen);
     }
+    if (s_settings_page == CYD_SETTINGS_PAGE_APPS) {
+        return cyd_settings_render_apps_page(screen);
+    }
     return ESP_OK;
 }
 
@@ -1690,6 +1847,7 @@ static esp_err_t cyd_info_app_enter(void *ctx, const app_shell_app_t *from_app)
     }
     s_info_page = CYD_INFO_PAGE_INFO;
     s_info_touch_tracker = (cyd_system_apps_touch_tracker_t){ 0 };
+    cyd_info_app_apply_rssi_monitoring();
     return cyd_info_app_show();
 }
 
@@ -1703,12 +1861,27 @@ static esp_err_t cyd_info_app_step(void *ctx)
         if (cyd_system_apps_touch_confirmed_action(&event, &s_info_touch_tracker, &action_id)) {
             if (action_id == CYD_INFO_APP_ACTION_TOGGLE_PAGE) {
                 s_info_page = (cyd_info_page_t)(((int)s_info_page + 1) % (int)CYD_INFO_PAGE_COUNT);
+                cyd_info_app_apply_rssi_monitoring();
                 return cyd_info_app_show();
             }
             if (action_id == CYD_INFO_APP_ACTION_BACK) {
-                ESP_RETURN_ON_FALSE(s_info_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "info return app not set");
-                ESP_RETURN_ON_ERROR(app_shell_switch_to(s_info_return_app), TAG, "switch back from info failed");
+                ESP_RETURN_ON_ERROR(app_shell_return_to(s_info_return_app), TAG, "switch back from info failed");
             }
+        }
+    }
+
+    /*
+     * The other info pages only redraw on touch. The RSSI page is a live graph,
+     * so it re-renders whenever the sampler reports a new revision. Comparing
+     * revisions (rather than redrawing every poll) keeps the dirty-rect diff
+     * doing the work it was built for.
+     */
+    if (s_info_page == CYD_INFO_PAGE_RSSI) {
+        uint16_t revision = 0;
+        bool has_history = wifi_rssi_history_get(NULL, NULL, &revision);
+        if (has_history != s_info_rssi_has_history ||
+            (has_history && revision != s_info_rssi_shown_revision)) {
+            return cyd_info_app_show();
         }
     }
 
@@ -1718,6 +1891,9 @@ static esp_err_t cyd_info_app_step(void *ctx)
 static esp_err_t cyd_info_app_leave(void *ctx)
 {
     (void)ctx;
+    /* Releases the radio lease. Also covers the idle-return path, so the lease
+       cannot outlive the view. */
+    (void)wifi_rssi_history_set_monitoring(false);
     return ESP_OK;
 }
 
@@ -1728,7 +1904,7 @@ static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_a
     if (from_app != NULL &&
         from_app != cyd_wifi_setup_get_app() &&
         from_app != system_touch_calibration_app_get_app() &&
-        (s_settings_extension == NULL || from_app != s_settings_extension->app)) {
+        !cyd_settings_is_app_settings_screen(from_app)) {
         s_settings_return_app = from_app;
     }
     portENTER_CRITICAL(&s_settings_direct_view_lock);
@@ -1826,8 +2002,7 @@ static esp_err_t cyd_settings_handle_stored_ssids_action(uint16_t action_id, boo
     if (action_id == CYD_SETTINGS_APP_ACTION_BACK) {
         if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_STORED_SSIDS) {
             *handled = true;
-            ESP_RETURN_ON_FALSE(s_settings_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "settings return app not set");
-            return app_shell_switch_to(s_settings_return_app);
+            return app_shell_return_to(s_settings_return_app);
         }
         s_settings_view = CYD_SETTINGS_VIEW_PAGES;
         ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
@@ -1943,13 +2118,28 @@ static esp_err_t cyd_settings_handle_general_page_action(uint16_t action_id, boo
         return ESP_OK;
     }
 
-    if (action_id == CYD_SETTINGS_APP_ACTION_EXTENSION &&
-        s_settings_extension != NULL &&
-        s_settings_extension->app != NULL) {
-        ESP_RETURN_ON_ERROR(app_shell_switch_to(s_settings_extension->app),
-                            TAG,
-                            "switch to extension settings failed");
-        *handled = true;
+    return ESP_OK;
+}
+
+static esp_err_t cyd_settings_handle_apps_page_action(uint16_t action_id, bool *handled)
+{
+    ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
+    *handled = false;
+
+    if (s_settings_page != CYD_SETTINGS_PAGE_APPS || s_settings_view != CYD_SETTINGS_VIEW_PAGES) {
+        return ESP_OK;
+    }
+
+    if (action_id >= CYD_SETTINGS_APP_ACTION_APP_BASE &&
+        action_id < (CYD_SETTINGS_APP_ACTION_APP_BASE + CYD_SETTINGS_APPS_VISIBLE_MAX)) {
+        const app_registry_entry_t *entry =
+            app_registry_settings_at((size_t)(action_id - CYD_SETTINGS_APP_ACTION_APP_BASE));
+        if (entry != NULL && entry->settings_app != NULL) {
+            ESP_RETURN_ON_ERROR(app_shell_switch_to(entry->settings_app),
+                                TAG,
+                                "switch to app settings failed");
+            *handled = true;
+        }
         return ESP_OK;
     }
 
@@ -2020,8 +2210,7 @@ static esp_err_t cyd_settings_handle_nvs_page_action(uint16_t action_id, bool *h
         if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CANCEL) {
             if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_TOUCH_CALIB_CONFIRM) {
                 *handled = true;
-                ESP_RETURN_ON_FALSE(s_settings_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "settings return app not set");
-                return app_shell_switch_to(s_settings_return_app);
+                return app_shell_return_to(s_settings_return_app);
             }
             s_settings_view = CYD_SETTINGS_VIEW_PAGES;
             ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
@@ -2054,8 +2243,7 @@ static esp_err_t cyd_settings_handle_nvs_page_action(uint16_t action_id, bool *h
         if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CANCEL) {
             if (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM) {
                 *handled = true;
-                ESP_RETURN_ON_FALSE(s_settings_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "settings return app not set");
-                return app_shell_switch_to(s_settings_return_app);
+                return app_shell_return_to(s_settings_return_app);
             }
             s_settings_view = CYD_SETTINGS_VIEW_PAGES;
             ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
@@ -2144,6 +2332,10 @@ static esp_err_t cyd_settings_app_step(void *ctx)
         if (handled) {
             return ESP_OK;
         }
+        ESP_RETURN_ON_ERROR(cyd_settings_handle_apps_page_action(action_id, &handled), TAG, "handle apps page failed");
+        if (handled) {
+            return ESP_OK;
+        }
         ESP_RETURN_ON_ERROR(cyd_settings_handle_time_page_action(action_id, &handled), TAG, "handle time page failed");
         if (handled) {
             return ESP_OK;
@@ -2154,8 +2346,7 @@ static esp_err_t cyd_settings_app_step(void *ctx)
         }
 
         if (action_id == CYD_SETTINGS_APP_ACTION_BACK) {
-            ESP_RETURN_ON_FALSE(s_settings_return_app != NULL, ESP_ERR_INVALID_STATE, TAG, "settings return app not set");
-            ESP_RETURN_ON_ERROR(app_shell_switch_to(s_settings_return_app), TAG, "switch back from settings failed");
+            ESP_RETURN_ON_ERROR(app_shell_return_to(s_settings_return_app), TAG, "switch back from settings failed");
         }
     }
 
@@ -2192,7 +2383,7 @@ static esp_err_t cyd_touch_calibration_app_enter(void *ctx, const app_shell_app_
     s_touch_calibration_return_app = from_app;
     ESP_RETURN_ON_ERROR(cyd_input_run_touch_calibration(), TAG, "touch calibration failed");
     ESP_RETURN_ON_ERROR(cyd_input_discard_pending_events(), TAG, "discard input events failed");
-    return app_shell_switch_to(s_touch_calibration_return_app);
+    return app_shell_return_to(s_touch_calibration_return_app);
 }
 
 static const app_shell_app_t s_cyd_touch_calibration_shell_app = {
@@ -2240,7 +2431,3 @@ void system_settings_open_clear_nvs_confirm(void)
     system_settings_set_direct_view(CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM);
 }
 
-void system_settings_set_extension(const system_settings_extension_t *extension)
-{
-    s_settings_extension = extension;
-}

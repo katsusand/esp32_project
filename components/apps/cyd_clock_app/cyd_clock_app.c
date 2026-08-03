@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
+#include "app_registry.h"
 #include "app_scheduler.h"
 #include "app_shell.h"
 #include "cyd_clock_app.h"
@@ -49,7 +50,6 @@
 
 static cyd_display_screen_t s_clock_screen;
 static bool s_clock_use_24_hour = true;
-static system_settings_extension_t s_clock_settings_extension;
 
 typedef enum {
     CYD_CLOCK_ALARM_MODE_OFF = 0,
@@ -166,11 +166,22 @@ static esp_err_t cyd_clock_alarm_cycle_mode(void)
     return cyd_clock_alarm_set_enabled(CYD_CLOCK_ALARM2_TAG, enable_alarm2);
 }
 
-static void cyd_clock_app_prepare_settings_extension(void)
+esp_err_t cyd_clock_app_register(void)
 {
-    s_clock_settings_extension.label = "Clock Settings";
-    s_clock_settings_extension.app = cyd_clock_settings_app_get_app();
-    system_settings_set_extension(&s_clock_settings_extension);
+    /* Borrowed by app_registry, so it must outlive registration. */
+    /*
+     * The settings screen is attached to the clock rather than registered on
+     * its own, so it is a child of Clock instead of a peer app, and installing
+     * or omitting the clock takes its settings screen with it.
+     */
+    static app_registry_entry_t entry = {
+        .id = "clock",
+        .title = "Clock",
+    };
+
+    entry.app = cyd_clock_app_get_app();
+    entry.settings_app = cyd_clock_settings_app_get_app();
+    return app_registry_register(&entry);
 }
 
 static bool cyd_clock_app_touch_confirmed_mode_button(const cyd_input_event_t *event,
@@ -414,7 +425,6 @@ static bool cyd_clock_app_process_input(void)
         uint16_t action_id = 0;
         if (cyd_clock_app_touch_confirmed_action(&event, &s_clock_action_tracker, &action_id)) {
             if (action_id == CYD_CLOCK_APP_ACTION_SETTINGS) {
-                cyd_clock_app_prepare_settings_extension();
                 ESP_RETURN_ON_ERROR(app_shell_switch_to(system_settings_app_get_app()),
                                     TAG,
                                     "switch to settings failed");
@@ -714,7 +724,6 @@ static esp_err_t cyd_clock_app_enter(void *ctx, const app_shell_app_t *from_app)
     (void)ctx;
     s_clock_mode = CYD_CLOCK_APP_MODE_CLOCK;
     s_clock_needs_redraw = true;
-    cyd_clock_app_prepare_settings_extension();
     if (s_clock_tick_queue == NULL) {
         ESP_RETURN_ON_ERROR(time_tick_subscribe(&s_clock_tick_queue), TAG, "time tick subscribe failed");
     }

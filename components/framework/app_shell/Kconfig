@@ -25,4 +25,26 @@ menu "App Shell"
             0 を指定すると自動復帰を無効化します。
             English: inactivity timeout before the shell returns to the home app.
 
+    config APP_SHELL_MAX_CONSECUTIVE_ERRORS
+        int "Max consecutive app errors before returning home"
+        default 10
+        range 1 255
+        help
+            app の enter / step が連続で失敗した回数がこの値に達すると、
+            shell はその app を諦めて home app へ復帰します。
+            app 側が `on_error` を実装している場合は、そちらの判断が優先されます。
+            English: default error budget. An app failure is a normal runtime
+            condition (I2C NACK, UART overflow, sensor timeout) and never panics
+            the device; this only decides when the shell gives up on the app.
+
+    config APP_SHELL_ERROR_BACKOFF_MS
+        int "Backoff after an app error (ms)"
+        default 100
+        range 0 5000
+        help
+            app のエラー1回ごとに shell が待つ時間です。
+            English: mandatory throttle. Without it, a step() that fails
+            immediately would spin the shell task and starve lower priority
+            tasks. Only set this to 0 if every app is known to block internally.
+
 endmenu

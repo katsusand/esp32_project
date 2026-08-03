@@ -3,6 +3,8 @@
 #include "esp_log.h"
 #include "nvs_health.h"
 #include "sdkconfig.h"
+#include "app_launcher.h"
+#include "app_registry.h"
 #include "app_scheduler.h"
 #include "app_shell.h"
 #include "cyd_clock_app.h"
@@ -25,9 +27,20 @@
 #include "time_sync.h"
 #include "wifi_connection.h"
 #include "wifi_profile_store.h"
+#include "wifi_rssi_history.h"
 #endif
 
 #define TAG "cyd_clock_composition"
+
+/*
+ * Home app selection. Kconfig picks between the shipped options; any other app
+ * can be used by replacing this macro.
+ */
+#if CONFIG_CYD_CLOCK_COMPOSITION_HOME_LAUNCHER
+#define CYD_CLOCK_COMPOSITION_HOME_APP() app_launcher_get_app()
+#else
+#define CYD_CLOCK_COMPOSITION_HOME_APP() cyd_clock_app_get_app()
+#endif
 #define CYD_CLOCK_ALARM_OWNER "clock"
 #define CYD_CLOCK_ALARM1_TAG "alarm1"
 #define CYD_CLOCK_ALARM2_TAG "alarm2"
@@ -121,6 +134,24 @@ static bool cyd_clock_composition_home_return_allowed(void *ctx)
     return true;
 }
 
+/*
+ * Optional services must not brick the boot.
+ *
+ * English contract: the clock UI is fully usable without Wi-Fi, NTP or the
+ * status LED. Propagating those startup failures would reach app_main's
+ * ESP_ERROR_CHECK and put a deployed device into a reboot loop, so they are
+ * recorded and skipped instead. Only failures that leave the device unable to
+ * render anything stay fatal.
+ */
+static void cyd_clock_composition_start_optional(const char *what, esp_err_t err)
+{
+    if (err == ESP_OK) {
+        return;
+    }
+    (void)error_log_store_append_esp_err(TAG, what, err);
+    ESP_LOGW(TAG, "%s: %s; continuing in degraded mode", what, esp_err_to_name(err));
+}
+
 static void cyd_clock_composition_preflight_nvs_health(void)
 {
     (void)cyd_display_get_brightness();
@@ -135,10 +166,30 @@ static void cyd_clock_composition_preflight_nvs_health(void)
 #endif
 }
 
+/*
+ * Which apps exist on this device, and in what order the launcher lists them.
+ *
+ * English contract: registration lives here, not inside an app's enter(). If an
+ * app registered itself while running, swapping the home app would silently
+ * drop entries that the new home never reaches.
+ */
+static void cyd_clock_composition_register_apps(void)
+{
+    /* Registering the clock also brings its settings screen; a product that
+       omits the clock gets neither. */
+    cyd_clock_composition_start_optional("register clock app failed",
+                                         cyd_clock_app_register());
+}
+
 esp_err_t cyd_clock_composition_start(void)
 {
     system_boot_result_t boot_result = { 0 };
-    const app_shell_app_t *initial_app = cyd_clock_app_get_app();
+    /*
+     * The home app is a product choice, not a framework constraint. Swap this
+     * for app_launcher_get_app() to boot into the generic app list, or for any
+     * other app_shell app.
+     */
+    const app_shell_app_t *initial_app = CYD_CLOCK_COMPOSITION_HOME_APP();
     esp_err_t err = ESP_OK;
 
     err = system_boot_start(&boot_result);
@@ -146,10 +197,7 @@ esp_err_t cyd_clock_composition_start(void)
         (void)error_log_store_append_esp_err(TAG, "system boot failed", err);
         ESP_RETURN_ON_ERROR(err, TAG, "system boot failed");
     }
-    err = sd_card_storage_init();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "sd card init unavailable; continuing without SD logging: %s", esp_err_to_name(err));
-    }
+    cyd_clock_composition_start_optional("sd card init failed", sd_card_storage_init());
     err = time_tick_start();
     if (err != ESP_OK) {
         (void)error_log_store_append_esp_err(TAG, "time tick start failed", err);
@@ -177,26 +225,11 @@ esp_err_t cyd_clock_composition_start(void)
     if (boot_result.setup_shortcut_requested) {
         wifi_connection_request_setup_on_start();
     }
-    err = status_indicator_start();
-    if (err != ESP_OK) {
-        (void)error_log_store_append_esp_err(TAG, "status indicator start failed", err);
-        ESP_RETURN_ON_ERROR(err, TAG, "status indicator start failed");
-    }
-    err = wifi_connection_start();
-    if (err != ESP_OK) {
-        (void)error_log_store_append_esp_err(TAG, "Wi-Fi connection start failed", err);
-        ESP_RETURN_ON_ERROR(err, TAG, "Wi-Fi connection start failed");
-    }
-    err = radio_manager_start();
-    if (err != ESP_OK) {
-        (void)error_log_store_append_esp_err(TAG, "radio manager start failed", err);
-        ESP_RETURN_ON_ERROR(err, TAG, "radio manager start failed");
-    }
-    err = time_sync_start();
-    if (err != ESP_OK) {
-        (void)error_log_store_append_esp_err(TAG, "time sync start failed", err);
-        ESP_RETURN_ON_ERROR(err, TAG, "time sync start failed");
-    }
+    cyd_clock_composition_start_optional("status indicator start failed", status_indicator_start());
+    cyd_clock_composition_start_optional("Wi-Fi connection start failed", wifi_connection_start());
+    cyd_clock_composition_start_optional("radio manager start failed", radio_manager_start());
+    cyd_clock_composition_start_optional("time sync start failed", time_sync_start());
+    cyd_clock_composition_start_optional("wifi rssi history start failed", wifi_rssi_history_start());
 #endif
 
     cyd_clock_composition_preflight_nvs_health();
@@ -206,6 +239,7 @@ esp_err_t cyd_clock_composition_start(void)
         initial_app = system_settings_app_get_app();
     }
 
+    cyd_clock_composition_register_apps();
     app_shell_set_home_return_allowed_callback(cyd_clock_composition_home_return_allowed, NULL);
     return app_shell_start(initial_app);
 }

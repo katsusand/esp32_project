@@ -1,0 +1,14 @@
+menu "CYD Clock Composition"
+
+    config CYD_CLOCK_COMPOSITION_HOME_LAUNCHER
+        bool "Boot into the app launcher instead of the clock"
+        default n
+        help
+            有効にすると、home app が clock ではなく汎用の app launcher になります。
+            launcher は app_registry に登録された app を一覧するだけなので、
+            製品固有の知識を持ちません。
+            無操作時の自動復帰先も home app なので、この設定で一緒に変わります。
+            English: the home app is a product choice. Idle auto-return targets
+            the home app, so this switch changes that destination too.
+
+endmenu

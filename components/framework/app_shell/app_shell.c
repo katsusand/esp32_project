@@ -14,6 +14,7 @@
 
 #define TAG "app_shell"
 #define APP_SHELL_CONFIG_VERSION 1U
+#define APP_SHELL_MAX_SWITCH_CHAIN 4
 
 typedef struct {
     uint32_t version;
@@ -30,6 +31,96 @@ static app_shell_home_return_allowed_fn s_app_shell_home_return_allowed_callback
 static void *s_app_shell_home_return_allowed_ctx;
 static bool s_app_shell_idle_timeout_loaded;
 static uint16_t s_app_shell_idle_timeout_seconds = CONFIG_APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS;
+static uint32_t s_app_shell_consecutive_errors;
+static uint32_t s_app_shell_total_errors;
+static app_shell_error_t s_app_shell_last_error;
+
+static const char *app_shell_stage_name(app_shell_stage_t stage)
+{
+    switch (stage) {
+    case APP_SHELL_STAGE_ENTER:
+        return "enter";
+    case APP_SHELL_STAGE_STEP:
+        return "step";
+    case APP_SHELL_STAGE_LEAVE:
+        return "leave";
+    default:
+        return "unknown";
+    }
+}
+
+/*
+ * Central app failure policy.
+ *
+ * English contract: an app returning a non-OK esp_err_t is an expected runtime
+ * condition (I2C NACK, UART overflow, sensor timeout), not a programming error,
+ * so it must never reach ESP_ERROR_CHECK. The backoff below is mandatory: a
+ * step() that fails immediately would otherwise spin this task at its priority
+ * and starve everything else.
+ */
+static app_shell_error_action_t app_shell_handle_app_error(const app_shell_app_t *app,
+                                                          app_shell_stage_t stage,
+                                                          esp_err_t err)
+{
+    app_shell_error_action_t action = APP_SHELL_ON_ERROR_CONTINUE;
+
+    /* s_app_shell_consecutive_errors is shell-task private; the reported
+       counters are also read by diagnostics UI, so they move together. */
+    s_app_shell_consecutive_errors++;
+
+    app_shell_error_t error = {
+        .app_id = (app != NULL && app->id != NULL) ? app->id : "(unknown)",
+        .stage = stage,
+        .err = err,
+        .consecutive_errors = s_app_shell_consecutive_errors,
+    };
+
+    portENTER_CRITICAL(&s_app_shell_lock);
+    s_app_shell_total_errors++;
+    s_app_shell_last_error = error;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+
+    ESP_LOGE(TAG,
+             "app '%s' %s failed: %s (consecutive=%u total=%u)",
+             error.app_id,
+             app_shell_stage_name(stage),
+             esp_err_to_name(err),
+             (unsigned)s_app_shell_consecutive_errors,
+             (unsigned)s_app_shell_total_errors);
+
+    if (app != NULL && app->on_error != NULL) {
+        action = app->on_error(app->ctx, &error);
+    } else if (s_app_shell_consecutive_errors >= CONFIG_APP_SHELL_MAX_CONSECUTIVE_ERRORS) {
+        action = APP_SHELL_ON_ERROR_RETURN_HOME;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_APP_SHELL_ERROR_BACKOFF_MS));
+    return action;
+}
+
+static void app_shell_clear_consecutive_errors(void)
+{
+    s_app_shell_consecutive_errors = 0;
+}
+
+/*
+ * Returning home is only useful when a *different* app is failing. When the
+ * home app itself fails we keep it active and rely on the backoff, because
+ * switching home to home would just re-run the same failing code.
+ */
+static void app_shell_recover_to_home(const app_shell_app_t *failed_app)
+{
+    if (s_app_shell_home_app == NULL || failed_app == s_app_shell_home_app) {
+        return;
+    }
+
+    ESP_LOGW(TAG,
+             "app '%s' exceeded the error budget, returning to home app: %s",
+             (failed_app != NULL && failed_app->id != NULL) ? failed_app->id : "(unknown)",
+             s_app_shell_home_app->id);
+    app_shell_clear_consecutive_errors();
+    (void)app_shell_switch_to(s_app_shell_home_app);
+}
 
 static esp_err_t app_shell_load_idle_return_timeout_blob(uint16_t *timeout_seconds)
 {
@@ -164,7 +255,7 @@ bool app_shell_is_idle_timeout_elapsed(void)
     return (now - last_activity_tick) >= timeout_ticks;
 }
 
-static esp_err_t app_shell_apply_pending_switch(void)
+static bool app_shell_apply_one_pending_switch(void)
 {
     const app_shell_app_t *next_app = NULL;
     const app_shell_app_t *from_app = NULL;
@@ -180,25 +271,51 @@ static esp_err_t app_shell_apply_pending_switch(void)
     portEXIT_CRITICAL(&s_app_shell_lock);
 
     if (next_app == NULL) {
-        return ESP_OK;
+        return false;
     }
 
     from_app = s_app_shell_active_app;
-    if (s_app_shell_active_app != NULL && s_app_shell_active_app->leave != NULL) {
-        ESP_RETURN_ON_ERROR(s_app_shell_active_app->leave(s_app_shell_active_app->ctx),
-                            TAG,
-                            "active app leave failed");
+    if (from_app != NULL && from_app->leave != NULL) {
+        esp_err_t leave_err = from_app->leave(from_app->ctx);
+        if (leave_err != ESP_OK) {
+            /*
+             * A failing leave() must not trap the user inside the app, so the
+             * switch proceeds regardless of the requested action.
+             */
+            (void)app_shell_handle_app_error(from_app, APP_SHELL_STAGE_LEAVE, leave_err);
+        }
     }
 
     s_app_shell_active_app = next_app;
     if (s_app_shell_active_app->enter != NULL) {
-        ESP_RETURN_ON_ERROR(s_app_shell_active_app->enter(s_app_shell_active_app->ctx, from_app),
-                            TAG,
-                            "next app enter failed");
+        esp_err_t enter_err = s_app_shell_active_app->enter(s_app_shell_active_app->ctx, from_app);
+        if (enter_err != ESP_OK) {
+            if (app_shell_handle_app_error(s_app_shell_active_app, APP_SHELL_STAGE_ENTER, enter_err) ==
+                APP_SHELL_ON_ERROR_RETURN_HOME) {
+                app_shell_recover_to_home(s_app_shell_active_app);
+            }
+            return true;
+        }
     }
 
+    app_shell_clear_consecutive_errors();
     ESP_LOGI(TAG, "switched to app: %s", s_app_shell_active_app->id);
-    return ESP_OK;
+    return true;
+}
+
+/*
+ * A failing enter() can itself queue a home switch, and that switch must land
+ * before the next step() runs on a half-entered app. The chain is bounded so a
+ * pair of apps that bounce to each other cannot livelock the shell task.
+ */
+static void app_shell_apply_pending_switch(void)
+{
+    for (uint8_t i = 0; i < APP_SHELL_MAX_SWITCH_CHAIN; i++) {
+        if (!app_shell_apply_one_pending_switch()) {
+            return;
+        }
+    }
+    ESP_LOGW(TAG, "pending app switch chain exceeded %d hops", APP_SHELL_MAX_SWITCH_CHAIN);
 }
 
 static void app_shell_task(void *arg)
@@ -210,21 +327,36 @@ static void app_shell_task(void *arg)
     s_app_shell_active_app = initial_app;
 
     if (s_app_shell_active_app != NULL && s_app_shell_active_app->enter != NULL) {
-        ESP_ERROR_CHECK(s_app_shell_active_app->enter(s_app_shell_active_app->ctx, NULL));
+        esp_err_t enter_err = s_app_shell_active_app->enter(s_app_shell_active_app->ctx, NULL);
+        if (enter_err != ESP_OK) {
+            /*
+             * The initial app is also the home app, so there is nowhere to fall
+             * back to. Keep the shell alive and let the step backoff throttle it
+             * instead of panicking into a boot loop.
+             */
+            (void)app_shell_handle_app_error(s_app_shell_active_app, APP_SHELL_STAGE_ENTER, enter_err);
+        }
     }
 
     while (true) {
         APP_STACK_MONITOR_CHECK(TAG, "app_shell", 30000);
 
-        if (s_app_shell_active_app != NULL && s_app_shell_active_app->step != NULL) {
-            ESP_ERROR_CHECK(s_app_shell_active_app->step(s_app_shell_active_app->ctx));
+        const app_shell_app_t *active_app = s_app_shell_active_app;
+        if (active_app != NULL && active_app->step != NULL) {
+            esp_err_t step_err = active_app->step(active_app->ctx);
+            if (step_err == ESP_OK) {
+                app_shell_clear_consecutive_errors();
+            } else if (app_shell_handle_app_error(active_app, APP_SHELL_STAGE_STEP, step_err) ==
+                       APP_SHELL_ON_ERROR_RETURN_HOME) {
+                app_shell_recover_to_home(active_app);
+            }
         } else {
             vTaskDelay(pdMS_TO_TICKS(50));
         }
 
-        ESP_ERROR_CHECK(app_shell_apply_pending_switch());
+        app_shell_apply_pending_switch();
         if (app_shell_request_home_if_idle()) {
-            ESP_ERROR_CHECK(app_shell_apply_pending_switch());
+            app_shell_apply_pending_switch();
         }
     }
 }
@@ -255,6 +387,17 @@ esp_err_t app_shell_switch_to(const app_shell_app_t *next_app)
     s_app_shell_pending_app = next_app;
     portEXIT_CRITICAL(&s_app_shell_lock);
     return ESP_OK;
+}
+
+esp_err_t app_shell_return_to(const app_shell_app_t *return_app)
+{
+    const app_shell_app_t *target = (return_app != NULL) ? return_app : s_app_shell_home_app;
+
+    ESP_RETURN_ON_FALSE(target != NULL, ESP_ERR_INVALID_STATE, TAG, "no return target and no home app");
+    if (return_app == NULL) {
+        ESP_LOGD(TAG, "no return app recorded, falling back to home: %s", target->id);
+    }
+    return app_shell_switch_to(target);
 }
 
 const app_shell_app_t *app_shell_get_active_app(void)
@@ -317,6 +460,33 @@ bool app_shell_request_home_if_idle(void)
              "idle timeout reached (%d s), returning to home app: %s",
              app_shell_get_idle_return_timeout_seconds(),
              s_app_shell_home_app->id);
-    ESP_ERROR_CHECK(app_shell_switch_to(s_app_shell_home_app));
+    (void)app_shell_switch_to(s_app_shell_home_app);
     return true;
+}
+
+bool app_shell_get_last_error(app_shell_error_t *error)
+{
+    if (error == NULL) {
+        return false;
+    }
+
+    portENTER_CRITICAL(&s_app_shell_lock);
+    app_shell_error_t last_error = s_app_shell_last_error;
+    uint32_t total_errors = s_app_shell_total_errors;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+
+    if (total_errors == 0) {
+        return false;
+    }
+
+    *error = last_error;
+    return true;
+}
+
+uint32_t app_shell_get_total_error_count(void)
+{
+    portENTER_CRITICAL(&s_app_shell_lock);
+    uint32_t total_errors = s_app_shell_total_errors;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+    return total_errors;
 }

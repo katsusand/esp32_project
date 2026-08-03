@@ -396,12 +396,39 @@ CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 
 English supplement: `sdkconfig.defaults` is the project baseline. Local `sdkconfig` is generated and may contain machine/user-specific values.
 
+## Partition Layout
+
+`partitions.csv` は 4 MB flash の dual OTA 構成です。
+
+```text
+nvs,      data, nvs,   0xa000,    140K
+otadata,  data, ota,   0x2d000,     8K
+phy_init, data, phy,   0x2f000,     4K
+ota_0,    app,  ota_0, 0x30000,  1536K
+ota_1,    app,  ota_1, 0x1b0000, 1536K
+storage,  data, fat,   0x330000,  832K
+```
+
+未割り当て領域はありません。app パーティションは 0x10000 境界から始める必要があるため、`ota_0` の手前に生じる隙間を `nvs` に吸収させています（結果として `nvs` は 140K）。
+
+`storage` の subtype を `fat` にしているのは、SD カード用に FATFS が既にリンクされているためです。追加のファイルシステムを持ち込まずに済み、アプリからは `/sdcard` と同じ扱いにできます。
+
+English supplement: app partitions must be 0x10000-aligned, so `nvs` is sized to fill the gap exactly rather than leaving a hole. `storage` reuses FATFS to avoid linking a second filesystem.
+
+この構成へ移行する際は、一度だけ全消去が必要です。**タッチ補正値、Wi-Fi 認証情報、輝度設定などの NVS データは消えます。**
+
+```bash
+source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py" erase-flash flash monitor
+```
+
 ## Documentation
 
 詳細は `docs/` を参照してください。
 
 - [CYD Display Driver](docs/cyd_display.md)
 - [App Shell](docs/app_shell.md)
+- [App Registry](docs/app_registry.md)
+- [App Launcher](docs/app_launcher.md)
 - [CYD UI Helper](docs/cyd_ui.md)
 - [CYD Input Driver](docs/cyd_input.md)
 - [Build Feature Switches](docs/build_feature_switches.md)
@@ -409,6 +436,8 @@ English supplement: `sdkconfig.defaults` is the project baseline. Local `sdkconf
 - [CYD System Apps](docs/cyd_system_apps.md)
 - [ESP32 Wi-Fi STA](docs/esp32_wifi_sta.md)
 - [Wi-Fi Connection](docs/wifi_connection.md)
+- [Wi-Fi RSSI History](docs/wifi_rssi_history.md)
+- [Sampling Service Pattern](docs/sampling_service.md)
 - [Time Tick](docs/time_tick.md)
 - [Time Sync](docs/time_sync.md)
 - [CYD Clock App](docs/cyd_clock_app.md)

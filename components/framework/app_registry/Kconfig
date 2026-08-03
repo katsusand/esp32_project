@@ -1,0 +1,12 @@
+menu "App Registry"
+
+    config APP_REGISTRY_MAX_ENTRIES
+        int "Max registered apps"
+        default 8
+        range 1 32
+        help
+            登録できる app の最大数です。
+            entry はポインタで保持するため、消費 RAM は この値 x 4 バイトです。
+            English: entries are borrowed pointers, so RAM cost is value x 4 bytes.
+
+endmenu

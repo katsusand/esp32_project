@@ -115,6 +115,74 @@ loop:
 
 この構造により、UI 用の task stack や描画 owner を 1 つにまとめられます。画面ごとに task を増やさないため、組み込み機器では軽量で扱いやすい構成です。
 
+## Error Policy
+
+app の `enter` / `step` / `leave` が非 OK の `esp_err_t` を返しても、shell は**再起動しません**。
+
+これは意図的な契約です。I2C の NACK、UART overflow、センサ read timeout などは app にとって正常系の実行時条件であり、プログラミングエラーではありません。以前は `ESP_ERROR_CHECK` で受けていたため、これらが即座に panic reboot になっていました。
+
+English contract: an app failure is an expected runtime condition, never a panic. Only invariant violations that leave the device unable to render at all stay fatal.
+
+既定の方針は次のとおりです。
+
+- エラーを `ESP_LOGE` に記録し、連続失敗回数を数える
+- 連続 `CONFIG_APP_SHELL_MAX_CONSECUTIVE_ERRORS` 回に達したら、その app を諦めて home app へ復帰する
+- 成功したら連続カウントを 0 に戻す
+- **エラー1回ごとに必ず `CONFIG_APP_SHELL_ERROR_BACKOFF_MS` 待つ**
+
+最後の backoff は必須です。即座に失敗を返す `step()` は、backoff が無いと shell task を自身の priority で回し続け、他のタスクを餓死させます。
+
+English supplement: the backoff is not a convenience. Without it a permanently failing step() starves every lower priority task.
+
+app 側で方針を変えたい場合は `on_error` を実装します。
+
+```c
+static app_shell_error_action_t my_app_on_error(void *ctx, const app_shell_error_t *error)
+{
+    if (error->err == ESP_ERR_TIMEOUT) {
+        return APP_SHELL_ON_ERROR_CONTINUE;   /* センサ無応答は許容して継続 */
+    }
+    return APP_SHELL_ON_ERROR_RETURN_HOME;
+}
+```
+
+`on_error` が NULL の app は既定方針が適用されるため、既存 app に変更は不要です。
+
+段階ごとの扱いには差があります。
+
+- `step` 失敗: 上記の既定方針
+- `enter` 失敗: home へ復帰する。復帰の遷移は、**半端に enter された app の `step()` が走る前に**適用される
+- `leave` 失敗: 要求されたアクションに関わらず遷移を続行する。失敗した app にユーザーを閉じ込めないため
+- 起動時の初期 app の `enter` 失敗: 初期 app は home app でもあるため復帰先が無い。panic せず backoff に任せる
+
+再起動しなくなった分エラーが見えにくくなるので、観測用に以下を用意しています。
+
+```c
+bool app_shell_get_last_error(app_shell_error_t *error);
+uint32_t app_shell_get_total_error_count(void);
+```
+
+## Back Navigation
+
+戻るボタンは `app_shell_return_to()` を使います。
+
+```c
+esp_err_t app_shell_return_to(const app_shell_app_t *return_app);
+```
+
+app は `enter()` で受け取った `from_app` を戻り先として覚えますが、**このポインタは NULL になり得ます**。
+
+- その app が initial app のとき
+- 製品が起動時に直接その画面へ入るとき（`cyd_clock_composition` の NVS 強制初期化フローなど）
+
+`app_shell_switch_to(NULL)` は何も起きずに終わるため、この場合ユーザーは「戻るボタンが壊れた画面」に取り残されます。実際に、無操作タイムアウト以外に home へ戻る手段が無くなる不具合が出ました。
+
+`app_shell_return_to()` は戻り先が NULL のとき **home app にフォールバック**するので、戻る操作には必ず行き先があります。
+
+English contract: prefer `app_shell_return_to()` over `app_shell_switch_to()` for back controls. Recording `from_app` remains the primary behavior; home is only the fallback.
+
+戻り先を home 固定にはしていません。`clock -> settings -> wifi_setup -> settings -> <<` が `clock` へ戻る、という「来た道を戻る」挙動が正しいためです。
+
 ## Current Apps
 
 現時点で shell に載っているアプリは以下です。
@@ -149,6 +217,8 @@ English supplement: `hello` is a learning app for observing app switching withou
 - `CONFIG_APP_SHELL_TASK_STACK_SIZE`
 - `CONFIG_APP_SHELL_TASK_PRIORITY`
 - `CONFIG_APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS`
+- `CONFIG_APP_SHELL_MAX_CONSECUTIVE_ERRORS`
+- `CONFIG_APP_SHELL_ERROR_BACKOFF_MS`
 
 foreground app は shell task の stack を共有するため、stack size は active app の最大使用量を見て調整します。
 

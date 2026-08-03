@@ -1,5 +1,17 @@
 # ESP-IDF Partition Table
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0xa000,  0x15000,
-phy_init, data, phy,     0x1f000,  0x1000,
-factory,  app,  factory, 0x20000, 2M,
+#
+# 4MB flash / dual OTA layout.
+#
+# English supplement: app partitions must start on a 0x10000 boundary, so `nvs`
+# is sized to fill the space up to ota_0 exactly instead of leaving a hole.
+# `storage` uses the `fat` subtype because FATFS is already linked for the SD
+# card, so internal storage costs no extra binary size and app code can treat
+# it the same way as /sdcard.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0xa000,   0x23000,
+otadata,  data, ota,     0x2d000,  0x2000,
+phy_init, data, phy,     0x2f000,  0x1000,
+ota_0,    app,  ota_0,   0x30000,  0x180000,
+ota_1,    app,  ota_1,   0x1b0000, 0x180000,
+storage,  data, fat,     0x330000, 0xd0000,

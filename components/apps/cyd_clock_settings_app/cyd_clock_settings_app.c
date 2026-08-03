@@ -711,7 +711,7 @@ static esp_err_t cyd_clock_settings_step(void *ctx)
             return cyd_clock_settings_show();
         }
         if (action_id == CYD_CLOCK_SETTINGS_ACTION_BACK) {
-            ESP_RETURN_ON_ERROR(app_shell_switch_to(s_clock_settings_return_app), TAG, "switch back failed");
+            ESP_RETURN_ON_ERROR(app_shell_return_to(s_clock_settings_return_app), TAG, "switch back failed");
             return ESP_OK;
         }
 

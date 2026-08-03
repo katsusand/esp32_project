@@ -1,0 +1,58 @@
+menu "Wi-Fi RSSI History"
+
+    config WIFI_RSSI_HISTORY_TASK_STACK_SIZE
+        int "RSSI sampler task stack size"
+        default 3072
+        range 2048 8192
+        help
+            サンプリングと radio lease 取得を行う task の stack size です。
+            English: this task exists so the blocking radio_manager_acquire()
+            never runs on the app_shell task.
+
+    config WIFI_RSSI_HISTORY_TASK_PRIORITY
+        int "RSSI sampler task priority"
+        default 4
+        range 1 24
+
+    config WIFI_RSSI_HISTORY_SAMPLE_INTERVAL_MS
+        int "RSSI sampling interval (ms)"
+        default 1000
+        range 200 60000
+        help
+            接続中の AP の RSSI を取得する間隔です。
+            未接続時はサンプルを記録しません。
+            English: sampling is skipped while not associated, so gaps do not
+            appear as fake readings.
+
+    config WIFI_RSSI_HISTORY_MAX_SAMPLES
+        int "RSSI history length (samples)"
+        default 120
+        range 16 320
+        help
+            保持するサンプル数です。int16_t で保持するため、
+            消費 RAM は この値 x 2 バイトになります。
+            グラフの横幅はディスプレイ上 320 px なので、
+            320 を超える値を指定しても表示の情報量は増えません。
+            English: RAM cost is value x 2 bytes. Values above the 320 px
+            display width add no visible detail.
+
+    config WIFI_RSSI_HISTORY_RADIO_WAIT_TIMEOUT_MS
+        int "Radio lease acquire timeout (ms)"
+        default 5000
+        range 100 60000
+        help
+            RSSI 監視を有効にするとき、radio lease の取得を待つ上限です。
+            取得できなかった場合はグラフが更新されないだけで、画面は開けます。
+
+    config WIFI_RSSI_HISTORY_RADIO_MAX_HOLD_MS
+        int "Radio lease max hold (ms)"
+        default 300000
+        range 10000 3600000
+        help
+            RSSI 監視が保持する radio lease の上限時間です。
+            通常は画面を離れるときに解放されますが、解放漏れが起きても
+            radio がこの時間以上 on のままにならないようにする保険です。
+            English: safety bound. The lease is normally released when the
+            view is left; this caps the damage if that release is missed.
+
+endmenu

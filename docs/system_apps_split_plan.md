@@ -69,6 +69,10 @@ alarm 設定を新しい clock-specific app へ切り出す。
 - [x] extension button のラベルと遷移先 app を差し込めるようにする
 - [x] 時計アプリから `Clock Settings` を extension として設定する
 
+**この Step C は後に置き換えられました。** `system_settings_set_extension()` はスロットが 1 個だけで、設定を拡張できる app が 1 つに限られていたため、現在は `app_registry` への登録と `APPS` page に移行しています。詳細は `docs/app_registry.md` を参照してください。
+
+English supplement: superseded. The single extension slot became an app_registry registration.
+
 ### Step D
 
 clock-specific diagnostics を common system UI から外す。
