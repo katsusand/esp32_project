@@ -121,4 +121,4 @@ English supplement: Do not add a generic plugin system until multiple products n
 - [x] clock app から共通 `SETTINGS` へ遷移できる
 - [x] 共通 `SETTINGS` から `Clock Settings` へ遷移できる
 - [x] `Clock Settings` から戻れる
-- [x] brightness / volume / timezone / Wi-Fi setup / touch calibration の既存導線が維持される
+- [x] brightness / timezone / Wi-Fi setup / touch calibration の既存導線が維持される

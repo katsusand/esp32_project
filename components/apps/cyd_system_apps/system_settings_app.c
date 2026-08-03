@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/task.h"
+#include "esp_assert.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -194,11 +195,9 @@ static size_t s_settings_active_page_index = 0;
 /*
  * Everything the shell needs to know about a settings page.
  *
- * English contract: this is the single place a page is described. Adding a page
- * used to mean editing five switch statements plus two dispatch chains, and a
- * missed edit produced a button that drew correctly but did nothing -- exactly
- * how the APPS page first shipped. `handle_action` runs only for the active
- * page, so a handler is unreachable from any page it does not belong to.
+ * English contract: this is the single source for page order, shell metadata,
+ * and render/action binding. Page IDs remain in the enum and action semantics
+ * remain in the page handlers. `handle_action` runs only for the active page.
  */
 typedef struct {
     cyd_settings_page_t id;
@@ -359,11 +358,6 @@ static bool cyd_settings_status_snapshot_equal(const cyd_settings_status_snapsho
            left->sync_now_pending == right->sync_now_pending;
 }
 
-static bool cyd_settings_page_is_network(cyd_settings_page_t page)
-{
-    return page == CYD_SETTINGS_PAGE_NETWORK1 || page == CYD_SETTINGS_PAGE_NETWORK2;
-}
-
 static bool cyd_settings_network_page_enabled(void)
 {
     return APP_WIFI_STA_ENABLED != 0;
@@ -376,19 +370,6 @@ static bool cyd_settings_apps_page_enabled(void)
     return app_registry_settings_count() > 0;
 }
 
-/*
- * One row per settings page. Everything the shell needs to know about a page
- * lives here: ordering, title, grouping, whether it polls live status, whether
- * it is present in this build, and its render/action pair.
- *
- * English contract: this table is the single place a page is described. Adding
- * a page used to mean editing five switch statements plus two dispatch chains,
- * and a missing edit produced a button that drew correctly but did nothing --
- * which is exactly how the APPS page shipped broken. Keep page knowledge here.
- *
- * `handle_action` is invoked only for the *active* page, so a handler can never
- * be reached from a page it does not belong to.
- */
 static const cyd_settings_page_def_t *cyd_settings_page_defs(size_t *count);
 
 static bool cyd_settings_page_is_enabled(cyd_settings_page_t page)
@@ -422,7 +403,8 @@ static size_t cyd_settings_network_page_index(cyd_settings_page_t page)
     size_t index = 0;
 
     for (size_t i = 0; i < table_count; ++i) {
-        if (!cyd_settings_page_is_network(defs[i].id) || !cyd_settings_page_is_enabled(defs[i].id)) {
+        if (defs[i].group != CYD_SETTINGS_PAGE_GROUP_NETWORK ||
+            !cyd_settings_page_is_enabled(defs[i].id)) {
             continue;
         }
 
@@ -1206,9 +1188,14 @@ static esp_err_t cyd_settings_render_pages(cyd_display_screen_t *screen)
 {
     const cyd_settings_page_def_t *def = cyd_settings_page_def(s_settings_page);
 
-    if (def == NULL || def->render == NULL) {
-        return ESP_OK;
-    }
+    ESP_RETURN_ON_FALSE(def != NULL,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "settings page definition missing");
+    ESP_RETURN_ON_FALSE(def->render != NULL,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "settings page render callback missing");
     return def->render(screen);
 }
 
@@ -1600,10 +1587,9 @@ static esp_err_t cyd_settings_handle_network2_page_action(uint16_t action_id, bo
 }
 
 /*
- * Confirm screens are dispatched by view, not by page. They must work even when
- * the active page is not NVS: system_settings_open_clear_nvs_confirm() drops
- * the user straight into a confirm view from another app, and enter() leaves
- * the page on GENERAL.
+ * Confirm screens are dispatched by view, not by page. A confirmation view
+ * replaces the page screen and owns its input whether it was opened from NVS
+ * or selected directly by another app.
  */
 static esp_err_t cyd_settings_handle_clear_touch_calib_confirm_action(uint16_t action_id, bool *handled)
 {
@@ -1761,17 +1747,24 @@ static const cyd_settings_page_def_t CYD_SETTINGS_PAGES[] = {
     },
 };
 
+#define CYD_SETTINGS_PAGE_DEF_COUNT (sizeof(CYD_SETTINGS_PAGES) / sizeof(CYD_SETTINGS_PAGES[0]))
+
+/* Adding an enum value without a table row would silently drop the page from
+   the rotation, which is the failure this table exists to prevent. */
+ESP_STATIC_ASSERT(CYD_SETTINGS_PAGE_DEF_COUNT == CYD_SETTINGS_PAGE_COUNT,
+                  "CYD_SETTINGS_PAGES must contain one entry per settings page");
+
 static const cyd_settings_page_def_t *cyd_settings_page_defs(size_t *count)
 {
     if (count != NULL) {
-        *count = sizeof(CYD_SETTINGS_PAGES) / sizeof(CYD_SETTINGS_PAGES[0]);
+        *count = CYD_SETTINGS_PAGE_DEF_COUNT;
     }
     return CYD_SETTINGS_PAGES;
 }
 
 static const cyd_settings_page_def_t *cyd_settings_page_def(cyd_settings_page_t page)
 {
-    for (size_t i = 0; i < (sizeof(CYD_SETTINGS_PAGES) / sizeof(CYD_SETTINGS_PAGES[0])); ++i) {
+    for (size_t i = 0; i < CYD_SETTINGS_PAGE_DEF_COUNT; ++i) {
         if (CYD_SETTINGS_PAGES[i].id == page) {
             return &CYD_SETTINGS_PAGES[i];
         }
@@ -1806,9 +1799,14 @@ static esp_err_t cyd_settings_handle_active_screen_action(uint16_t action_id, bo
     }
 
     const cyd_settings_page_def_t *def = cyd_settings_page_def(s_settings_page);
-    if (def == NULL || def->handle_action == NULL) {
-        return ESP_OK;
-    }
+    ESP_RETURN_ON_FALSE(def != NULL,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "settings page definition missing");
+    ESP_RETURN_ON_FALSE(def->handle_action != NULL,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "settings page action callback missing");
     return def->handle_action(action_id, handled);
 }
 

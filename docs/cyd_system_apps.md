@@ -48,7 +48,7 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
 
 戻る操作は `app_shell_return_to()` を通します。`from_app` が NULL のときは home app へフォールバックするため、戻り先が無い画面でも `<<` が死にません。
 
-settings は「settings 自身が開いた画面」から戻ってきた場合だけ、戻り先を更新しません。判定は `cyd_settings_is_app_settings_screen()` で、**app 固有設定画面のみ**が対象です。ここで registry の app 本体まで対象にすると、clock から settings に入ったときに戻り先が記録されず `<<` が効かなくなります。
+settings は「settings 自身が開いた画面」から戻ってきた場合だけ、戻り先を更新しません。判定は `cyd_settings_is_own_subscreen()` で、Wi-Fi Setup、Touch Calibration、登録済み app の固有設定画面が対象です。`cyd_settings_is_app_settings_screen()` は、そのうち app 固有設定画面だけを判定する内部 helper です。registry の app 本体まで対象にすると、clock から settings に入ったときに戻り先が記録されず `<<` が効かなくなります。
 
 保存済みSSID一覧、touch calibration消去確認、NVS消去確認は、次のAPIで次回のsettings遷移先として直接指定できます。
 
@@ -174,11 +174,15 @@ English supplement: Stepper buttons are handled on `PRESS`/`REPEAT`, while norma
 
 ### Maintenance Rule
 
-`settings` は「描画」と「action 処理」と「dispatch 配線」が別々の場所にあります。**どれか 1 つでも漏れると、ボタンは正しく描画されるのに反応しません。** 症状が「見えているのに押せない」なので、描画側を疑って時間を溶かしやすい形です。
+旧構造ではページの描画、action 処理、dispatch 配線が別々の場所にあり、配線漏れによって「描画されるのに押せないボタン」が発生していました。現在は renderer / handler の実装自体は分かれていますが、ページの shell metadata と両者の binding は `CYD_SETTINGS_PAGES[]` に集約されています。サブビューだけはページとは別に、`cyd_settings_handle_active_screen_action()` の view switch で管理します。
 
 #### 新しいページを追加するとき
 
-`CYD_SETTINGS_PAGES[]` テーブルに 1 行足し、render と handle_action を書きます。**それだけです。**
+1. `cyd_settings_page_t` に page ID を追加する
+2. render と handle_action を実装する
+3. `CYD_SETTINGS_PAGES[]` に 1 行追加する
+
+新しい group や action が必要な場合だけ、それぞれの enum / 定義も追加します。
 
 ```c
 {
@@ -193,19 +197,19 @@ English supplement: Stepper buttons are handled on `PRESS`/`REPEAT`, while norma
 },
 ```
 
-テーブルの並び順がページの巡回順です。ページ順、タイトル、グループ、live status ポーリングの要否、ステッパー経路の有効化、ビルド構成での有無、描画とアクション処理が、すべてこの 1 行から引かれます。
+テーブルの並び順がページの巡回順です。ページ順、タイトル、グループ、live status ポーリングの要否、ステッパー経路の有効化、ビルド構成での有無、描画とアクション処理の binding が、この 1 行から引かれます。
 
 `handle_action` は**アクティブなページに対してだけ**呼ばれます。したがって「他ページのハンドラに間借りさせて動かない」という状態は作れません。ハンドラ側で `s_settings_page != 自分のページ` を確認する必要もありません。
 
 以前はこれが 7 箇所に散っており、1 箇所忘れると「描画されるのに押せないボタン」ができました。`APPS` page の不具合が実例です。
 
-English contract: a page is described in exactly one place. `handle_action` runs only for the active page, so a handler cannot be reached from a page it does not belong to.
+English contract: page order, shell metadata, and render/action binding have one source of truth. Page IDs and action semantics remain explicit in the enum and handlers. `handle_action` runs only for the active page.
 
 #### サブビュー（確認画面など）を追加するとき
 
 サブビューは**ページではなくビューで**振り分けます。`cyd_settings_handle_active_screen_action()` の `switch (s_settings_view)` に足してください。
 
-ページ側に間借りさせてはいけません。`system_settings_open_clear_nvs_confirm()` のように他アプリから直接サブビューへ入る経路があり、その場合アクティブページは `GENERAL` のままだからです。
+ページ側に間借りさせてはいけません。direct view は現在、確認画面には `NVS`、保存済みSSID一覧には `NETWORK1` を対応ページとして選びますが、サブビューはページ画面を置き換えて入力全体を所有するため、dispatch は `s_settings_view` を基準にします。
 
 #### 新しいステッパー項目を追加するとき
 
@@ -215,16 +219,14 @@ English contract: a page is described in exactly one place. `handle_action` runs
 
 過去の不具合は、旧構造で 3 の配線が漏れていたため発生しました。
 
-#### 監査方法
+#### 検証方法
 
-定義済みハンドラと dispatch 済みハンドラを突き合わせれば、配線漏れは機械的に見つかります。
+- `ESP_STATIC_ASSERT` が page enum 件数とテーブル行数の不一致を build 時に検出する
+- render / handle_action が未設定なら `ESP_ERR_INVALID_STATE` を返し、空画面や無反応として隠さない
+- review 時は `CYD_SETTINGS_PAGES[]` の page ID が重複していないことと、並び順が意図どおりであることを確認する
+- サブビュー追加時は `cyd_settings_handle_active_screen_action()` の view switch への配線を確認する
 
-```bash
-grep -n "^static esp_err_t cyd_settings_handle_.*_action" components/apps/cyd_system_apps/system_settings_app.c
-sed -n '/static esp_err_t cyd_settings_app_step/,/^}/p' components/apps/cyd_system_apps/system_settings_app.c | grep -o "cyd_settings_handle_[a-z0-9_]*_action" | sort -u
-```
-
-English supplement: rendering, action handling, and dispatch wiring live in three separate places. A missing wire produces a button that draws correctly but does nothing, which misleads debugging toward the rendering code. Page-specific handlers early-return on the active page, so an action handled inside another page's handler is unreachable.
+English supplement: the table count is checked at compile time, required callbacks fail loudly, and only sub-view routing remains a separate dispatch list.
 
 ### Page Composition Rule
 
