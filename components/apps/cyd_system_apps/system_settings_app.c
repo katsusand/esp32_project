@@ -11,6 +11,7 @@
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "nvs_health.h"
+#include "nvs_schema.h"
 #include "app_registry.h"
 #include "app_shell.h"
 #include "cyd_display.h"
@@ -57,6 +58,11 @@
 #define CYD_SETTINGS_APP_ACTION_CLEAR_NVS 0x221a
 #define CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CANCEL 0x221b
 #define CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CONFIRM 0x221c
+#define CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA 0x221d
+#define CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA_CANCEL 0x221e
+#define CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA_CONFIRM 0x221f
+#define CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN 0x2220
+#define CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP 0x2221
 #define CYD_SETTINGS_APP_ACTION_STORED_SELECT_BASE 0x2300
 #define CYD_SETTINGS_PAGE_BUTTON_ROW 27
 #define CYD_SETTINGS_PAGE_BUTTON_SPAN_COLS 7
@@ -164,6 +170,7 @@ typedef enum {
     CYD_SETTINGS_VIEW_STORED_SSIDS_DELETE_CONFIRM,
     CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM,
     CYD_SETTINGS_VIEW_CLEAR_NVS_CONFIRM,
+    CYD_SETTINGS_VIEW_CLEAR_APP_DATA_CONFIRM,
 } cyd_settings_view_t;
 
 typedef enum {
@@ -280,6 +287,8 @@ static bool cyd_settings_is_stepper_action(uint16_t action_id)
     case CYD_SETTINGS_APP_ACTION_TIMEZONE_UP:
     case CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN:
     case CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP:
+    case CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN:
+    case CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP:
         return true;
     default:
         return false;
@@ -568,6 +577,31 @@ static const char *cyd_settings_page_title(cyd_settings_page_t page)
     return (def != NULL) ? def->title : "SETTINGS";
 }
 
+/* Idle-return is a plain arithmetic range, so it needs no lookup table the way
+   the Wi-Fi idle steps do. 0 means never; app_shell already treats a zero
+   timeout as "do not auto-return". */
+#define CYD_SETTINGS_IDLE_RETURN_STEP 10U
+#define CYD_SETTINGS_IDLE_RETURN_MAX 1800U
+
+/* Snaps a stored value onto the step grid so a value written by another build
+   (or a Kconfig default outside the range) still lands somewhere usable. */
+static uint16_t cyd_settings_snap_idle_return(uint16_t seconds)
+{
+    if (seconds > CYD_SETTINGS_IDLE_RETURN_MAX) {
+        return CYD_SETTINGS_IDLE_RETURN_MAX;
+    }
+    return (uint16_t)(seconds - (seconds % CYD_SETTINGS_IDLE_RETURN_STEP));
+}
+
+static void cyd_settings_format_idle_return(char *out, size_t out_size, uint16_t seconds)
+{
+    if (seconds == 0) {
+        snprintf(out, out_size, "never");
+    } else {
+        snprintf(out, out_size, "%us", (unsigned)seconds);
+    }
+}
+
 #define CYD_SETTINGS_WIFI_IDLE_COUNT \
     (sizeof(CYD_SETTINGS_WIFI_IDLE_SECONDS) / sizeof(CYD_SETTINGS_WIFI_IDLE_SECONDS[0]))
 
@@ -838,6 +872,34 @@ static esp_err_t cyd_settings_render_clear_touch_calib_confirm(cyd_display_scree
     return ESP_OK;
 }
 
+static esp_err_t cyd_settings_render_clear_app_data_confirm(cyd_display_screen_t *screen)
+{
+    cyd_ui_add_text(screen, "Clear app data?", 2, 9, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+    cyd_ui_add_text(screen, "System settings are kept", 2, 12, 36, 2,
+                    CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_LIGHTGREY);
+    cyd_ui_add_text(screen, "Device will restart", 2, 15, 36, 2,
+                    CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_YELLOW);
+    cyd_ui_add_button(screen,
+                      "Cancel",
+                      4,
+                      20,
+                      14,
+                      3,
+                      CYD_UI_COLOR_BLUE,
+                      CYD_UI_COLOR_CYAN,
+                      CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA_CANCEL);
+    cyd_ui_add_button(screen,
+                      "OK",
+                      22,
+                      20,
+                      14,
+                      3,
+                      CYD_UI_COLOR_RED,
+                      CYD_UI_COLOR_YELLOW,
+                      CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA_CONFIRM);
+    return ESP_OK;
+}
+
 static esp_err_t cyd_settings_render_clear_nvs_confirm(cyd_display_screen_t *screen)
 {
     if (s_settings_force_initialize) {
@@ -892,6 +954,8 @@ static esp_err_t cyd_settings_render_clear_nvs_confirm(cyd_display_screen_t *scr
 static esp_err_t cyd_settings_render_general_page(cyd_display_screen_t *screen)
 {
     char brightness_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    char idle_return_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    uint16_t idle_return_seconds = cyd_settings_snap_idle_return(app_shell_get_idle_return_timeout_seconds());
     cyd_ui_stepper_row_t row = { 0 };
     size_t brightness_index = cyd_settings_find_brightness_index(cyd_display_get_brightness());
     uint8_t brightness_percent = CYD_SETTINGS_BRIGHTNESS_PERCENTS[brightness_index];
@@ -927,6 +991,35 @@ static esp_err_t cyd_settings_render_general_page(cyd_display_screen_t *screen)
         .can_increase = can_increase,
     };
     ESP_RETURN_ON_ERROR(cyd_ui_add_stepper_row(screen, &row), TAG, "add settings row failed");
+
+    cyd_settings_format_idle_return(idle_return_value, sizeof(idle_return_value), idle_return_seconds);
+    row = (cyd_ui_stepper_row_t){
+        .label_text = "IdleReturn:",
+        .value_text = idle_return_value,
+        .row = 10,
+        .label_col = CYD_SETTINGS_ITEM_LABEL_COL,
+        .label_span_cols = CYD_SETTINGS_ITEM_LABEL_SPAN_COLS,
+        .label_scale = 1,
+        .value_col = CYD_SETTINGS_ITEM_VALUE_COL,
+        .value_span_cols = CYD_SETTINGS_ITEM_VALUE_SPAN_COLS,
+        .value_scale = 2,
+        .button_left_col = CYD_SETTINGS_ITEM_BUTTON_LEFT_COL,
+        .button_right_col = CYD_SETTINGS_ITEM_BUTTON_RIGHT_COL,
+        .button_span_cols = CYD_SETTINGS_ITEM_BUTTON_SPAN_COLS,
+        .button_span_rows = CYD_SETTINGS_ITEM_BUTTON_SPAN_ROWS,
+        .button_scale = CYD_SETTINGS_ITEM_BUTTON_SCALE,
+        .has_button_fg_color = true,
+        .button_fg_color = CYD_UI_COLOR_BLACK,
+        .has_button_bg_color = true,
+        .button_bg_color = CYD_UI_COLOR_GREEN,
+        .has_button_border_color = true,
+        .button_border_color = CYD_UI_COLOR_LIGHTGREY,
+        .decrease_action_id = CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN,
+        .increase_action_id = CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP,
+        .can_decrease = idle_return_seconds > 0,
+        .can_increase = idle_return_seconds < CYD_SETTINGS_IDLE_RETURN_MAX,
+    };
+    ESP_RETURN_ON_ERROR(cyd_ui_add_stepper_row(screen, &row), TAG, "add idle return row failed");
 
     cyd_ui_add_button(screen,
                       "Touch Calib",
@@ -1208,53 +1301,62 @@ static esp_err_t cyd_settings_render_network2_page(cyd_display_screen_t *screen)
     return ESP_OK;
 }
 
+/*
+ * Three actions of increasing blast radius, ordered that way on purpose.
+ * Rows are tight: the page nav strip starts at row 27, so the last description
+ * has to end by row 26.
+ */
 static esp_err_t cyd_settings_render_nvs_page(cyd_display_screen_t *screen)
 {
-    cyd_ui_add_text(screen,
-                    "Maintenance actions",
-                    2,
-                    5,
-                    36,
-                    2,
-                    CYD_DISPLAY_ALIGN_LEFT,
-                    1,
-                    CYD_UI_COLOR_WHITE);
-    cyd_ui_add_button(screen,
-                      "Clear Touch Calib",
-                      4,
-                      9,
-                      32,
-                      3,
-                      CYD_UI_COLOR_DIMGREY,
-                      CYD_UI_COLOR_LIGHTGREY,
-                      CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB);
-    cyd_ui_add_text(screen,
-                    "Delete saved touch calibration only",
-                    2,
-                    13,
-                    36,
-                    2,
-                    CYD_DISPLAY_ALIGN_LEFT,
-                    1,
-                    CYD_UI_COLOR_LIGHTGREY);
-    cyd_ui_add_button(screen,
-                      "Initialize NVS",
-                      4,
-                      18,
-                      32,
-                      3,
-                      CYD_UI_COLOR_RED,
-                      CYD_UI_COLOR_YELLOW,
-                      CYD_SETTINGS_APP_ACTION_CLEAR_NVS);
-    cyd_ui_add_text(screen,
-                    "Erase all saved NVS data",
-                    2,
-                    22,
-                    36,
-                    2,
-                    CYD_DISPLAY_ALIGN_LEFT,
-                    1,
-                    CYD_UI_COLOR_LIGHTGREY);
+    static const struct {
+        const char *label;
+        const char *detail;
+        uint8_t button_row;
+        uint16_t bg_color;
+        uint16_t border_color;
+        uint16_t action_id;
+    } actions[] = {
+        {
+            "Clear Touch Calib", "Delete saved touch calibration only", 8,
+            CYD_UI_COLOR_DIMGREY, CYD_UI_COLOR_LIGHTGREY,
+            CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB,
+        },
+        {
+            "Clear App Data", "Delete app-owned data only", 14,
+            CYD_UI_COLOR_DIMGREY, CYD_UI_COLOR_LIGHTGREY,
+            CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA,
+        },
+        {
+            "Initialize NVS", "Erase all saved NVS data", 20,
+            CYD_UI_COLOR_RED, CYD_UI_COLOR_YELLOW,
+            CYD_SETTINGS_APP_ACTION_CLEAR_NVS,
+        },
+    };
+
+    cyd_ui_add_text(screen, "Maintenance actions", 2, 5, 36, 2,
+                    CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+
+    for (size_t i = 0; i < (sizeof(actions) / sizeof(actions[0])); ++i) {
+        cyd_ui_add_button(screen,
+                          actions[i].label,
+                          4,
+                          actions[i].button_row,
+                          32,
+                          3,
+                          actions[i].bg_color,
+                          actions[i].border_color,
+                          actions[i].action_id);
+        cyd_ui_add_text(screen,
+                        actions[i].detail,
+                        2,
+                        (uint8_t)(actions[i].button_row + 3),
+                        36,
+                        2,
+                        CYD_DISPLAY_ALIGN_LEFT,
+                        1,
+                        CYD_UI_COLOR_LIGHTGREY);
+    }
+
     return ESP_OK;
 }
 
@@ -1276,6 +1378,7 @@ static esp_err_t cyd_settings_render_pages(cyd_display_screen_t *screen)
 static esp_err_t cyd_settings_save_pending_values(void)
 {
     ESP_RETURN_ON_ERROR(cyd_display_save_brightness(), TAG, "save brightness failed");
+    ESP_RETURN_ON_ERROR(app_shell_save_idle_return_timeout_seconds(), TAG, "save idle return timeout failed");
     ESP_RETURN_ON_ERROR(time_sync_save_interval_minutes(), TAG, "save time sync interval failed");
     ESP_RETURN_ON_ERROR(time_sync_save_timezone(), TAG, "save timezone failed");
     ESP_RETURN_ON_ERROR(radio_manager_save_idle_timeout_seconds(), TAG, "save wifi idle timeout failed");
@@ -1328,6 +1431,12 @@ static esp_err_t cyd_settings_app_show(void)
         ESP_RETURN_ON_ERROR(cyd_settings_render_clear_touch_calib_confirm(screen),
                             TAG,
                             "render clear touch calib confirm failed");
+        return cyd_ui_submit(screen);
+    }
+    if (s_settings_view == CYD_SETTINGS_VIEW_CLEAR_APP_DATA_CONFIRM) {
+        ESP_RETURN_ON_ERROR(cyd_settings_render_clear_app_data_confirm(screen),
+                            TAG,
+                            "render clear app data confirm failed");
         return cyd_ui_submit(screen);
     }
     if (s_settings_view == CYD_SETTINGS_VIEW_CLEAR_NVS_CONFIRM) {
@@ -1573,6 +1682,26 @@ static esp_err_t cyd_settings_handle_general_page_action(uint16_t action_id, boo
         return ESP_OK;
     }
 
+    if (action_id == CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN ||
+        action_id == CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP) {
+        uint16_t seconds = cyd_settings_snap_idle_return(app_shell_get_idle_return_timeout_seconds());
+
+        if (action_id == CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN) {
+            seconds = (seconds >= CYD_SETTINGS_IDLE_RETURN_STEP)
+                          ? (uint16_t)(seconds - CYD_SETTINGS_IDLE_RETURN_STEP)
+                          : 0U;
+        } else if (seconds < CYD_SETTINGS_IDLE_RETURN_MAX) {
+            seconds = (uint16_t)(seconds + CYD_SETTINGS_IDLE_RETURN_STEP);
+        }
+
+        ESP_RETURN_ON_ERROR(app_shell_set_idle_return_timeout_seconds(seconds),
+                            TAG,
+                            "set idle return timeout failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
     if (action_id == CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE) {
         ESP_RETURN_ON_ERROR(app_shell_switch_to(system_touch_calibration_app_get_app()),
                             TAG,
@@ -1718,6 +1847,52 @@ static esp_err_t cyd_settings_handle_clear_touch_calib_confirm_action(uint16_t a
     return ESP_OK;
 }
 
+static esp_err_t cyd_settings_handle_clear_app_data_confirm_action(uint16_t action_id, bool *handled)
+{
+    ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
+    *handled = false;
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA_CANCEL) {
+        s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA_CONFIRM) {
+        size_t erased = 0;
+        char detail[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+
+        esp_err_t err = nvs_schema_erase_scope(NVS_SCHEMA_SCOPE_APP, &erased);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "clear app data failed: %s", esp_err_to_name(err));
+            snprintf(detail, sizeof(detail), "Failed: %s", esp_err_to_name(err));
+            ESP_RETURN_ON_ERROR(cyd_settings_show_restart_message("Clear app data", detail),
+                                TAG,
+                                "show failure message failed");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+            *handled = true;
+            return cyd_settings_refresh();
+        }
+
+        /* Restarting is the point, not a formality: apps read their NVS data at
+           startup, so anything already running would keep stale state. */
+        snprintf(detail, sizeof(detail), "%u namespaces erased", (unsigned)erased);
+        ESP_RETURN_ON_ERROR(cyd_input_discard_pending_events(), TAG, "discard input events failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_save_pending_values(), TAG, "save settings before restart failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_show_restart_message(detail, "Restarting..."),
+                            TAG,
+                            "show restart message failed");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        *handled = true;
+        esp_restart();
+        return ESP_OK;
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t cyd_settings_handle_clear_nvs_confirm_action(uint16_t action_id, bool *handled)
 {
     ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
@@ -1764,6 +1939,13 @@ static esp_err_t cyd_settings_handle_nvs_page_action(uint16_t action_id, bool *h
 
     if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB) {
         s_settings_view = CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM;
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA) {
+        s_settings_view = CYD_SETTINGS_VIEW_CLEAR_APP_DATA_CONFIRM;
         ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
         *handled = true;
         return ESP_OK;
@@ -1888,6 +2070,8 @@ static esp_err_t cyd_settings_handle_active_screen_action(uint16_t action_id, bo
         return cyd_settings_handle_clear_touch_calib_confirm_action(action_id, handled);
     case CYD_SETTINGS_VIEW_CLEAR_NVS_CONFIRM:
         return cyd_settings_handle_clear_nvs_confirm_action(action_id, handled);
+    case CYD_SETTINGS_VIEW_CLEAR_APP_DATA_CONFIRM:
+        return cyd_settings_handle_clear_app_data_confirm_action(action_id, handled);
     case CYD_SETTINGS_VIEW_PAGES:
     default:
         break;

@@ -13,6 +13,7 @@
 #include "cyd_system_apps.h"
 #include "cyd_system_apps_internal.h"
 #include "cyd_ui.h"
+#include "nvs_schema.h"
 #include "time_sync.h"
 #include "wifi_connection.h"
 #include "wifi_profile_store.h"
@@ -33,6 +34,7 @@ typedef enum {
     CYD_INFO_PAGE_DIAG,
     CYD_INFO_PAGE_DIAG2,
     CYD_INFO_PAGE_RSSI,
+    CYD_INFO_PAGE_NVS,
     CYD_INFO_PAGE_COUNT,
 } cyd_info_page_t;
 
@@ -147,6 +149,8 @@ static const char *cyd_info_app_next_page_label(void)
     case CYD_INFO_PAGE_DIAG2:
         return "RSSI";
     case CYD_INFO_PAGE_RSSI:
+        return "NVS";
+    case CYD_INFO_PAGE_NVS:
     default:
         return "INFO";
     }
@@ -169,6 +173,39 @@ static const char *cyd_system_apps_wifi_failure_text(esp32_wifi_sta_failure_reas
     default:
         return "none";
     }
+}
+
+/*
+ * Rows that fit between the title and the bottom button strip.
+ * The walk reads flash, so a namespace no component opens any more still shows
+ * up here -- which is the point: that is how leftovers from a replaced app are
+ * spotted.
+ */
+#define CYD_INFO_NVS_VISIBLE_MAX 10
+
+typedef struct {
+    char lines[CYD_INFO_NVS_VISIBLE_MAX][CYD_DISPLAY_TEXT_MAX_LEN + 1];
+    size_t count;
+    size_t total;
+} cyd_info_nvs_scan_t;
+
+static bool cyd_info_nvs_collect(const nvs_schema_namespace_info_t *info, void *ctx)
+{
+    cyd_info_nvs_scan_t *scan = (cyd_info_nvs_scan_t *)ctx;
+
+    ++scan->total;
+    if (scan->count >= CYD_INFO_NVS_VISIBLE_MAX) {
+        return true;   /* keep counting so the total stays honest */
+    }
+
+    snprintf(scan->lines[scan->count],
+             sizeof(scan->lines[scan->count]),
+             "%-15s %-7s %3u",
+             info->name,
+             nvs_schema_scope_name(info->scope),
+             (unsigned)info->entry_count);
+    ++scan->count;
+    return true;
 }
 
 static esp_err_t cyd_info_app_show_page_nav(cyd_display_screen_t *screen)
@@ -305,6 +342,59 @@ static esp_err_t cyd_info_app_show(void)
         cyd_ui_add_text(screen, wifi_max_on_line, 2, 17, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, wifi_warn_line, 2, 20, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, wifi_fail_line, 2, 23, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+        ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
+        cyd_ui_add_button(screen,
+                          "<<",
+                          CYD_SYSTEM_APPS_BACK_COL,
+                          CYD_SYSTEM_APPS_BACK_ROW,
+                          CYD_SYSTEM_APPS_BACK_SPAN_COLS,
+                          CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
+                          CYD_UI_COLOR_BLUE,
+                          CYD_UI_COLOR_CYAN,
+                          CYD_INFO_APP_ACTION_BACK);
+
+        return cyd_ui_submit(screen);
+    }
+
+    if (s_info_page == CYD_INFO_PAGE_NVS) {
+        cyd_display_screen_t *screen = &s_info_screen;
+        cyd_info_nvs_scan_t scan = { 0 };
+        char summary[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+
+        esp_err_t scan_err = nvs_schema_for_each_namespace(cyd_info_nvs_collect, &scan);
+        if (scan_err != ESP_OK) {
+            snprintf(summary, sizeof(summary), "scan failed: %s", esp_err_to_name(scan_err));
+        } else if (scan.total > scan.count) {
+            snprintf(summary, sizeof(summary), "%u found, %u shown",
+                     (unsigned)scan.total, (unsigned)scan.count);
+        } else {
+            snprintf(summary, sizeof(summary), "%u namespaces in flash", (unsigned)scan.total);
+        }
+
+        cyd_ui_screen_clear(screen);
+        cyd_ui_add_text(screen,
+                        "NVS",
+                        CYD_SYSTEM_APPS_TITLE_COL,
+                        CYD_SYSTEM_APPS_TITLE_ROW,
+                        CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
+                        CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
+                        CYD_DISPLAY_ALIGN_RIGHT,
+                        2,
+                        CYD_UI_COLOR_CYAN);
+        cyd_ui_add_text(screen, summary, 2, 3, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+
+        for (size_t i = 0; i < scan.count; ++i) {
+            cyd_ui_add_text(screen,
+                            scan.lines[i],
+                            2,
+                            (uint8_t)(5 + (i * 2)),
+                            36,
+                            2,
+                            CYD_DISPLAY_ALIGN_LEFT,
+                            1,
+                            CYD_UI_COLOR_WHITE);
+        }
+
         ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
         cyd_ui_add_button(screen,
                           "<<",

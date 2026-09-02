@@ -61,6 +61,12 @@ home復帰timeoutは `app_shell_get_idle_return_timeout_seconds()` と
 `app_shell_set_idle_return_timeout_seconds()` で実行時に参照・変更できます。
 `app_shell_save_idle_return_timeout_seconds()` を呼ぶとNVSへ保存され、次回起動時はKconfig初期値よりNVS値が優先されます。`0` は自動復帰無効です。
 
+この 3 つは `system_settings_app` の `GENERAL` page にある `IdleReturn` から使われます。10 秒刻みで 0〜1800 秒、`0` は `never` 表示です。
+
+**この経路は長く死んでいました。** `set` / `save` の呼び出し元が無く、versioned blob も NVS 連携も実装されているのに Kconfig 既定値しか効かない状態で、`sys_shell` namespace すら作られていませんでした。設定 UI を足して初めて繋がっています。
+
+English supplement: the persistence layer existed but had no caller until the GENERAL page exposed it. A value that cannot be changed is indistinguishable from a constant.
+
 入力中など一時的にhome復帰させたくないアプリは `idle_return_suppressed` で自身の状態を返します。アプリIDによる特例判定は行いません。
 
 composition 側で起動中の service 状態に応じて home 復帰を止めたい場合は、`app_shell_set_home_return_allowed_callback()` で短い判定callbackを登録します。`app_shell` 自体は Wi-Fi や時刻同期などの domain service を直接参照しません。

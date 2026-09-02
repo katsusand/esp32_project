@@ -75,8 +75,9 @@ English supplement: Direct-view selection is one-shot and thread-safe; callers s
 - Wi-Fi manager state / active users / last user
 - Wi-Fi connected duration / max duration / warning / last failure
 - Wi-Fi RSSI トレンドグラフ
+- フラッシュ上の NVS namespace 一覧
 
-ページは `INFO -> DIAG -> DIAG2 -> RSSI` の順に、画面下部のボタンで巡回します。
+ページは `INFO -> DIAG -> DIAG2 -> RSSI -> NVS` の順に、画面下部のボタンで巡回します。
 
 左上の `<<` ボタンで、`enter()` の `from_app` として受け取った return app へ戻ります。
 
@@ -92,12 +93,21 @@ Wi-Fi を長く保ちたい場合は `NETWORK` page の `WiFiIdleOff` を使っ�
 
 English supplement: the RSSI page is the reference example of a live graph driven by a sampling service. See `docs/wifi_rssi_history.md`.
 
+### NVS Page
+
+フラッシュに実在する NVS namespace を、scope とエントリ数つきで一覧します。**コンポーネントの自己申告ではなくフラッシュを走査**するため、どの component も開かなくなった孤児 namespace がここに現れます。アプリを載せ替えたあとに前のデータが残っていないかを確認する用途です。
+
+prefix を持たない namespace は `unknown` になります。ここには ESP-IDF 自身の `phy` と `nvs.net80211` も含まれるため、`unknown` は「消してよいもの」を意味しません。詳細は `docs/nvs_storage.md` を参照してください。
+
+表示は `CYD_INFO_NVS_VISIBLE_MAX`（10 件）までで、超えると `N found, M shown` と出ます。
+
 ## Settings App
 
 `settings app` は設定入口です。
 
 - `GENERAL` page
   `LcdBrightness`: LCD バックライトの明るさを変更する
+  `IdleReturn`: 無操作で home app へ復帰するまでの時間
   `Touch Calib`: touch calibration app へ切り替える
 - `TIME` page
   現在時刻表示
@@ -115,6 +125,7 @@ English supplement: the RSSI page is the reference example of a live graph drive
   NTP / 時刻同期状態表示
 - `NVS` page
   `Clear Touch Calib`: 保存済みタッチ補正だけ消す
+  `Clear App Data`: `app_` scope の namespace だけ消して再起動する
   `Initialize NVS`: 保存済み NVS データを全消去して再起動する
 - `APPS` page
   設定画面を持つ app の一覧。ボタンでその app の設定画面へ遷移する
@@ -123,11 +134,13 @@ English supplement: the RSSI page is the reference example of a live graph drive
 
 ページ切り替えは画面下部の `<` / `>` ボタンで行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消えます。`APPS` page は、設定画面を持つ app が 1 つも無いときだけ消えます。
 
-`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`WiFiIdleOff` は `never / 30s / 1min / 3min / 5min / 10min / 15min / 20min / 30min / 45min / 60min` の 11 段階です。`never` は `radio_manager` が idle を理由に radio を解放しなくなります（内部的には待ち時間 `portMAX_DELAY`）。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
+`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`IdleReturn` は 10 秒刻みで 0〜1800 秒、`0` は `never` です。等差なので `WiFiIdleOff` のような段階テーブルは持たず、加減算で扱います。`WiFiIdleOff` は `never / 30s / 1min / 3min / 5min / 10min / 15min / 20min / 30min / 45min / 60min` の 11 段階です。`never` は `radio_manager` が idle を理由に radio を解放しなくなります（内部的には待ち時間 `portMAX_DELAY`）。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
 
 `Stored SSIDs` は `NETWORK1` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
 
-`NVS` page の `Clear Touch Calib` は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。`Initialize NVS` は確認画面を経て `nvs_flash_erase()` を実行し、保存済み Wi-Fi profile や各種設定値も含めて初期化したうえで再起動します。
+`NVS` page の 3 つは破壊範囲の小さい順に並べています。`Clear App Data` は `app_` scope の namespace だけを消して再起動します。**再起動は必須です** — app は起動時に自分の NVS データを読むため、消したあとも動き続けると古い状態を保持したままになります。
+
+`Clear Touch Calib` は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。`Initialize NVS` は確認画面を経て `nvs_flash_erase()` を実行し、保存済み Wi-Fi profile や各種設定値も含めて初期化したうえで再起動します。
 
 NVS blob の version / size / 文字列終端などが現在 firmware の想定フォーマットと一致しない場合は、起動時に warning 付きの `Initialize NVS` 画面へ強制遷移します。この場合、通常の clock home には入らず、`Initialize` 実行後の再起動が必要です。
 
