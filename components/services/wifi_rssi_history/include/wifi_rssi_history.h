@@ -11,31 +11,17 @@ extern "C" {
 #endif
 
 /*
- * Recorded when the station is not associated. Pass it to the sparkline widget
- * as `gap_value` so outages render as breaks in the line instead of being
- * plotted as a real (very weak) reading.
+ * Recorded once when the station stops being associated. Pass it to the
+ * sparkline widget as `gap_value` so a break renders as a break instead of
+ * being plotted as a real (very weak) reading.
+ *
+ * English contract: this service never powers the radio up. It samples what is
+ * already there, so the graph reflects Wi-Fi that other features turned on.
  */
 #define WIFI_RSSI_HISTORY_GAP_DBM INT16_MIN
 
 esp_err_t wifi_rssi_history_start(void);
 
-/*
- * Holds a radio lease so sampling can continue while a viewer is watching.
- *
- * Why this exists: `radio_manager` powers the radio down once no client holds a
- * lease, and the sampler then has nothing to read. Without this the graph stops
- * a few tens of seconds after boot, when time_sync releases its lease.
- *
- * English contract: non-blocking and idempotent, so it is safe to call from the
- * app_shell step path and on every redraw. The blocking radio_manager_acquire()
- * runs on this service's own task; calling it directly from the shell froze the
- * UI for the whole Wi-Fi bring-up. Enable it only while the graph is actually on
- * screen — holding the lease permanently would defeat the point of
- * radio_manager. Pair it with the app's leave() path so the lease cannot
- * outlive the view.
- */
-esp_err_t wifi_rssi_history_set_monitoring(bool monitoring);
-bool wifi_rssi_history_is_monitoring(void);
 
 /*
  * Returns the collected RSSI samples in dBm, oldest first.
@@ -56,6 +42,12 @@ bool wifi_rssi_history_is_monitoring(void);
  */
 bool wifi_rssi_history_get(const int16_t **samples, uint16_t *count, uint16_t *revision);
 
+/*
+ * Current reading, or false when the station is not associated right now.
+ *
+ * English contract: a trailing break marker means "not connected", so this
+ * returns false rather than reporting the last real reading as if it were live.
+ */
 bool wifi_rssi_history_get_latest(int16_t *rssi_dbm);
 
 #ifdef __cplusplus

@@ -19,6 +19,7 @@
 #include "cyd_system_apps_internal.h"
 #include "cyd_ui.h"
 #include "cyd_wifi_setup.h"
+#include "radio_manager.h"
 #include "time_sync.h"
 #include "wifi_connection.h"
 #include "wifi_profile_store.h"
@@ -51,6 +52,8 @@
    is also the cap on how many registered apps are reachable from settings. */
 #define CYD_SETTINGS_APPS_VISIBLE_MAX 5
 #define CYD_SETTINGS_APP_ACTION_SYNC_NOW 0x2217
+#define CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN 0x2218
+#define CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP 0x2219
 #define CYD_SETTINGS_APP_ACTION_CLEAR_NVS 0x221a
 #define CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CANCEL 0x221b
 #define CYD_SETTINGS_APP_ACTION_CLEAR_NVS_CONFIRM 0x221c
@@ -104,6 +107,15 @@ typedef struct {
     const char *label;
     const char *tz;
 } cyd_settings_timezone_option_t;
+
+/*
+ * Wi-Fi idle-off steps in seconds, ascending. 0 means never: radio_manager
+ * already treats a zero timeout as portMAX_DELAY, so the radio is simply never
+ * released for being idle.
+ */
+static const uint16_t CYD_SETTINGS_WIFI_IDLE_SECONDS[] = {
+    0, 30, 60, 180, 300, 600, 900, 1200, 1800, 2700, 3600,
+};
 
 static const cyd_settings_timezone_option_t CYD_SETTINGS_TIMEZONE_OPTIONS[] = {
     { "UTC", "UTC0" },
@@ -266,6 +278,8 @@ static bool cyd_settings_is_stepper_action(uint16_t action_id)
     case CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP:
     case CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN:
     case CYD_SETTINGS_APP_ACTION_TIMEZONE_UP:
+    case CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN:
+    case CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP:
         return true;
     default:
         return false;
@@ -552,6 +566,34 @@ static const char *cyd_settings_page_title(cyd_settings_page_t page)
     const cyd_settings_page_def_t *def = cyd_settings_page_def(page);
 
     return (def != NULL) ? def->title : "SETTINGS";
+}
+
+#define CYD_SETTINGS_WIFI_IDLE_COUNT \
+    (sizeof(CYD_SETTINGS_WIFI_IDLE_SECONDS) / sizeof(CYD_SETTINGS_WIFI_IDLE_SECONDS[0]))
+
+/* Nearest step at or below the stored value, so a value written by another
+   build still lands on a usable position instead of snapping to zero. */
+static size_t cyd_settings_find_wifi_idle_index(uint16_t seconds)
+{
+    size_t index = 0;
+
+    for (size_t i = 0; i < CYD_SETTINGS_WIFI_IDLE_COUNT; ++i) {
+        if (CYD_SETTINGS_WIFI_IDLE_SECONDS[i] <= seconds) {
+            index = i;
+        }
+    }
+    return index;
+}
+
+static void cyd_settings_format_wifi_idle(char *out, size_t out_size, uint16_t seconds)
+{
+    if (seconds == 0) {
+        snprintf(out, out_size, "never");
+    } else if (seconds < 60) {
+        snprintf(out, out_size, "%us", (unsigned)seconds);
+    } else {
+        snprintf(out, out_size, "%umin", (unsigned)(seconds / 60U));
+    }
 }
 
 static bool cyd_settings_sync_now_enabled(void)
@@ -1061,6 +1103,9 @@ static esp_err_t cyd_settings_render_network2_page(cyd_display_screen_t *screen)
     char time_sync_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     char sync_state_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     char sync_status_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    char wifi_idle_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    uint16_t wifi_idle_seconds = radio_manager_get_idle_timeout_seconds();
+    size_t wifi_idle_index = cyd_settings_find_wifi_idle_index(wifi_idle_seconds);
     uint16_t time_sync_minutes = time_sync_get_interval_minutes();
     bool can_time_sync_decrease = time_sync_minutes > CYD_SETTINGS_TIME_SYNC_MINUTES_MIN;
     bool can_time_sync_increase = time_sync_minutes < CYD_SETTINGS_TIME_SYNC_MINUTES_MAX;
@@ -1072,11 +1117,12 @@ static esp_err_t cyd_settings_render_network2_page(cyd_display_screen_t *screen)
              "sync state: %s",
              cyd_system_apps_time_sync_state_text(time_sync_get_state()));
     cyd_system_apps_format_sync_attempt(sync_status_line, sizeof(sync_status_line));
+    cyd_settings_format_wifi_idle(wifi_idle_value, sizeof(wifi_idle_value), wifi_idle_seconds);
 
     row = (cyd_ui_stepper_row_t){
         .label_text = "TimeSyncInterval:",
         .value_text = time_sync_value,
-        .row = 6,
+        .row = 5,
         .label_col = CYD_SETTINGS_ITEM_LABEL_COL,
         .label_span_cols = CYD_SETTINGS_ITEM_LABEL_SPAN_COLS,
         .label_scale = 1,
@@ -1101,10 +1147,38 @@ static esp_err_t cyd_settings_render_network2_page(cyd_display_screen_t *screen)
     };
     ESP_RETURN_ON_ERROR(cyd_ui_add_stepper_row(screen, &row), TAG, "add network sync row failed");
 
+    row = (cyd_ui_stepper_row_t){
+        .label_text = "WiFiIdleOff:",
+        .value_text = wifi_idle_value,
+        .row = 9,
+        .label_col = CYD_SETTINGS_ITEM_LABEL_COL,
+        .label_span_cols = CYD_SETTINGS_ITEM_LABEL_SPAN_COLS,
+        .label_scale = 1,
+        .value_col = CYD_SETTINGS_ITEM_VALUE_COL,
+        .value_span_cols = CYD_SETTINGS_ITEM_VALUE_SPAN_COLS,
+        .value_scale = 2,
+        .button_left_col = CYD_SETTINGS_ITEM_BUTTON_LEFT_COL,
+        .button_right_col = CYD_SETTINGS_ITEM_BUTTON_RIGHT_COL,
+        .button_span_cols = CYD_SETTINGS_ITEM_BUTTON_SPAN_COLS,
+        .button_span_rows = CYD_SETTINGS_ITEM_BUTTON_SPAN_ROWS,
+        .button_scale = CYD_SETTINGS_ITEM_BUTTON_SCALE,
+        .has_button_fg_color = true,
+        .button_fg_color = CYD_UI_COLOR_BLACK,
+        .has_button_bg_color = true,
+        .button_bg_color = CYD_UI_COLOR_GREEN,
+        .has_button_border_color = true,
+        .button_border_color = CYD_UI_COLOR_LIGHTGREY,
+        .decrease_action_id = CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN,
+        .increase_action_id = CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP,
+        .can_decrease = wifi_idle_index > 0,
+        .can_increase = wifi_idle_index + 1 < CYD_SETTINGS_WIFI_IDLE_COUNT,
+    };
+    ESP_RETURN_ON_ERROR(cyd_ui_add_stepper_row(screen, &row), TAG, "add wifi idle row failed");
+
     cyd_ui_add_button_with_fg_enabled(screen,
                                       "SYNC NOW",
                                       8,
-                                      12,
+                                      13,
                                       24,
                                       3,
                                       CYD_UI_COLOR_WHITE,
@@ -1115,7 +1189,7 @@ static esp_err_t cyd_settings_render_network2_page(cyd_display_screen_t *screen)
     cyd_ui_add_text(screen,
                     sync_state_line,
                     2,
-                    18,
+                    19,
                     36,
                     2,
                     CYD_DISPLAY_ALIGN_LEFT,
@@ -1124,7 +1198,7 @@ static esp_err_t cyd_settings_render_network2_page(cyd_display_screen_t *screen)
     cyd_ui_add_text(screen,
                     sync_status_line,
                     2,
-                    21,
+                    22,
                     36,
                     2,
                     CYD_DISPLAY_ALIGN_LEFT,
@@ -1204,6 +1278,7 @@ static esp_err_t cyd_settings_save_pending_values(void)
     ESP_RETURN_ON_ERROR(cyd_display_save_brightness(), TAG, "save brightness failed");
     ESP_RETURN_ON_ERROR(time_sync_save_interval_minutes(), TAG, "save time sync interval failed");
     ESP_RETURN_ON_ERROR(time_sync_save_timezone(), TAG, "save timezone failed");
+    ESP_RETURN_ON_ERROR(radio_manager_save_idle_timeout_seconds(), TAG, "save wifi idle timeout failed");
     return ESP_OK;
 }
 
@@ -1571,6 +1646,26 @@ static esp_err_t cyd_settings_handle_network2_page_action(uint16_t action_id, bo
                                : cyd_settings_time_sync_increase(interval_minutes);
 
         ESP_RETURN_ON_ERROR(time_sync_set_interval_minutes(interval_minutes), TAG, "set time sync interval failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN ||
+        action_id == CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP) {
+        size_t index = cyd_settings_find_wifi_idle_index(radio_manager_get_idle_timeout_seconds());
+
+        if (action_id == CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN) {
+            if (index > 0) {
+                --index;
+            }
+        } else if (index + 1 < CYD_SETTINGS_WIFI_IDLE_COUNT) {
+            ++index;
+        }
+
+        ESP_RETURN_ON_ERROR(radio_manager_set_idle_timeout_seconds(CYD_SETTINGS_WIFI_IDLE_SECONDS[index]),
+                            TAG,
+                            "set wifi idle timeout failed");
         ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
         *handled = true;
         return ESP_OK;

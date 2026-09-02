@@ -50,64 +50,45 @@ if (wifi_rssi_history_get(&samples, &count, &revision)) {
 - 保持数: `CONFIG_WIFI_RSSI_HISTORY_MAX_SAMPLES`
 - 取得元: `esp_wifi_sta_get_ap_info()` の `rssi`
 
-**task を持つのは必須です。** `radio_manager_acquire()` は呼び出しタスクをブロックするため、これを `app_shell` の `step()` 経路から呼ぶと、Wi-Fi 起動が終わるまで描画も入力処理も止まります（実測で約2.8秒 UI が固まりました）。ブロックする処理はこの service 自身の task に閉じ込め、公開 API は非ブロッキングにしています。
+**専用 task を持つ理由は複数あります。** ブロックの有無はそのうちの 1 つに過ぎません。
 
-English contract: the blocking radio acquire must never run on the app_shell task. That is the entire reason this service owns a task.
+- 前面 app が何を表示していても記録を続ける必要がある（止まると履歴に穴が空く）
+- 優先度を前面 app と独立させたい
+- `esp_wifi_sta_get_ap_info()` が短時間で返る保証を、こちらでは取れない
 
-**未接続時は欠測値 `WIFI_RSSI_HISTORY_GAP_DBM` を記録します。**
+3 番目が実際的な決め手です。Wi-Fi 実装はバイナリブロブなので、**この API が非ブロッキングだとソースで確認する手段がありません**。ESP-IDF の Wi-Fi API は内部で API ロックを取る作りが一般的で、Wi-Fi task がそれを保持している間は待たされ得ます。
+
+esp_timer のコールバックは**システム全体で共有される単一 task**（`CONFIG_ESP_TIMER_TASK_STACK_SIZE` 既定 3584）で動くため、ここで少しでも待つと Wi-Fi や lwIP を含む他の全タイマーが遅れます。task stack 3072 B を節約するために負う risk としては見合いません。
+
+なお当初この task を作った直接の理由は別で、グラフ表示中だけ radio lease を取っていた頃に `radio_manager_acquire()` のブロックを `app_shell` から隔離するためでした（`step()` から呼んで実測 約2.8秒 UI が固まりました）。lease を撤去してその理由は消えましたが、上の 3 点で task は維持しています。
+
+English contract: "no blocking call" is not sufficient reason to drop a task. Independent lifetime, priority isolation, and unverifiable call duration all matter. esp_timer callbacks run on a shared system task, so anything that might wait does not belong there.
+
+## This Service Never Powers The Radio Up
+
+**この service は Wi-Fi を起動しません。** 既に上がっている Wi-Fi を観測するだけです。
+
+一時期は「グラフ表示中だけ radio lease を保持する」実装にしていましたが、グラフを見るためだけに Wi-Fi を起動するのは過剰なので取りやめました。`radio_manager` の lease も client enum も参照しません。
+
+その結果、グラフは「他の機能が Wi-Fi を使っていた区間」を映します。Wi-Fi が落ちている間は `system_info_app` の RSSI page が `Wi-Fi is off` と明示します。
+
+Wi-Fi を長く保ちたい場合は、設定の `NETWORK` にある `WiFiIdleOff` で `radio_manager` の idle timeout を延ばしてください（`never` を含む）。
+
+English contract: this service observes, it never acquires. Keeping Wi-Fi alive is a user-facing policy exposed as a setting, not something a diagnostic view decides on its own.
+
+## Gap Markers
+
+未接続時は `WIFI_RSSI_HISTORY_GAP_DBM` を **1 回だけ**記録します。
 
 ```c
 #define WIFI_RSSI_HISTORY_GAP_DBM INT16_MIN
 ```
 
-これを sparkline の `gap_value` に渡すと、その区間は線が途切れて描かれます。サンプルを単に飛ばすと欠測が時間軸から消えて詰まってしまい、「電波が途切れていた」のか「その間ずっと安定していた」のか区別できなくなるためです。
+毎周期記録しないのは、`radio_manager` が Wi-Fi を数時間落としたままにできるためです。1 秒ごとに欠測を積むと、**見せたい実測履歴がバッファから押し出されて消えます**。区切りは「ここで途切れた」という 1 個の印で足り、実データを保存する方が有用です。
 
-`wifi_rssi_history_get_latest()` は末尾の欠測を読み飛ばし、最後の実測値を返します。
+実測値がまだ 1 件も無い状態での先頭の欠測も、ノイズなので記録しません。
 
-## Radio Lease
-
-`radio_manager` は、どの client も lease を保持しなくなると `CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS` 後に radio を落とします。これは省電力設計として正しい挙動ですが、**そのままだと RSSI サンプリングも一緒に止まります。**
-
-実際、初期実装では time_sync が lease を返した約30秒後に radio が落ち、グラフが 33 サンプル前後で停止していました。
-
-```text
-I (38257) wifi:state: run -> init (0x0)
-I (38357) wifi_connection: Wi-Fi connection disabled
-```
-
-そのため、**グラフを表示している間だけ** lease を保持します。
-
-```c
-esp_err_t wifi_rssi_history_set_monitoring(bool monitoring);
-```
-
-- **非ブロッキングかつ冪等**です。`step()` から毎回呼んでも UI は止まりません。実際の lease 取得は service の task 側で行われます
-- 画面に出ている間だけ有効にしてください。常時保持すると `radio_manager` の意味が無くなります
-- app の `leave()` と対にしてください。`system_info_app` は idle 復帰経路も `leave()` を通るため、lease が view より長生きしません
-- 解放漏れの保険として `CONFIG_WIFI_RSSI_HISTORY_RADIO_MAX_HOLD_MS` で上限を掛けています
-
-English contract: the lease scope is the view, not the service lifetime. Enabling it permanently defeats radio_manager.
-
-この設計上、ページを離れている間はサンプルが増えません。再訪時はそれまでの履歴の続きから描かれるため、時間軸に不連続が生じます。診断ビューとしては許容範囲と判断しています。
-
-**lease 取得を待っている間は、サンプルが 1 件も増えません。** 欠測値が記録されるわけでもありません。
-
-task のループが次の形だからです。
-
-```c
-wifi_rssi_history_apply_lease();     /* radio が上がるまでここでブロックする */
-if (s_lease_held) {
-    wifi_rssi_history_sample_once(); /* lease を持っている間だけ記録する */
-}
-```
-
-`radio_manager_acquire()` がブロックしている間、task は sampling に到達しません。lease が下りた時点では既に associate 済みなので、結果として欠測値も出ません。
-
-したがって `WIFI_RSSI_HISTORY_GAP_DBM` が実際に記録されるのは、**lease を保持している最中に AP が落ちた場合**だけです。画面には「waiting for Wi-Fi...」が出るので、待っていること自体は分かります。
-
-常時記録が要る用途なら、lease の有無に関わらず毎周期サンプルする形に変える必要があります。現状は「グラフを見ている間だけの診断ビュー」という位置づけなので、この挙動のままにしています。
-
-English contract: no samples accumulate while the lease is pending, because the task is parked inside the blocking acquire. Gap values therefore only appear when the AP drops while the lease is held. An always-on logger would need to sample regardless of lease state.
+`wifi_rssi_history_get_latest()` は末尾の欠測を**読み飛ばしません**。末尾が欠測であること自体が「今つながっていない」の表現なので、過去の実測値を現在値のように返さないためです。
 
 サンプルは ring buffer ではなく**線形配列で、新しいものが末尾**です。1 サンプルごとに数百バイトの `memmove` が発生しますが、これは「読み手全員に ring の順序を教える」よりも安いという判断です。sparkline widget にそのまま渡せる形を優先しています。
 
@@ -134,13 +115,13 @@ English contract: this is the same trade-off documented for `cyd_display_sparkli
 - `wifi_rssi_history_start()` は `ESP_ERR_NOT_SUPPORTED` を返す
 - `wifi_rssi_history_get()` / `_get_latest()` は `false` を返す
 
-app 側に `#if` を書かずに済むよう、API は維持されます。RSSI ページは「データなし」表示になります。
+app 側に `#if` を書かずに済むよう、API は維持されます。RSSI ページは `Wi-Fi is off` 表示になります。
 
 ## Configuration
 
 `idf.py menuconfig` の `Wi-Fi RSSI History` から変更できます。
 
-- `CONFIG_WIFI_RSSI_HISTORY_TASK_STACK_SIZE` (既定 3072)
+- `CONFIG_WIFI_RSSI_HISTORY_TASK_STACK_SIZE` (既定 3072、実測ピーク使用 1944 B)
 - `CONFIG_WIFI_RSSI_HISTORY_TASK_PRIORITY` (既定 4)
 - `CONFIG_WIFI_RSSI_HISTORY_SAMPLE_INTERVAL_MS` (既定 1000)
 - `CONFIG_WIFI_RSSI_HISTORY_MAX_SAMPLES` (既定 120)

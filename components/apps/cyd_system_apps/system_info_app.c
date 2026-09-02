@@ -171,15 +171,6 @@ static const char *cyd_system_apps_wifi_failure_text(esp32_wifi_sta_failure_reas
     }
 }
 
-/*
- * The RSSI graph needs the radio powered, but radio_manager shuts it down once
- * no client holds a lease. Hold one only while that page is on screen.
- */
-static void cyd_info_app_apply_rssi_monitoring(void)
-{
-    (void)wifi_rssi_history_set_monitoring(s_info_page == CYD_INFO_PAGE_RSSI);
-}
-
 static esp_err_t cyd_info_app_show_page_nav(cyd_display_screen_t *screen)
 {
     const char *toggle_label = cyd_info_app_next_page_label();
@@ -343,12 +334,10 @@ static esp_err_t cyd_info_app_show(void)
                      "now %d dBm  (%u samples)",
                      (int)latest_rssi,
                      (unsigned)sample_count);
-        } else if (wifi_rssi_history_is_monitoring()) {
-            /* Monitoring is on but nothing has associated yet. Say so, rather
-               than "no data", so the radio bring-up wait looks intentional. */
-            snprintf(rssi_line, sizeof(rssi_line), "waiting for Wi-Fi...");
         } else {
-            snprintf(rssi_line, sizeof(rssi_line), "no data: Wi-Fi unavailable");
+            /* This page never powers the radio up, so say plainly that Wi-Fi is
+               off instead of implying the graph is about to start. */
+            snprintf(rssi_line, sizeof(rssi_line), "Wi-Fi is off");
         }
 
         cyd_ui_screen_clear(screen);
@@ -463,7 +452,6 @@ static esp_err_t cyd_info_app_enter(void *ctx, const app_shell_app_t *from_app)
     }
     s_info_page = CYD_INFO_PAGE_INFO;
     s_info_touch_tracker = (cyd_system_apps_touch_tracker_t){ 0 };
-    cyd_info_app_apply_rssi_monitoring();
     return cyd_info_app_show();
 }
 
@@ -477,8 +465,7 @@ static esp_err_t cyd_info_app_step(void *ctx)
         if (cyd_system_apps_touch_confirmed_action(&event, &s_info_touch_tracker, &action_id)) {
             if (action_id == CYD_INFO_APP_ACTION_TOGGLE_PAGE) {
                 s_info_page = (cyd_info_page_t)(((int)s_info_page + 1) % (int)CYD_INFO_PAGE_COUNT);
-                cyd_info_app_apply_rssi_monitoring();
-                return cyd_info_app_show();
+                            return cyd_info_app_show();
             }
             if (action_id == CYD_INFO_APP_ACTION_BACK) {
                 ESP_RETURN_ON_ERROR(app_shell_return_to(s_info_return_app), TAG, "switch back from info failed");
@@ -507,9 +494,6 @@ static esp_err_t cyd_info_app_step(void *ctx)
 static esp_err_t cyd_info_app_leave(void *ctx)
 {
     (void)ctx;
-    /* Releases the radio lease. Also covers the idle-return path, so the lease
-       cannot outlive the view. */
-    (void)wifi_rssi_history_set_monitoring(false);
     return ESP_OK;
 }
 

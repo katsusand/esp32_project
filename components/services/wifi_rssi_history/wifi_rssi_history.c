@@ -6,7 +6,6 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "app_stack_monitor.h"
-#include "radio_manager.h"
 #include "sdkconfig.h"
 #include "wifi_rssi_history.h"
 
@@ -19,9 +18,6 @@ static uint16_t s_revision;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static TaskHandle_t s_task_handle;
-static volatile bool s_monitoring_requested;
-static bool s_lease_held;
-static radio_manager_lease_t s_lease;
 
 /*
  * Samples are kept linear with the newest at the end so the array can be handed
@@ -45,65 +41,23 @@ static void wifi_rssi_history_sample_once(void)
 {
     wifi_ap_record_t ap_info = { 0 };
 
+    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        wifi_rssi_history_append((int16_t)ap_info.rssi);
+        return;
+    }
+
     /*
-     * Not being associated is normal: the radio may still be coming up, or the
-     * AP may have dropped. Record an explicit dropout rather than skipping, so
-     * the graph's time axis stays honest instead of silently compressing the
-     * outage away.
+     * Not associated. Record a single marker for the break rather than one per
+     * interval: radio_manager can keep Wi-Fi off for hours, and one gap per
+     * second would scroll the real history out of the buffer it exists to show.
+     * A leading gap before any real reading is just noise, so skip that too.
      */
-    if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK) {
+    portENTER_CRITICAL(&s_lock);
+    bool want_gap = s_count > 0 && s_samples[s_count - 1] != WIFI_RSSI_HISTORY_GAP_DBM;
+    portEXIT_CRITICAL(&s_lock);
+
+    if (want_gap) {
         wifi_rssi_history_append(WIFI_RSSI_HISTORY_GAP_DBM);
-        return;
-    }
-
-    wifi_rssi_history_append((int16_t)ap_info.rssi);
-}
-
-static void wifi_rssi_history_apply_lease(void)
-{
-    bool wanted = s_monitoring_requested;
-
-    if (wanted == s_lease_held) {
-        return;
-    }
-
-    if (wanted) {
-        const radio_manager_request_t request = {
-            .client = RADIO_MANAGER_CLIENT_RSSI_MONITOR,
-            .required = RADIO_MANAGER_CAP_INTERNET,
-            .max_hold_ticks = pdMS_TO_TICKS(CONFIG_WIFI_RSSI_HISTORY_RADIO_MAX_HOLD_MS),
-        };
-        radio_manager_lease_t lease = { 0 };
-
-        /*
-         * This blocks until the radio is up, which is exactly why it runs here
-         * and not in the caller. radio_manager_acquire() parks the calling task,
-         * so calling it from the app_shell step path froze the UI for the whole
-         * Wi-Fi bring-up.
-         */
-        esp_err_t err = radio_manager_acquire(&request,
-                                              &lease,
-                                              pdMS_TO_TICKS(CONFIG_WIFI_RSSI_HISTORY_RADIO_WAIT_TIMEOUT_MS));
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "radio acquire failed: %s", esp_err_to_name(err));
-            return;
-        }
-
-        s_lease = lease;
-        s_lease_held = true;
-        ESP_LOGI(TAG, "monitoring on: radio lease held");
-        return;
-    }
-
-    esp_err_t err = radio_manager_release(&s_lease);
-    s_lease = (radio_manager_lease_t){ 0 };
-    s_lease_held = false;
-    if (err != ESP_OK) {
-        /* max_hold_ticks may have revoked the lease already. Nothing to act on;
-           monitoring is off either way. */
-        ESP_LOGW(TAG, "radio release failed: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "monitoring off: radio lease released");
     }
 }
 
@@ -114,17 +68,8 @@ static void wifi_rssi_history_task(void *arg)
     while (true) {
         APP_STACK_MONITOR_CHECK(TAG, "wifi_rssi_history", 30000);
 
-        wifi_rssi_history_apply_lease();
-
-        if (s_lease_held) {
-            wifi_rssi_history_sample_once();
-        }
-
-        /*
-         * A monitoring request wakes the task immediately so the lease attempt
-         * starts without waiting out the sampling interval.
-         */
-        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(CONFIG_WIFI_RSSI_HISTORY_SAMPLE_INTERVAL_MS));
+        wifi_rssi_history_sample_once();
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_WIFI_RSSI_HISTORY_SAMPLE_INTERVAL_MS));
     }
 }
 
@@ -147,25 +92,6 @@ esp_err_t wifi_rssi_history_start(void)
              CONFIG_WIFI_RSSI_HISTORY_SAMPLE_INTERVAL_MS,
              WIFI_RSSI_HISTORY_CAPACITY);
     return ESP_OK;
-}
-
-esp_err_t wifi_rssi_history_set_monitoring(bool monitoring)
-{
-    if (s_task_handle == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (monitoring == s_monitoring_requested) {
-        return ESP_OK;
-    }
-
-    s_monitoring_requested = monitoring;
-    xTaskNotifyGive(s_task_handle);
-    return ESP_OK;
-}
-
-bool wifi_rssi_history_is_monitoring(void)
-{
-    return s_monitoring_requested;
 }
 
 bool wifi_rssi_history_get(const int16_t **samples, uint16_t *count, uint16_t *revision)
@@ -193,23 +119,19 @@ bool wifi_rssi_history_get(const int16_t **samples, uint16_t *count, uint16_t *r
 
 bool wifi_rssi_history_get_latest(int16_t *rssi_dbm)
 {
-    bool found = false;
-    int16_t latest = 0;
-
-    /* Skips trailing dropouts so the caller gets the last real reading rather
-       than the gap marker. */
+    /*
+     * Deliberately does NOT skip over a trailing break marker. The newest sample
+     * being a break is exactly how "the station is not associated right now" is
+     * represented, and reporting the last real reading instead would show a
+     * stale signal strength as if it were current.
+     */
     portENTER_CRITICAL(&s_lock);
-    for (uint16_t i = s_count; i > 0; --i) {
-        if (s_samples[i - 1] != WIFI_RSSI_HISTORY_GAP_DBM) {
-            latest = s_samples[i - 1];
-            found = true;
-            break;
-        }
-    }
+    bool has_current = s_count > 0 && s_samples[s_count - 1] != WIFI_RSSI_HISTORY_GAP_DBM;
+    int16_t latest = has_current ? s_samples[s_count - 1] : 0;
     portEXIT_CRITICAL(&s_lock);
 
-    if (found && rssi_dbm != NULL) {
+    if (has_current && rssi_dbm != NULL) {
         *rssi_dbm = latest;
     }
-    return found;
+    return has_current;
 }

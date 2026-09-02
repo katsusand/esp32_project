@@ -26,16 +26,29 @@ English contract: never block in `step()`. Anything that waits on hardware, radi
 
 ### 1. Service owns the task
 
-計測処理とブロックし得る呼び出しは、service 自身の task に置きます。
+計測処理は service 自身の task に置きます。
 
-`esp_timer` の periodic callback は手軽ですが、**ブロックする処理を置いてはいけません**。esp_timer callback は共有の timer task で走るため、そこで待つとシステム全体の timer が遅延します。待つ可能性があるなら専用 task にします。
+**「ブロックする処理が無いから task は不要」という判断はしないでください。** task を持つ理由は複数あります。
+
+1. ブロックし得る呼び出しがある
+2. 前面 app と独立した寿命・周期で動き続ける必要がある（止まると欠測になる）
+3. 優先度を前面 app から独立させたい
+4. スタックを分離したい
+5. 処理時間が短いと保証できない
+6. 状態とループの所有者として自然
+
+`esp_timer` の periodic callback は手軽ですが、**共有の timer task で走ります**。そこで待つと Wi-Fi や lwIP を含むシステム全体の timer が遅延します。したがって esp_timer に置いてよいのは「短く、上限が読め、待たない」と**確信できる**処理だけです。
+
+呼び先がバイナリブロブ（ESP-IDF の Wi-Fi API など）で所要時間を確認できない場合は、**確信できない側に倒して task にします**。`wifi_rssi_history` がこの判断の実例です。
+
+English contract: absence of a blocking call is not sufficient reason to drop a task. If you cannot verify how long a call takes, keep it off the shared esp_timer task.
 
 ### 2. Public API is non-blocking
 
-app から呼ぶ API は、フラグを立てて task に notify するだけにします。
+app から呼ぶ API は、待たずに返るものだけにします。状態変更を伴うものは、フラグを立てて task に notify する形にします。
 
 ```c
-esp_err_t wifi_rssi_history_set_monitoring(bool monitoring);  /* notify するだけ */
+bool wifi_rssi_history_get(const int16_t **samples, uint16_t *count, uint16_t *revision);
 ```
 
 冪等にしておくと、`step()` から毎フレーム呼んでも安全になります。
@@ -62,15 +75,25 @@ bool wifi_rssi_history_get(const int16_t **samples, uint16_t *count, uint16_t *r
 
 飛ばすと欠測が時間軸から消えてグラフが詰まり、「値が取れていなかった」のか「その間ずっと安定していた」のか区別できなくなります。`cyd_display_sparkline_t` の `has_gap_value` / `gap_value` で、欠測は線の途切れとして描かれます。
 
-English contract: a gap must stay visible as a gap. Compressing it silently is a data integrity bug, not a cosmetic one.
+ただし**毎周期記録しないでください**。値が数時間取れない状態はあり得ます（`wifi_rssi_history` なら radio が落ちている間）。1 秒ごとに欠測を積むと、見せたい実測履歴がバッファから押し出されて消えます。「ここで途切れた」という印は**遷移時の 1 個で足ります**。
 
-### 6. Scope shared resources to the view
+English contract: a gap must stay visible as a gap -- compressing it silently is a data integrity bug. But record the break once, on transition. Repeating it every interval evicts the real history the buffer exists to hold.
 
-radio のような共有資源は、**画面に出ている間だけ**確保します。
+### 6. Do not acquire shared resources on a view's behalf
 
-`radio_manager` は誰も lease を持たなくなると radio を落とします。service が常時 lease を持つとこの省電力設計が無意味になり、逆に一切持たないと `wifi_rssi_history` の初期実装のようにサンプリングが 33 件で止まります。
+**診断ビューのために共有資源を起こさないでください。** service は「既にある状態」を観測する側に徹します。
 
-正解は view の寿命に合わせることです。app の `leave()` で必ず解放し、解放漏れの保険として `max_hold_ticks` を掛けます。`app_shell` の idle 復帰も `leave()` を通るため、これで lease が view より長生きしません。
+`wifi_rssi_history` はここで一度間違えました。`radio_manager` は誰も lease を持たなくなると radio を落とすため、初期実装ではサンプリングが 33 件で止まりました。そこで「グラフ表示中だけ lease を保持する」ようにしたところ、今度は**グラフを見るためだけに Wi-Fi が起動する**ようになりました。
+
+最終的に lease は撤去しました。判断は次のとおりです。
+
+- 資源を起こすかどうかは**製品の方針**であって、診断ビューが勝手に決めることではない
+- 資源を長く保ちたいなら、**ユーザーに見える設定として出す**（`NETWORK` page の `WiFiIdleOff`）
+- 資源が落ちている間は、取り繕わず**そう表示する**（`Wi-Fi is off`）
+
+どうしても view の寿命に資源を紐付ける場合は、app の `leave()` で必ず解放し、解放漏れの保険に最大保持時間を掛けます。`app_shell` の idle 復帰も `leave()` を通ります。ただしその前に、**本当に service 側が起こす必要があるのか**を疑ってください。
+
+English contract: a diagnostic view observes; it does not power things up. Whether a shared resource stays alive is product policy, so surface it as a setting instead of deciding it inside a view. When the resource is down, say so.
 
 ### 7. Respect the build feature switch
 
@@ -91,11 +114,12 @@ Wi-Fi など build feature switch の対象に依存する service は、stub �
 
 新しい sampling service を書くときの確認項目です。
 
-- [ ] ブロックし得る処理が service の task 側にあるか
+- [ ] task を持つ理由を確認したか（ブロックの有無だけで判断していないか）
+- [ ] 所要時間を確認できない呼び出しを、共有 esp_timer task に置いていないか
 - [ ] 公開 API は非ブロッキングかつ冪等か
 - [ ] バッファは service 所有で、submit 後も生存するか
 - [ ] revision を持ち、内容変更時に加算しているか
-- [ ] 欠測を飛ばさず記録しているか
-- [ ] 共有資源の確保が view の寿命に一致しているか
+- [ ] 欠測を飛ばさず、かつ遷移時の 1 個だけ記録しているか
+- [ ] 共有資源を view のために起こしていないか（起こすなら設定として露出しているか）
 - [ ] build feature switch 対象なら stub があるか
 - [ ] composition から optional service として起動しているか（起動失敗でブートループしないか）

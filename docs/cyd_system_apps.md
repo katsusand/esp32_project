@@ -86,7 +86,9 @@ English supplement: Direct-view selection is one-shot and thread-safe; callers s
 
 他のページがタッチ時にしか再描画しないのに対し、このページだけは `step()` で `wifi_rssi_history_get()` の `revision` を監視し、変化があったときだけ再描画します。毎回描き直さないことで、dirty-rect 差分がそのまま効きます。
 
-`APP_WIFI_STA=0` ビルドや Wi-Fi 未接続時は、グラフの代わりに「データなし」を表示します。
+**この page は Wi-Fi を起動しません。** 未接続時は `Wi-Fi is off` と表示し、それまでの履歴があればグラフはそのまま描きます。グラフを見るためだけに radio を起こすのは過剰という判断です。
+
+Wi-Fi を長く保ちたい場合は `NETWORK` page の `WiFiIdleOff` を使ってください。
 
 English supplement: the RSSI page is the reference example of a live graph driven by a sampling service. See `docs/wifi_rssi_history.md`.
 
@@ -108,6 +110,7 @@ English supplement: the RSSI page is the reference example of a live graph drive
   `Wi-Fi Setup`: `wifi_setup app` へ切り替える
 - `NETWORK2` page
   `TimeSyncInterval`: NTP 同期間隔を分単位で変更する
+  `WiFiIdleOff`: 無通信で Wi-Fi を落とすまでの時間（`radio_manager` の idle timeout）
   `SYNC NOW`: その場で同期を要求する
   NTP / 時刻同期状態表示
 - `NVS` page
@@ -120,7 +123,7 @@ English supplement: the RSSI page is the reference example of a live graph drive
 
 ページ切り替えは画面下部の `<` / `>` ボタンで行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消えます。`APPS` page は、設定画面を持つ app が 1 つも無いときだけ消えます。
 
-`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
+`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`WiFiIdleOff` は `never / 30s / 1min / 3min / 5min / 10min / 15min / 20min / 30min / 45min / 60min` の 11 段階です。`never` は `radio_manager` が idle を理由に radio を解放しなくなります（内部的には待ち時間 `portMAX_DELAY`）。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
 
 `Stored SSIDs` は `NETWORK1` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
 

@@ -36,23 +36,4 @@ menu "Wi-Fi RSSI History"
             English: RAM cost is value x 2 bytes. Values above the 320 px
             display width add no visible detail.
 
-    config WIFI_RSSI_HISTORY_RADIO_WAIT_TIMEOUT_MS
-        int "Radio lease acquire timeout (ms)"
-        default 5000
-        range 100 60000
-        help
-            RSSI 監視を有効にするとき、radio lease の取得を待つ上限です。
-            取得できなかった場合はグラフが更新されないだけで、画面は開けます。
-
-    config WIFI_RSSI_HISTORY_RADIO_MAX_HOLD_MS
-        int "Radio lease max hold (ms)"
-        default 300000
-        range 10000 3600000
-        help
-            RSSI 監視が保持する radio lease の上限時間です。
-            通常は画面を離れるときに解放されますが、解放漏れが起きても
-            radio がこの時間以上 on のままにならないようにする保険です。
-            English: safety bound. The lease is normally released when the
-            view is left; this caps the damage if that release is missed.
-
 endmenu
