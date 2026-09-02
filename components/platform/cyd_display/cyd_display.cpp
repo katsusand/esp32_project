@@ -17,6 +17,14 @@
 #include <LovyanGFX.hpp>
 #include "cyd_display.h"
 
+/* This component owns this data, so the namespace is declared here.
+   The "sys_" prefix is what lets nvs_schema classify it by scanning flash. */
+NVS_SCHEMA_DECLARE_NS(NVS_NS, "sys_display");
+static const nvs_key_descriptor_t NVS_KEY_CYD_DISPLAY_CONFIG = {
+    .ns = NVS_NS,
+    .key = "config_v1",
+};
+
 namespace {
 
 static const char *TAG = "cyd_display";

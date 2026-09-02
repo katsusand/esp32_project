@@ -18,6 +18,14 @@
 #include "cyd_input.h"
 #include "xpt2046_softspi.h"
 
+/* This component owns this data, so the namespace is declared here.
+   The "sys_" prefix is what lets nvs_schema classify it by scanning flash. */
+NVS_SCHEMA_DECLARE_NS(NVS_NS, "sys_input");
+static const nvs_key_descriptor_t NVS_KEY_CYD_DISPLAY_TOUCH_CAL = {
+    .ns = NVS_NS,
+    .key = "touch_cal",
+};
+
 #ifndef CONFIG_CYD_INPUT_LONG_PRESS_REPEAT_MS
 #define CONFIG_CYD_INPUT_LONG_PRESS_REPEAT_MS 1000
 #endif

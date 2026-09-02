@@ -25,7 +25,7 @@ void nvs_health_reset(void)
 
 void nvs_health_report_invalid(const nvs_key_descriptor_t *key, esp_err_t err, const char *reason)
 {
-    const char *ns_name = (key != NULL && key->ns != NULL && key->ns->name != NULL) ? key->ns->name : "?";
+    const char *ns_name = (key != NULL && key->ns != NULL) ? key->ns : "?";
     const char *key_name = (key != NULL && key->key != NULL) ? key->key : "?";
     const char *detail = (reason != NULL && reason[0] != '\0') ? reason : esp_err_to_name(err);
     bool first_issue = false;

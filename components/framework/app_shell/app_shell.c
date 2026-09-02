@@ -12,6 +12,14 @@
 #include "cyd_display.h"
 #include "cyd_input.h"
 
+/* This component owns this data, so the namespace is declared here.
+   The "sys_" prefix is what lets nvs_schema classify it by scanning flash. */
+NVS_SCHEMA_DECLARE_NS(NVS_NS, "sys_shell");
+static const nvs_key_descriptor_t NVS_KEY_APP_SHELL_CONFIG = {
+    .ns = NVS_NS,
+    .key = "config_v1",
+};
+
 #define TAG "app_shell"
 #define APP_SHELL_CONFIG_VERSION 1U
 #define APP_SHELL_MAX_SWITCH_CHAIN 4

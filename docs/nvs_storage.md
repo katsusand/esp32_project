@@ -2,223 +2,153 @@
 
 ## Overview
 
-このドキュメントは、このリポジトリにおける NVS 保存方針、現在の保存項目一覧、今後の整理方針をまとめたものです。
+このドキュメントは、このリポジトリにおける NVS の保存方針と管理手段をまとめたものです。
 
 目的は以下です。
 
 - system 設定と app / feature 設定を混同しない
 - 派生プロジェクトで「残す設定」と「消す設定」を分けやすくする
-- NVS の ownership を明確にし、保存責務のぶれを減らす
+- アプリを載せ替えたときに、前のアプリのデータを見つけて消せるようにする
 
 English supplement: Keep NVS ownership explicit. Do not treat NVS as one flat bag of unrelated values.
 
 ## Design Rule
 
-このプロジェクトでは、NVS の読み書きを巨大な 1 コンポーネントへ集約するのではなく、次の 2 層に分けて扱う方針とします。
+ownership は各 component が持ち、規約だけを共通化します。
 
-- 保存値の ownership は各 component / feature に残す
-- NVS の作法、命名規約、reset 方針は共通ルールとして管理する
+- **保存値の所有権は component 側**。descriptor もその component のソースで宣言する
+- **`support/nvs_schema` は型・命名規約・走査ユーティリティだけ**を提供し、実体テーブルは持たない
 
-つまり、`time_sync` の設定は `time_sync` が所有し、Wi-Fi profile は `wifi_profile_store` が所有します。一方で namespace 命名規約や「どこまでを system reset で消すか」といった横断ルールはドキュメントと共通 helper で揃えます。
+以前は `nvs_schema` が全 namespace と key を中央テーブルで抱えていましたが、それは 2 つの意味で機能していませんでした。app を 1 つ足すたびに `support/` の編集が必要になる一方、その見返りであるはずの一括管理は実装されておらず、`scope` / `owner_component` / `reset_class` / `value_type` / `versioned_payload` の 5 フィールドは**どこからも読まれていませんでした**。
 
-English supplement: Ownership stays local; conventions become shared.
+English contract: ownership stays local, conventions are shared. A central table that nobody reads is pure coupling.
 
-## Storage Classes
+## Scope Prefix
 
-NVS 項目は、次の 3 クラスで整理します。
+scope は namespace 名の prefix で表します。
 
-### `system`
+| prefix | 意味 | app 載せ替え時 |
+|---|---|---|
+| `sys_` | platform / framework | 残る |
+| `ftr_` | 再利用する service | 残る |
+| `app_` | foreground app 専用 | 一緒に消える |
 
-board や共通 UI 基盤に紐づき、製品をまたいでも意味が変わりにくい設定です。
+**prefix にした理由は、フラッシュを走査するだけで分類できるからです。** レジストリに自己申告させる方式では、「もうビルドに含まれていない component の namespace」を報告できません。そして孤児検出で見つけたいのは、まさにそれです。
 
-例:
+```c
+NVS_SCHEMA_DECLARE_NS(NVS_NS, "sys_shell");
+static const nvs_key_descriptor_t NVS_KEY_APP_SHELL_CONFIG = {
+    .ns = NVS_NS,
+    .key = "config_v1",
+};
+```
 
-- display brightness
-- touch calibration
-- app shell idle timeout
-- sound / volume
+### Name Length
 
-### `feature`
+**NVS の namespace 名は 15 文字までです**（`NVS_NS_NAME_MAX_SIZE` = 16、null 終端込み）。
 
-特定 feature が有効なときだけ意味を持つ、再利用可能な設定です。
+超過分は**エラーにならず黙って切り詰められ、実行時に別の namespace になります**。`NVS_SCHEMA_DECLARE_NS` はこれを静的アサートで弾きます。
 
-例:
+```
+error: static assertion failed: "NVS namespace name is too long: ftr_radio_way_too_long"
+```
 
-- time sync interval
-- timezone
-- Wi-Fi profiles
-- radio idle timeout
-- 将来の ESPNOW channel / peer policy
-
-feature をビルドから外した場合、対応する NVS 値は「残っていても未使用の dormant data」として扱って構いません。
-
-English supplement: Feature-scoped data may legitimately exist even when a build no longer uses that feature.
-
-### `app`
-
-特定 app / product の振る舞いに閉じた設定です。
-
-例:
-
-- clock-specific alarm state
-- logger filter
-- app-local last screen
+prefix が 4 文字なので、component 側に使えるのは 11 文字です。`feat_` ではなく `ftr_` にしているのは、この 1 文字が効くためです。
 
 ## Current Inventory
 
-現時点でコード上に存在する NVS 保存先は以下です。
+| namespace | scope | 所有 component |
+|---|---|---|
+| `sys_display` | system | `cyd_display` |
+| `sys_input` | system | `cyd_input` |
+| `sys_shell` | system | `app_shell` |
+| `ftr_radio` | feature | `radio_manager` |
+| `ftr_sched` | feature | `app_scheduler` |
+| `ftr_timesync` | feature | `time_sync` |
+| `ftr_wifi` | feature | `wifi_profile_store` |
 
-### System-Oriented
+`app_` の namespace は現在ありません。時計アプリは NVS を使わないためです。
 
-- namespace: `cyd_display`
-  owner: `cyd_display`
-  keys:
-  - `config_v1`
-  file: [components/platform/cyd_display/cyd_display.cpp](/Users/katsuandkoseto/dev/github/katsusand/esp32_project/components/platform/cyd_display/cyd_display.cpp:20)
-  note: LCD 輝度。versioned blob
+タッチ補正は以前 `cyd_display` の namespace に間借りしていましたが、所有者は `cyd_input` なので `sys_input` として分離しました。
 
-- namespace: `cyd_display`
-  owner: `cyd_input`
-  keys:
-  - `touch_cal`
-  file: [components/platform/cyd_input/cyd_input.c](/Users/katsuandkoseto/dev/github/katsusand/esp32_project/components/platform/cyd_input/cyd_input.c:100)
-  note: タッチ補正 blob。transport は `xpt2046_softspi`、補正ロジックと保存 owner は `cyd_input`。現状は `cyd_display` namespace に同居している。versioned blob のみ受け付ける
+### Namespaces Are Created On First Write
 
-- namespace: `app_shell`
-  owner: `app_shell`
-  keys:
-  - `config_v1`
-  file: [components/framework/app_shell/app_shell.c](/Users/katsuandkoseto/dev/github/katsusand/esp32_project/components/framework/app_shell/app_shell.c:14)
-  note: home app への自動復帰 timeout 秒。versioned blob
+**namespace は書き込みが発生した瞬間に作られます。** 一覧に出てこないのは「壊れている」ではなく「まだ誰も保存していない」だけです。
 
-### Feature-Oriented
+このため、設定画面を離れるときの保存処理が namespace を新規に作ることがあります。実機で `Clear App Data` を実行した際、1 件消したのに合計が 10 → 12 に増えたのはこれが理由でした（再起動前の保存で `sys_display` / `ftr_timesync` / `ftr_radio` が生まれた）。動作としては正しく、値を失わないための処理です。
 
-- namespace: `time_sync`
-  owner: `time_sync`
-  keys:
-  - `config_v1`
-  file: [components/services/time_sync/time_sync.c](/Users/katsuandkoseto/dev/github/katsusand/esp32_project/components/services/time_sync/time_sync.c:60)
-  note: NTP 更新間隔、POSIX timezone。versioned blob
+## Namespaces We Do Not Own
 
-- namespace: `radio_manager`
-  owner: `radio_manager`
-  keys:
-  - `config_v1`
-  file: [components/services/radio_manager/radio_manager.c](/Users/katsuandkoseto/dev/github/katsusand/esp32_project/components/services/radio_manager/radio_manager.c:32)
-  note: radio idle release 秒。versioned blob
+フラッシュには ESP-IDF 自身の namespace も入っています。実機で確認できたものは 2 つです。
 
-- namespace: `esp32_wifi_sta`
-  owner: `wifi_profile_store`
-  keys:
-  - `profiles_v1`
-  file: [components/services/wifi_profile_store/wifi_profile_store.c](/Users/katsuandkoseto/dev/github/katsusand/esp32_project/components/services/wifi_profile_store/wifi_profile_store.c:8)
-  note: 保存済み Wi-Fi profile 一覧。versioned blob
+| namespace | 出所 | 消すと |
+|---|---|---|
+| `nvs.net80211` | Wi-Fi ドライバ（バイナリブロブ） | Wi-Fi 設定が失われる |
+| `phy` | `esp_phy` の RF キャリブレーション | 次回起動で再キャリブレーションが走る |
 
-- namespace: `app_scheduler`
-  owner: `app_scheduler`
-  keys:
-  - `config_v1`
-  file: [components/services/app_scheduler/app_scheduler.c](/Users/katsuandkoseto/dev/github/katsusand/esp32_project/components/services/app_scheduler/app_scheduler.c:26)
-  note: scheduler entry 一式。現在は clock alarm の source of truth もここへ寄せる
+`phy` は `esp_phy/src/phy_init.c` の `PHY_NAMESPACE` で確認できます。`nvs.net80211` はブロブ側なのでソースでは確定できませんが、ESP-IDF 自身の NVS テストに実例として現れます。
 
-## Current Gaps
+**これらは prefix を持たないため `unknown` に分類されます。** つまり `unknown` は「うちの孤児」ではなく「**分類できないもの全部**」であり、ESP-IDF のデータが混ざります。
 
-現時点で system settings UI に見えていても、まだ NVS 保存されていない項目があります。
+English contract: the unknown bucket is not a synonym for "our leftovers". It holds ESP-IDF's own namespaces too, which is why erasing it is never automated.
 
-- sound volume
+## Management
 
-現在の `cyd_speaker` は runtime 変更 API を持ちますが、NVS 永続化は未実装です。
+`nvs_schema` はフラッシュを走査するユーティリティを提供します。
 
-English supplement: The absence of persistence is intentional for now, but the namespace reservation should still be documented early.
+```c
+esp_err_t nvs_schema_for_each_namespace(nvs_schema_namespace_cb_t cb, void *ctx);
+esp_err_t nvs_schema_erase_scope(nvs_schema_scope_t scope, size_t *erased_count);
+```
 
-## Reserved Future Namespaces
+### 一覧表示
 
-将来の衝突を避けるため、以下の namespace を予約方針として扱います。
+`INFO` app の `NVS` page が、実際にフラッシュへ入っている namespace を scope とエントリ数つきで一覧します。**コンポーネントの自己申告ではなくフラッシュの実データ**なので、孤児がここに現れます。
 
-### System
+### scope 単位の消去
 
-- `sys_display`
-  brightness など display 共通設定
-- `sys_input`
-  touch calibration など input 共通設定
-- `sys_shell`
-  shell idle timeout など共通 UI 実行基盤設定
-- `sys_sound`
-  volume や mute など sound 共通設定
+`SETTINGS` の `NVS` page にある `Clear App Data` が `app_` scope だけを消し、再起動します。
 
-`sys_volume` ではなく `sys_sound` を優先します。将来 volume 以外の sound-related setting を追加しやすいためです。
+**再起動は必須です。** app は起動時に自分の NVS データを読むため、消したあとも動き続けていると古い状態を保持したままになります。
 
-English supplement: Prefer `sys_sound` over `sys_volume` so the namespace can grow beyond a single integer value.
+`nvs_schema_erase_scope()` は `NVS_SCHEMA_SCOPE_UNKNOWN` を `ESP_ERR_INVALID_ARG` で拒否します。上記のとおり ESP-IDF のデータが混ざるバケツなので、一括消去を自動化してはいけません。分類できない namespace が孤児かどうかは人間の判断であり、必要なら `Initialize NVS`（全消去）を使います。
 
-### Feature
+## Reset Actions
 
-- `feat_time_sync`
-- `feat_wifi_sta`
-- `feat_radio`
-- `feat_espnow`
+`SETTINGS` の `NVS` page には、破壊範囲の小さい順に 3 つ並んでいます。
 
-### App
+| 操作 | 消える範囲 | 再起動 |
+|---|---|---|
+| `Clear Touch Calib` | `sys_input` のタッチ補正 key のみ | あり |
+| `Clear App Data` | `app_` scope の namespace 全部 | あり |
+| `Initialize NVS` | `nvs_flash_erase()` で全部 | あり |
 
-- `app_clock`
-- `app_logger`
+`Initialize NVS` は `phy` と `nvs.net80211` も消しますが、どちらも起動時に再生成されます。
 
-## Naming Direction
+## Migration
 
-既存 namespace をすぐ一括 rename する必要はありませんが、新規追加や大きな整理の際は次の方向へ寄せます。
+namespace のリネームを伴う変更では、移行コードを書かず**全消去**する方針を採りました。開発中であり、使い捨ての移行コードを残すより実害が小さいためです。
 
-- `cyd_display` の `brightness` は将来的に `sys_display` へ寄せる
-- `cyd_input` の `touch_cal` は `cyd_display` から分離し、`sys_input` へ寄せる
-- `app_shell` の `idle_timeout` は `sys_shell` へ寄せる
-- `time_sync` / `radio_manager` / `esp32_wifi_sta` は feature owner が明確なので、当面は現状維持でもよい
+```bash
+source ~/.espressif/tools/activate_idf_v5.4.3.sh
+python "$IDF_PATH/tools/idf.py" erase-flash flash monitor
+```
 
-English supplement: Migration should happen when a component is already being edited for a meaningful change. Do not churn stable storage names without a migration reason.
-
-## Alarm Direction
-
-現在の clock alarm は独立 component を持たず、`app_scheduler` の `owner/tag` entry を source of truth として扱います。
-
-今後の推奨方針は次の通りです。
-
-- alarm 専用 component は増やさず、source of truth は `app_scheduler` の `owner/tag` entry へ置く
-- clock-specific UI は `cyd_clock_settings_app` や main clock app から `app_scheduler` を直接操作する
-- alarm sound、snooze、label のような将来追加が必要なら、薄い clock-app helper として app 側に置く
-
-重要なのは、「alarm 機能を scheduler service の内部仕様へ埋め込む」のではなく、「alarm 専用 wrapper component を減らし、汎用 scheduler API を app 層から使う」ことです。
-
-English supplement: The project now uses `app_scheduler` as the alarm source of truth without introducing a new alarm-specific service.
-
-## Reset Policy
-
-将来的に reset を段階化する場合、次の粒度を基本とします。
-
-- system reset
-  `sys_display`, `sys_input`, `sys_shell`, `sys_sound`
-- feature reset
-  `feat_time_sync`, `feat_wifi_sta`, `feat_radio`, `feat_espnow`
-- app reset
-  `app_clock`, `app_logger`
-- full reset
-  NVS 全消去
-
-現状の `Initialize NVS` は full reset です。将来、system 設定を残して app/feature 設定だけ消す導線を追加したい場合は、この分類を基準にします。
-
-現行 firmware が想定する構造体 version / blob size / 文字列終端と一致しない保存値を検出した場合は、既定値で暫定起動しつつ `Initialize NVS` を要求します。互換 migration を明示的に実装していない payload を、黙って読み続けたり自動上書きしたりしない方針です。
-
-English supplement: Unsupported on-flash layouts trigger a forced initialize flow. When old data should survive, add explicit migration code instead of silently accepting unknown payloads.
+English supplement: renaming a namespace orphans its data. The project accepts a full erase instead of carrying migration code that would only ever run once.
 
 ## Implementation Guidance
 
-新しい NVS 項目を追加するときは、以下を守ります。
+新しい保存値を足すときの手順です。
 
-1. まず ownership を `system` / `feature` / `app` のどれかで決める
-2. namespace owner を決めてから key を追加する
-3. app から直接ばらばらに `nvs_open()` するより、必要に応じて薄い helper を使う
-4. blob を保存する場合は version を含める
-5. migration を入れない方針なら、旧 payload は `nvs_health` で検出して `Initialize NVS` を要求する
+1. 所有する component のソースで `NVS_SCHEMA_DECLARE_NS` と `nvs_key_descriptor_t` を宣言する
+2. prefix を scope に合わせて選ぶ（app 載せ替えで残すべきかで判断する）
+3. `nvs_open_descriptor(DESC.ns, ...)` で開く
+4. blob を保存するなら先頭に version を持たせ、不一致は `nvs_health_report_invalid()` で報告する
+5. `support/nvs_schema` は編集しない
 
-English supplement: During active development, it is acceptable to drop obsolete layouts and force a clean initialize instead of carrying long-lived migration code.
+blob の version チェックに失敗すると、起動時に `Initialize NVS` 画面へ強制遷移します。壊れたデータを黙って使わないための仕組みです。
 
 ## Notes
 
-- sound volume persistence は未実装だが、将来 namespace は `sys_sound` を使う
-- `app_scheduler` は reusable service として維持し、alarm-specific policy を内部へ持ち込まない
+- `cyd_speaker` の音量は runtime API のみで、NVS 保存は未実装です
+- `nvs_schema` が一度に扱える namespace 数は `NVS_SCHEMA_MAX_NAMESPACES`（24）です

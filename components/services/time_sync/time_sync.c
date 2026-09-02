@@ -17,6 +17,14 @@
 #include "radio_manager.h"
 #include "time_sync.h"
 
+/* This component owns this data, so the namespace is declared here.
+   The "ftr_" prefix is what lets nvs_schema classify it by scanning flash. */
+NVS_SCHEMA_DECLARE_NS(NVS_NS, "ftr_timesync");
+static const nvs_key_descriptor_t NVS_KEY_TIME_SYNC_CONFIG = {
+    .ns = NVS_NS,
+    .key = "config_v1",
+};
+
 #ifndef CONFIG_TIME_SYNC_ENABLED
 #define CONFIG_TIME_SYNC_ENABLED 1
 #endif

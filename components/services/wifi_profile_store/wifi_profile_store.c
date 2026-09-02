@@ -6,6 +6,14 @@
 #include "nvs_schema.h"
 #include "wifi_profile_store.h"
 
+/* This component owns this data, so the namespace is declared here.
+   The "ftr_" prefix is what lets nvs_schema classify it by scanning flash. */
+NVS_SCHEMA_DECLARE_NS(NVS_NS, "ftr_wifi");
+static const nvs_key_descriptor_t NVS_KEY_WIFI_PROFILE_STORE_PROFILES = {
+    .ns = NVS_NS,
+    .key = "profiles_v1",
+};
+
 #define TAG "wifi_profile_store"
 #define WIFI_PROFILE_STORE_VERSION 1U
 

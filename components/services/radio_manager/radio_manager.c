@@ -13,6 +13,14 @@
 #include "radio_manager.h"
 #include "wifi_connection.h"
 
+/* This component owns this data, so the namespace is declared here.
+   The "ftr_" prefix is what lets nvs_schema classify it by scanning flash. */
+NVS_SCHEMA_DECLARE_NS(NVS_NS, "ftr_radio");
+static const nvs_key_descriptor_t NVS_KEY_RADIO_MANAGER_CONFIG = {
+    .ns = NVS_NS,
+    .key = "config_v1",
+};
+
 #ifndef CONFIG_RADIO_MANAGER_TASK_STACK_SIZE
 #define CONFIG_RADIO_MANAGER_TASK_STACK_SIZE 4096
 #endif
