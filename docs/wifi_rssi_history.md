@@ -126,7 +126,33 @@ app 側に `#if` を書かずに済むよう、API は維持されます。RSSI 
 - `CONFIG_WIFI_RSSI_HISTORY_SAMPLE_INTERVAL_MS` (既定 1000)
 - `CONFIG_WIFI_RSSI_HISTORY_MAX_SAMPLES` (既定 120)
 
-消費 RAM は `MAX_SAMPLES x 2` バイトです。グラフの横幅はディスプレイ上 320 px なので、320 を超える値を指定しても表示の情報量は増えません。
+### History Length
+
+**保持できる時間は `MAX_SAMPLES x SAMPLE_INTERVAL_MS` です。** 既定値の組み合わせだとこうなります。
+
+| MAX_SAMPLES | バッファ | 履歴 (1 秒間隔) | 1 サンプルの幅 |
+|---|---|---|---|
+| 60 | 120 B | 1 分 | 5.3 px |
+| **120 (既定)** | **240 B** | **2 分** | **2.7 px** |
+| 300 | 600 B | 5 分 | 1.1 px |
+| 320 (上限) | 640 B | 5 分 20 秒 | 1.0 px |
+
+上限を 320 にしているのは、**ディスプレイの横幅が 320 px だから**です。それ以上サンプルを持っても 1 px 未満に潰れるだけで、表示の情報量は増えません。逆に 320 は 1 サンプル = 1 px で対応する値です。
+
+間隔を延ばせば同じバッファでより長い履歴になりますが、そのぶん短時間の変動は見えなくなります。
+
+### Memory Balance
+
+**バッファより task stack の方がはるかに大きい**点に注意してください。
+
+| | サイズ |
+|---|---|
+| サンプルバッファ | 240 B (既定) |
+| task stack | 3072 B (実測ピーク 1944 B) |
+
+RAM を削りたい場合、`MAX_SAMPLES` を半分にしても 120 B しか浮きません。task stack の方が効きますが、**3072 は実測に基づく値**で、2048 まで下げると余裕が 104 B しか残らず危険です。詳細は Sampling Model を参照してください。
+
+English supplement: shrinking the sample buffer is not where the memory is. The task stack dominates, and it is already sized from a measured high-water mark.
 
 ## Notes
 
