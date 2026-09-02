@@ -28,6 +28,7 @@ English supplement: This component is product-specific UI. It manipulates clock-
 - hour は `0..23`
 - minute は `0..59`
 - `ALARM1` は `SUN` から `SAT` の weekday button を持つ
+- 曜日を 1 つも選ばない状態も有効。その場合 `ALARM1` は発火しない（「絶対に鳴らさない」という明示的な設定として扱う）
 
 `-` / `+` の stepper は `PRESS` と `REPEAT` で反応します。通常 button は `RELEASE` 時に同じ button 上で離された場合だけ確定します。
 

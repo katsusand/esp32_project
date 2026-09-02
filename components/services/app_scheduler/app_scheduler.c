@@ -56,10 +56,17 @@ static QueueHandle_t s_tick_queue;
 static TaskHandle_t s_scheduler_task_handle;
 static bool s_scheduler_started;
 
+/*
+ * Only drops bits outside the weekday range.
+ *
+ * An empty mask is a legal setting meaning "no day selected", so a repeating
+ * schedule with it simply never fires. Substituting every weekday for it used
+ * to make deselecting the last day silently select all seven, which reads as
+ * the UI fighting the user. A pointless setting is still the user's to make.
+ */
 static uint8_t app_scheduler_normalize_weekday_mask(uint8_t weekday_mask)
 {
-    weekday_mask &= APP_SCHEDULER_WEEKDAY_ALL;
-    return weekday_mask == 0 ? APP_SCHEDULER_WEEKDAY_ALL : weekday_mask;
+    return weekday_mask & APP_SCHEDULER_WEEKDAY_ALL;
 }
 
 static bool app_scheduler_valid_name(const char *name)

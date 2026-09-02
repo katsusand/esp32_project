@@ -67,7 +67,11 @@ English supplement: `LATCHED` belongs to scheduler state, not output policy. Ala
 - `repeat = true`: 繰り返し。`weekday_mask` に一致する日に発火する
 - `repeat = false`: 一度だけ。発火または終了後に自動で `enabled = false` になる
 
-`weekday_mask` は `repeat = true` のときに使います。`0` を指定した場合は `APP_SCHEDULER_WEEKDAY_ALL` と同じ扱いになります。
+`weekday_mask` は `repeat = true` のときに使います。**`0`（どの曜日も選ばれていない）は有効な設定**で、その schedule は発火しません。
+
+以前は `0` を `APP_SCHEDULER_WEEKDAY_ALL` に読み替えていましたが、これは UI 側で最後の曜日を解除すると全曜日が選択された状態に戻る、という直感に反する挙動になっていました。無意味な設定であっても、ユーザーが選んだ状態はそのまま保持します。
+
+English contract: an empty weekday mask is legal and means the repeating schedule never fires. Substituting "all days" for it made deselecting the last day silently select all seven.
 
 曜日 bit は `struct tm.tm_wday` と同じで、日曜が bit 0 です。
 

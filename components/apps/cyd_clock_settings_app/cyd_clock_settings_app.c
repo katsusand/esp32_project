@@ -134,9 +134,10 @@ static esp_err_t cyd_clock_settings_save_alarm_config(cyd_clock_settings_alarm_i
     normalized.mode = APP_SCHEDULER_MODE_INSTANT;
     normalized.behavior = APP_SCHEDULER_BEHAVIOR_EVENT;
     normalized.repeat = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1;
-    normalized.weekday_mask = normalized.repeat
-        ? (normalized.weekday_mask == 0 ? APP_SCHEDULER_WEEKDAY_ALL : normalized.weekday_mask)
-        : APP_SCHEDULER_WEEKDAY_ALL;
+    /* Repeating alarms keep whatever the user picked, including nothing. A
+       one-shot alarm ignores weekdays entirely, so store the full mask rather
+       than an arbitrary subset. */
+    normalized.weekday_mask = normalized.repeat ? normalized.weekday_mask : APP_SCHEDULER_WEEKDAY_ALL;
     normalized.at.second = 0;
     return app_scheduler_upsert(&normalized);
 }
