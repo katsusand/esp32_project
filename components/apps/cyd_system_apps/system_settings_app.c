@@ -714,63 +714,25 @@ static esp_err_t cyd_settings_load_profiles(void)
 
 static esp_err_t cyd_settings_app_add_page_nav(cyd_display_screen_t *screen)
 {
-    char page_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    bool can_go_prev = s_settings_active_page_index > 0;
-    bool can_go_next = s_settings_active_page_index + 1 < s_settings_active_page_count;
-    const char *page_title = cyd_settings_page_title(s_settings_page);
+    char page_title[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    const char *title = cyd_settings_page_title(s_settings_page);
 
     ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, TAG, "screen is null");
 
+    /* Network pages carry their index in the title itself: "NETWORK2". */
     if (cyd_settings_page_group(s_settings_page) == CYD_SETTINGS_PAGE_GROUP_NETWORK) {
-        size_t network_index = cyd_settings_network_page_index(s_settings_page);
-        snprintf(page_line,
-                 sizeof(page_line),
-                 "%s%u  %u/%u",
-                 page_title,
-                 (unsigned)network_index,
-                 (unsigned)s_settings_active_page_index + 1,
-                 (unsigned)s_settings_active_page_count);
+        snprintf(page_title, sizeof(page_title), "%s%u",
+                 title, (unsigned)cyd_settings_network_page_index(s_settings_page));
     } else {
-        snprintf(page_line,
-                 sizeof(page_line),
-                 "%s  %u/%u",
-                 page_title,
-                 (unsigned)s_settings_active_page_index + 1,
-                 (unsigned)s_settings_active_page_count);
+        snprintf(page_title, sizeof(page_title), "%s", title);
     }
 
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      "<",
-                                      2,
-                                      CYD_SETTINGS_PAGE_BUTTON_ROW,
-                                      CYD_SETTINGS_PAGE_BUTTON_SPAN_COLS,
-                                      CYD_SETTINGS_PAGE_BUTTON_SPAN_ROWS,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      CYD_SETTINGS_APP_ACTION_PREV_PAGE,
-                                      can_go_prev);
-    cyd_ui_add_text(screen,
-                    page_line,
-                    CYD_SETTINGS_PAGE_LABEL_COL,
-                    CYD_SETTINGS_PAGE_LABEL_ROW,
-                    CYD_SETTINGS_PAGE_LABEL_SPAN_COLS,
-                    CYD_SETTINGS_PAGE_LABEL_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    1,
-                    CYD_UI_COLOR_LIGHTGREY);
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      ">",
-                                      31,
-                                      CYD_SETTINGS_PAGE_BUTTON_ROW,
-                                      CYD_SETTINGS_PAGE_BUTTON_SPAN_COLS,
-                                      CYD_SETTINGS_PAGE_BUTTON_SPAN_ROWS,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      CYD_SETTINGS_APP_ACTION_NEXT_PAGE,
-                                      can_go_next);
-    return ESP_OK;
+    return cyd_ui_add_settings_page_nav(screen,
+                                        page_title,
+                                        s_settings_active_page_index,
+                                        s_settings_active_page_count,
+                                        CYD_SETTINGS_APP_ACTION_PREV_PAGE,
+                                        CYD_SETTINGS_APP_ACTION_NEXT_PAGE);
 }
 
 
@@ -822,15 +784,7 @@ static esp_err_t cyd_settings_render_stored_ssids(cyd_display_screen_t *screen)
                                       CYD_UI_COLOR_YELLOW,
                                       CYD_SETTINGS_APP_ACTION_STORED_DELETE,
                                       s_settings_profile_count > 0);
-    cyd_ui_add_button(screen,
-                      "<<",
-                      CYD_SYSTEM_APPS_BACK_COL,
-                      CYD_SYSTEM_APPS_BACK_ROW,
-                      CYD_SYSTEM_APPS_BACK_SPAN_COLS,
-                      CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
-                      CYD_UI_COLOR_BLUE,
-                      CYD_UI_COLOR_CYAN,
-                      CYD_SETTINGS_APP_ACTION_BACK);
+    cyd_ui_add_settings_back(screen, CYD_SETTINGS_APP_ACTION_BACK);
     return ESP_OK;
 }
 
@@ -1390,15 +1344,7 @@ static esp_err_t cyd_settings_show_restart_message(const char *title, const char
     cyd_display_screen_t *screen = &s_settings_screen;
 
     cyd_ui_screen_clear(screen);
-    cyd_ui_add_text(screen,
-                    "SETTINGS",
-                    CYD_SYSTEM_APPS_TITLE_COL,
-                    CYD_SYSTEM_APPS_TITLE_ROW,
-                    CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
-                    CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_RIGHT,
-                    2,
-                    CYD_UI_COLOR_CYAN);
+    cyd_ui_add_settings_title(screen, "SETTINGS");
     cyd_ui_add_text(screen, title, 2, 10, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
     cyd_ui_add_text(screen, detail, 2, 14, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_YELLOW);
     return cyd_ui_submit(screen);
@@ -1409,15 +1355,7 @@ static esp_err_t cyd_settings_app_show(void)
     cyd_display_screen_t *screen = &s_settings_screen;
 
     cyd_ui_screen_clear(screen);
-    cyd_ui_add_text(screen,
-                    "SETTINGS",
-                    CYD_SYSTEM_APPS_TITLE_COL,
-                    CYD_SYSTEM_APPS_TITLE_ROW,
-                    CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
-                    CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_RIGHT,
-                    2,
-                    CYD_UI_COLOR_CYAN);
+    cyd_ui_add_settings_title(screen, "SETTINGS");
 
     if (s_settings_view == CYD_SETTINGS_VIEW_STORED_SSIDS) {
         ESP_RETURN_ON_ERROR(cyd_settings_render_stored_ssids(screen), TAG, "render stored SSIDs failed");
@@ -1448,15 +1386,7 @@ static esp_err_t cyd_settings_app_show(void)
 
     ESP_RETURN_ON_ERROR(cyd_settings_render_pages(screen), TAG, "render settings page failed");
     ESP_RETURN_ON_ERROR(cyd_settings_app_add_page_nav(screen), TAG, "settings page nav failed");
-    cyd_ui_add_button(screen,
-                      "<<",
-                      CYD_SYSTEM_APPS_BACK_COL,
-                      CYD_SYSTEM_APPS_BACK_ROW,
-                      CYD_SYSTEM_APPS_BACK_SPAN_COLS,
-                      CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
-                      CYD_UI_COLOR_BLUE,
-                      CYD_UI_COLOR_CYAN,
-                      CYD_SETTINGS_APP_ACTION_BACK);
+    cyd_ui_add_settings_back(screen, CYD_SETTINGS_APP_ACTION_BACK);
 
     return cyd_ui_submit(screen);
 }

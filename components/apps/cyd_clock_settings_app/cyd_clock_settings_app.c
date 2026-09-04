@@ -32,21 +32,6 @@
 #define CYD_CLOCK_SETTINGS_ACTION_ALARM1_WEEKDAY_THU 0x3110
 #define CYD_CLOCK_SETTINGS_ACTION_ALARM1_WEEKDAY_FRI 0x3111
 #define CYD_CLOCK_SETTINGS_ACTION_ALARM1_WEEKDAY_SAT 0x3112
-#define CYD_CLOCK_SETTINGS_BACK_COL 0
-#define CYD_CLOCK_SETTINGS_BACK_ROW 0
-#define CYD_CLOCK_SETTINGS_BACK_SPAN_COLS 6
-#define CYD_CLOCK_SETTINGS_BACK_SPAN_ROWS 3
-#define CYD_CLOCK_SETTINGS_TITLE_COL 8
-#define CYD_CLOCK_SETTINGS_TITLE_ROW 0
-#define CYD_CLOCK_SETTINGS_TITLE_SPAN_COLS 32
-#define CYD_CLOCK_SETTINGS_TITLE_SPAN_ROWS 2
-#define CYD_CLOCK_SETTINGS_PAGE_BUTTON_ROW 27
-#define CYD_CLOCK_SETTINGS_PAGE_BUTTON_SPAN_COLS 7
-#define CYD_CLOCK_SETTINGS_PAGE_BUTTON_SPAN_ROWS 3
-#define CYD_CLOCK_SETTINGS_PAGE_LABEL_COL 12
-#define CYD_CLOCK_SETTINGS_PAGE_LABEL_ROW 27
-#define CYD_CLOCK_SETTINGS_PAGE_LABEL_SPAN_COLS 16
-#define CYD_CLOCK_SETTINGS_PAGE_LABEL_SPAN_ROWS 3
 #define CYD_CLOCK_SETTINGS_ITEM_LABEL_COL 2
 #define CYD_CLOCK_SETTINGS_ITEM_LABEL_SPAN_COLS 16
 #define CYD_CLOCK_SETTINGS_ITEM_VALUE_COL 26
@@ -242,67 +227,17 @@ static const char *cyd_clock_settings_page_title(cyd_clock_settings_page_t page)
 
 static esp_err_t cyd_clock_settings_add_frame(cyd_display_screen_t *screen)
 {
-    char page_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    bool can_go_prev = s_clock_settings_page > CYD_CLOCK_SETTINGS_PAGE_ALARM1;
-    bool can_go_next = (size_t)s_clock_settings_page + 1 < CYD_CLOCK_SETTINGS_PAGE_COUNT;
+    const cyd_ui_settings_chrome_t chrome = {
+        .app_title = "CLOCK SETTINGS",
+        .page_title = cyd_clock_settings_page_title(s_clock_settings_page),
+        .page_index = (size_t)s_clock_settings_page,
+        .page_count = (size_t)CYD_CLOCK_SETTINGS_PAGE_COUNT,
+        .back_action_id = CYD_CLOCK_SETTINGS_ACTION_BACK,
+        .prev_page_action_id = CYD_CLOCK_SETTINGS_ACTION_PREV_PAGE,
+        .next_page_action_id = CYD_CLOCK_SETTINGS_ACTION_NEXT_PAGE,
+    };
 
-    cyd_ui_add_button(screen,
-                      "<<",
-                      CYD_CLOCK_SETTINGS_BACK_COL,
-                      CYD_CLOCK_SETTINGS_BACK_ROW,
-                      CYD_CLOCK_SETTINGS_BACK_SPAN_COLS,
-                      CYD_CLOCK_SETTINGS_BACK_SPAN_ROWS,
-                      CYD_UI_COLOR_BLUE,
-                      CYD_UI_COLOR_CYAN,
-                      CYD_CLOCK_SETTINGS_ACTION_BACK);
-    cyd_ui_add_text(screen,
-                    "CLOCK SETTINGS",
-                    CYD_CLOCK_SETTINGS_TITLE_COL,
-                    CYD_CLOCK_SETTINGS_TITLE_ROW,
-                    CYD_CLOCK_SETTINGS_TITLE_SPAN_COLS,
-                    CYD_CLOCK_SETTINGS_TITLE_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_RIGHT,
-                    2,
-                    CYD_UI_COLOR_CYAN);
-
-    snprintf(page_line,
-             sizeof(page_line),
-             "%s  %u/%u",
-             cyd_clock_settings_page_title(s_clock_settings_page),
-             (unsigned)s_clock_settings_page + 1U,
-             (unsigned)CYD_CLOCK_SETTINGS_PAGE_COUNT);
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      "<",
-                                      2,
-                                      CYD_CLOCK_SETTINGS_PAGE_BUTTON_ROW,
-                                      CYD_CLOCK_SETTINGS_PAGE_BUTTON_SPAN_COLS,
-                                      CYD_CLOCK_SETTINGS_PAGE_BUTTON_SPAN_ROWS,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      CYD_CLOCK_SETTINGS_ACTION_PREV_PAGE,
-                                      can_go_prev);
-    cyd_ui_add_text(screen,
-                    page_line,
-                    CYD_CLOCK_SETTINGS_PAGE_LABEL_COL,
-                    CYD_CLOCK_SETTINGS_PAGE_LABEL_ROW,
-                    CYD_CLOCK_SETTINGS_PAGE_LABEL_SPAN_COLS,
-                    CYD_CLOCK_SETTINGS_PAGE_LABEL_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    1,
-                    CYD_UI_COLOR_LIGHTGREY);
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      ">",
-                                      31,
-                                      CYD_CLOCK_SETTINGS_PAGE_BUTTON_ROW,
-                                      CYD_CLOCK_SETTINGS_PAGE_BUTTON_SPAN_COLS,
-                                      CYD_CLOCK_SETTINGS_PAGE_BUTTON_SPAN_ROWS,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      CYD_CLOCK_SETTINGS_ACTION_NEXT_PAGE,
-                                      can_go_next);
-    return ESP_OK;
+    return cyd_ui_add_settings_chrome(screen, &chrome);
 }
 
 static uint8_t cyd_clock_settings_wrap_u8_down(uint8_t value, uint8_t min_value, uint8_t max_value)

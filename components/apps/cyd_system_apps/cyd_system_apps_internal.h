@@ -9,14 +9,12 @@
 #include "time_sync.h"
 
 #define CYD_SYSTEM_APPS_INPUT_POLL_MS 50
-#define CYD_SYSTEM_APPS_BACK_COL 0
-#define CYD_SYSTEM_APPS_BACK_ROW 0
-#define CYD_SYSTEM_APPS_BACK_SPAN_COLS 6
-#define CYD_SYSTEM_APPS_BACK_SPAN_ROWS 3
-#define CYD_SYSTEM_APPS_TITLE_COL 8
-#define CYD_SYSTEM_APPS_TITLE_ROW 0
-#define CYD_SYSTEM_APPS_TITLE_SPAN_COLS 32
-#define CYD_SYSTEM_APPS_TITLE_SPAN_ROWS 2
+
+/*
+ * Settings chrome geometry now lives in cyd_ui (cyd_ui_add_settings_title,
+ * _back, _page_nav). It was duplicated here, in cyd_clock_settings_app and in
+ * cyd_time_punch_settings_app, and the copies had already drifted apart.
+ */
 
 typedef struct {
     bool pending;

@@ -1,6 +1,10 @@
+#include <stdio.h>
 #include <string.h>
 #include "esp_check.h"
+#include "esp_log.h"
 #include "cyd_ui.h"
+
+#define TAG "cyd_ui"
 
 static void cyd_ui_copy_text(char *dst, size_t dst_size, const char *src)
 {
@@ -371,4 +375,131 @@ esp_err_t cyd_ui_add_stepper_row(cyd_display_screen_t *screen,
 esp_err_t cyd_ui_submit(const cyd_display_screen_t *screen)
 {
     return cyd_display_submit_screen(screen);
+}
+
+/* Settings chrome geometry. The single definition of this layout. */
+#define CYD_UI_SETTINGS_BACK_COL 0
+#define CYD_UI_SETTINGS_BACK_ROW 0
+#define CYD_UI_SETTINGS_BACK_SPAN_COLS 6
+#define CYD_UI_SETTINGS_BACK_SPAN_ROWS 3
+#define CYD_UI_SETTINGS_TITLE_COL 8
+#define CYD_UI_SETTINGS_TITLE_ROW 0
+#define CYD_UI_SETTINGS_TITLE_SPAN_COLS 32
+#define CYD_UI_SETTINGS_TITLE_SPAN_ROWS 2
+#define CYD_UI_SETTINGS_TITLE_SCALE 2
+#define CYD_UI_SETTINGS_PAGE_PREV_COL 2
+#define CYD_UI_SETTINGS_PAGE_NEXT_COL 31
+#define CYD_UI_SETTINGS_PAGE_BUTTON_ROW 27
+#define CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS 7
+#define CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_ROWS 3
+#define CYD_UI_SETTINGS_PAGE_LABEL_COL 12
+#define CYD_UI_SETTINGS_PAGE_LABEL_ROW 27
+#define CYD_UI_SETTINGS_PAGE_LABEL_SPAN_COLS 16
+#define CYD_UI_SETTINGS_PAGE_LABEL_SPAN_ROWS 3
+
+void cyd_ui_add_settings_title(cyd_display_screen_t *screen, const char *app_title)
+{
+    if (screen == NULL || app_title == NULL) {
+        return;
+    }
+    cyd_ui_add_text(screen,
+                    app_title,
+                    CYD_UI_SETTINGS_TITLE_COL,
+                    CYD_UI_SETTINGS_TITLE_ROW,
+                    CYD_UI_SETTINGS_TITLE_SPAN_COLS,
+                    CYD_UI_SETTINGS_TITLE_SPAN_ROWS,
+                    CYD_DISPLAY_ALIGN_RIGHT,
+                    CYD_UI_SETTINGS_TITLE_SCALE,
+                    CYD_UI_COLOR_CYAN);
+}
+
+void cyd_ui_add_settings_back(cyd_display_screen_t *screen, uint16_t back_action_id)
+{
+    if (screen == NULL) {
+        return;
+    }
+    cyd_ui_add_button(screen,
+                      "<<",
+                      CYD_UI_SETTINGS_BACK_COL,
+                      CYD_UI_SETTINGS_BACK_ROW,
+                      CYD_UI_SETTINGS_BACK_SPAN_COLS,
+                      CYD_UI_SETTINGS_BACK_SPAN_ROWS,
+                      CYD_UI_COLOR_BLUE,
+                      CYD_UI_COLOR_CYAN,
+                      back_action_id);
+}
+
+esp_err_t cyd_ui_add_settings_page_nav(cyd_display_screen_t *screen,
+                                       const char *page_title,
+                                       size_t page_index,
+                                       size_t page_count,
+                                       uint16_t prev_page_action_id,
+                                       uint16_t next_page_action_id)
+{
+    char page_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+
+    ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, TAG, "screen is null");
+    ESP_RETURN_ON_FALSE(page_title != NULL, ESP_ERR_INVALID_ARG, TAG, "page title is null");
+    ESP_RETURN_ON_FALSE(page_count > 0 && page_index < page_count,
+                        ESP_ERR_INVALID_ARG,
+                        TAG,
+                        "page_index %u out of range for %u pages",
+                        (unsigned)page_index,
+                        (unsigned)page_count);
+
+    /* Navigation stops at the ends; the arrows render disabled there. */
+    cyd_ui_add_button_with_fg_enabled(screen,
+                                      "<",
+                                      CYD_UI_SETTINGS_PAGE_PREV_COL,
+                                      CYD_UI_SETTINGS_PAGE_BUTTON_ROW,
+                                      CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS,
+                                      CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_ROWS,
+                                      CYD_UI_COLOR_WHITE,
+                                      CYD_UI_COLOR_BLUE,
+                                      CYD_UI_COLOR_CYAN,
+                                      prev_page_action_id,
+                                      page_index > 0);
+    snprintf(page_line,
+             sizeof(page_line),
+             "%s  %u/%u",
+             page_title,
+             (unsigned)page_index + 1U,
+             (unsigned)page_count);
+    cyd_ui_add_text(screen,
+                    page_line,
+                    CYD_UI_SETTINGS_PAGE_LABEL_COL,
+                    CYD_UI_SETTINGS_PAGE_LABEL_ROW,
+                    CYD_UI_SETTINGS_PAGE_LABEL_SPAN_COLS,
+                    CYD_UI_SETTINGS_PAGE_LABEL_SPAN_ROWS,
+                    CYD_DISPLAY_ALIGN_CENTER,
+                    1,
+                    CYD_UI_COLOR_LIGHTGREY);
+    cyd_ui_add_button_with_fg_enabled(screen,
+                                      ">",
+                                      CYD_UI_SETTINGS_PAGE_NEXT_COL,
+                                      CYD_UI_SETTINGS_PAGE_BUTTON_ROW,
+                                      CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS,
+                                      CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_ROWS,
+                                      CYD_UI_COLOR_WHITE,
+                                      CYD_UI_COLOR_BLUE,
+                                      CYD_UI_COLOR_CYAN,
+                                      next_page_action_id,
+                                      page_index + 1U < page_count);
+    return ESP_OK;
+}
+
+esp_err_t cyd_ui_add_settings_chrome(cyd_display_screen_t *screen,
+                                     const cyd_ui_settings_chrome_t *chrome)
+{
+    ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, TAG, "screen is null");
+    ESP_RETURN_ON_FALSE(chrome != NULL, ESP_ERR_INVALID_ARG, TAG, "chrome is null");
+
+    cyd_ui_add_settings_back(screen, chrome->back_action_id);
+    cyd_ui_add_settings_title(screen, chrome->app_title);
+    return cyd_ui_add_settings_page_nav(screen,
+                                        chrome->page_title,
+                                        chrome->page_index,
+                                        chrome->page_count,
+                                        chrome->prev_page_action_id,
+                                        chrome->next_page_action_id);
 }

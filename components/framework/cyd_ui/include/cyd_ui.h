@@ -51,6 +51,65 @@ typedef struct {
     bool can_increase;
 } cyd_ui_stepper_row_t;
 
+/*
+ * Shared chrome for settings screens.
+ *
+ * A settings screen is not a framework concept, but its frame is: every app
+ * that grows one has to draw the same back button, the same right-aligned
+ * heading and the same bottom navigation row. Three apps had already copied
+ * those constants, and the copies drifted - a back button that read "<" instead
+ * of "<<", navigation that wrapped instead of stopping at the ends, a missing
+ * page counter. Each copy was individually reasonable and collectively wrong.
+ *
+ * The layout is therefore defined once, here.
+ *
+ *   row 0    [<<]                              APP TITLE   (right aligned)
+ *   rows 4-26  page content, owned by the caller
+ *   row 27   [<]        Page title  n/N        [>]
+ *
+ * English contract: the caller supplies its own action ids so it keeps control
+ * of its input handling; this only draws. Page navigation stops at the first
+ * and last page rather than wrapping - the buttons render disabled there.
+ */
+
+/* Rows a page may draw into without colliding with the chrome. */
+#define CYD_UI_SETTINGS_CONTENT_FIRST_ROW 4
+#define CYD_UI_SETTINGS_CONTENT_LAST_ROW 26
+
+typedef struct {
+    /* Right-aligned heading, e.g. "SETTINGS" or "CLOCK SETTINGS". */
+    const char *app_title;
+    /*
+     * Shown in the navigation row; "  n/N" is appended. Pages that are numbered
+     * within a group pass the number already formatted in, e.g. "NETWORK2".
+     */
+    const char *page_title;
+    /* 0-based. page_count of 1 renders both arrows disabled. */
+    size_t page_index;
+    size_t page_count;
+    uint16_t back_action_id;
+    uint16_t prev_page_action_id;
+    uint16_t next_page_action_id;
+} cyd_ui_settings_chrome_t;
+
+/*
+ * The pieces, for screens that need only some of them. A settings sub-screen
+ * (a confirmation, a list) keeps the heading and the back button but has no
+ * pages, so it uses the first two directly.
+ */
+void cyd_ui_add_settings_title(cyd_display_screen_t *screen, const char *app_title);
+void cyd_ui_add_settings_back(cyd_display_screen_t *screen, uint16_t back_action_id);
+esp_err_t cyd_ui_add_settings_page_nav(cyd_display_screen_t *screen,
+                                       const char *page_title,
+                                       size_t page_index,
+                                       size_t page_count,
+                                       uint16_t prev_page_action_id,
+                                       uint16_t next_page_action_id);
+
+/* All three at once, for an ordinary paged settings screen. */
+esp_err_t cyd_ui_add_settings_chrome(cyd_display_screen_t *screen,
+                                     const cyd_ui_settings_chrome_t *chrome);
+
 void cyd_ui_screen_clear(cyd_display_screen_t *screen);
 bool cyd_ui_add_text(cyd_display_screen_t *screen,
                      const char *text,

@@ -274,15 +274,7 @@ static esp_err_t cyd_info_app_show(void)
                  (cyd_input_has_touch_calibration() ? "default" : "not saved"));
 
         cyd_ui_screen_clear(screen);
-        cyd_ui_add_text(screen,
-                        "DIAG",
-                        CYD_SYSTEM_APPS_TITLE_COL,
-                        CYD_SYSTEM_APPS_TITLE_ROW,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
-                        CYD_DISPLAY_ALIGN_RIGHT,
-                        2,
-                        CYD_UI_COLOR_CYAN);
+        cyd_ui_add_settings_title(screen, "DIAG");
         cyd_ui_add_text(screen, heap_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, min_heap_line, 2, 8, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, wifi_fail_line, 2, 11, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
@@ -291,15 +283,7 @@ static esp_err_t cyd_info_app_show(void)
         cyd_ui_add_text(screen, profiles_line, 2, 20, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, touch_line, 2, 23, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_button(screen,
-                          "<<",
-                          CYD_SYSTEM_APPS_BACK_COL,
-                          CYD_SYSTEM_APPS_BACK_ROW,
-                          CYD_SYSTEM_APPS_BACK_SPAN_COLS,
-                          CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
-                          CYD_UI_COLOR_BLUE,
-                          CYD_UI_COLOR_CYAN,
-                          CYD_INFO_APP_ACTION_BACK);
+        cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
 
         return cyd_ui_submit(screen);
     }
@@ -326,15 +310,7 @@ static esp_err_t cyd_info_app_show(void)
                  cyd_system_apps_wifi_failure_text(wifi_connection_get_last_failure_reason()));
 
         cyd_ui_screen_clear(screen);
-        cyd_ui_add_text(screen,
-                        "DIAG2",
-                        CYD_SYSTEM_APPS_TITLE_COL,
-                        CYD_SYSTEM_APPS_TITLE_ROW,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
-                        CYD_DISPLAY_ALIGN_RIGHT,
-                        2,
-                        CYD_UI_COLOR_CYAN);
+        cyd_ui_add_settings_title(screen, "DIAG2");
         cyd_ui_add_text(screen, wifi_state_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, wifi_users_line, 2, 8, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, wifi_last_user_line, 2, 11, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
@@ -343,15 +319,7 @@ static esp_err_t cyd_info_app_show(void)
         cyd_ui_add_text(screen, wifi_warn_line, 2, 20, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         cyd_ui_add_text(screen, wifi_fail_line, 2, 23, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
         ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_button(screen,
-                          "<<",
-                          CYD_SYSTEM_APPS_BACK_COL,
-                          CYD_SYSTEM_APPS_BACK_ROW,
-                          CYD_SYSTEM_APPS_BACK_SPAN_COLS,
-                          CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
-                          CYD_UI_COLOR_BLUE,
-                          CYD_UI_COLOR_CYAN,
-                          CYD_INFO_APP_ACTION_BACK);
+        cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
 
         return cyd_ui_submit(screen);
     }
@@ -372,15 +340,7 @@ static esp_err_t cyd_info_app_show(void)
         }
 
         cyd_ui_screen_clear(screen);
-        cyd_ui_add_text(screen,
-                        "NVS",
-                        CYD_SYSTEM_APPS_TITLE_COL,
-                        CYD_SYSTEM_APPS_TITLE_ROW,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
-                        CYD_DISPLAY_ALIGN_RIGHT,
-                        2,
-                        CYD_UI_COLOR_CYAN);
+        cyd_ui_add_settings_title(screen, "NVS");
         cyd_ui_add_text(screen, summary, 2, 3, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
 
         for (size_t i = 0; i < scan.count; ++i) {
@@ -396,15 +356,7 @@ static esp_err_t cyd_info_app_show(void)
         }
 
         ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_button(screen,
-                          "<<",
-                          CYD_SYSTEM_APPS_BACK_COL,
-                          CYD_SYSTEM_APPS_BACK_ROW,
-                          CYD_SYSTEM_APPS_BACK_SPAN_COLS,
-                          CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
-                          CYD_UI_COLOR_BLUE,
-                          CYD_UI_COLOR_CYAN,
-                          CYD_INFO_APP_ACTION_BACK);
+        cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
 
         return cyd_ui_submit(screen);
     }
@@ -431,15 +383,7 @@ static esp_err_t cyd_info_app_show(void)
         }
 
         cyd_ui_screen_clear(screen);
-        cyd_ui_add_text(screen,
-                        "RSSI",
-                        CYD_SYSTEM_APPS_TITLE_COL,
-                        CYD_SYSTEM_APPS_TITLE_ROW,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
-                        CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
-                        CYD_DISPLAY_ALIGN_RIGHT,
-                        2,
-                        CYD_UI_COLOR_CYAN);
+        cyd_ui_add_settings_title(screen, "RSSI");
         cyd_ui_add_text(screen, rssi_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
 
         if (has_history) {
@@ -472,15 +416,7 @@ static esp_err_t cyd_info_app_show(void)
         s_info_rssi_has_history = has_history;
 
         ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_button(screen,
-                          "<<",
-                          CYD_SYSTEM_APPS_BACK_COL,
-                          CYD_SYSTEM_APPS_BACK_ROW,
-                          CYD_SYSTEM_APPS_BACK_SPAN_COLS,
-                          CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
-                          CYD_UI_COLOR_BLUE,
-                          CYD_UI_COLOR_CYAN,
-                          CYD_INFO_APP_ACTION_BACK);
+        cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
 
         return cyd_ui_submit(screen);
     }
@@ -506,30 +442,14 @@ static esp_err_t cyd_info_app_show(void)
     cyd_system_apps_format_wifi_status(wifi_line, sizeof(wifi_line));
 
     cyd_ui_screen_clear(screen);
-    cyd_ui_add_text(screen,
-                    "INFO",
-                    CYD_SYSTEM_APPS_TITLE_COL,
-                    CYD_SYSTEM_APPS_TITLE_ROW,
-                    CYD_SYSTEM_APPS_TITLE_SPAN_COLS,
-                    CYD_SYSTEM_APPS_TITLE_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_RIGHT,
-                    2,
-                    CYD_UI_COLOR_CYAN);
+    cyd_ui_add_settings_title(screen, "INFO");
     cyd_ui_add_text(screen, app_line, 2, 8, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
     cyd_ui_add_text(screen, idf_line, 2, 11, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
     cyd_ui_add_text(screen, chip_line, 2, 14, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
     cyd_ui_add_text(screen, heap_line, 2, 17, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
     cyd_ui_add_text(screen, wifi_line, 2, 20, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
     ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-    cyd_ui_add_button(screen,
-                      "<<",
-                      CYD_SYSTEM_APPS_BACK_COL,
-                      CYD_SYSTEM_APPS_BACK_ROW,
-                      CYD_SYSTEM_APPS_BACK_SPAN_COLS,
-                      CYD_SYSTEM_APPS_BACK_SPAN_ROWS,
-                      CYD_UI_COLOR_BLUE,
-                      CYD_UI_COLOR_CYAN,
-                      CYD_INFO_APP_ACTION_BACK);
+    cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
 
     return cyd_ui_submit(screen);
 }
