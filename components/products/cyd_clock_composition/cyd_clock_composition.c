@@ -222,9 +222,6 @@ esp_err_t cyd_clock_composition_start(void)
     }
 
 #if APP_WIFI_STA_ENABLED && CONFIG_ESP32_WIFI_STA_AUTO_START
-    if (boot_result.setup_shortcut_requested) {
-        wifi_connection_request_setup_on_start();
-    }
     cyd_clock_composition_start_optional("status indicator start failed", status_indicator_start());
     cyd_clock_composition_start_optional("Wi-Fi connection start failed", wifi_connection_start());
     cyd_clock_composition_start_optional("radio manager start failed", radio_manager_start());
@@ -236,6 +233,24 @@ esp_err_t cyd_clock_composition_start(void)
     if (nvs_health_requires_initialize()) {
         ESP_LOGW(TAG, "invalid NVS data detected; forcing Initialize NVS flow");
         system_settings_open_clear_nvs_confirm();
+        initial_app = system_settings_app_get_app();
+    }
+
+    /*
+     * Holding the touch panel through boot opens settings.
+     *
+     * It deliberately does NOT arm the Wi-Fi setup wizard any more. Settings is
+     * one predictable destination that also reaches Wi-Fi setup, touch
+     * calibration and Initialize NVS, rather than a shortcut whose meaning
+     * depends on whether a Wi-Fi profile happens to exist. It also works in a
+     * build without Wi-Fi: arming the wizard sat inside the Wi-Fi build feature
+     * guard, so the shortcut did nothing at all in those builds.
+     *
+     * When NVS is invalid the block above has already selected settings and
+     * armed the Initialize NVS confirmation, so that view still wins here.
+     */
+    if (boot_result.setup_shortcut_requested) {
+        ESP_LOGI(TAG, "boot touch shortcut held: opening settings");
         initial_app = system_settings_app_get_app();
     }
 

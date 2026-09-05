@@ -63,6 +63,8 @@
 #define CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA_CONFIRM 0x221f
 #define CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN 0x2220
 #define CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP 0x2221
+#define CYD_SETTINGS_APP_ACTION_RESTART_CANCEL 0x2222
+#define CYD_SETTINGS_APP_ACTION_RESTART_CONFIRM 0x2223
 #define CYD_SETTINGS_APP_ACTION_STORED_SELECT_BASE 0x2300
 #define CYD_SETTINGS_PAGE_BUTTON_ROW 27
 #define CYD_SETTINGS_PAGE_BUTTON_SPAN_COLS 7
@@ -171,6 +173,7 @@ typedef enum {
     CYD_SETTINGS_VIEW_CLEAR_TOUCH_CALIB_CONFIRM,
     CYD_SETTINGS_VIEW_CLEAR_NVS_CONFIRM,
     CYD_SETTINGS_VIEW_CLEAR_APP_DATA_CONFIRM,
+    CYD_SETTINGS_VIEW_RESTART_CONFIRM,
 } cyd_settings_view_t;
 
 typedef enum {
@@ -905,6 +908,31 @@ static esp_err_t cyd_settings_render_clear_nvs_confirm(cyd_display_screen_t *scr
     return ESP_OK;
 }
 
+static esp_err_t cyd_settings_render_restart_confirm(cyd_display_screen_t *screen)
+{
+    cyd_ui_add_text(screen, "Restart device?", 2, 9, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
+    cyd_ui_add_text(screen, "Settings are saved first", 2, 12, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_YELLOW);
+    cyd_ui_add_button(screen,
+                      "Cancel",
+                      4,
+                      20,
+                      14,
+                      3,
+                      CYD_UI_COLOR_BLUE,
+                      CYD_UI_COLOR_CYAN,
+                      CYD_SETTINGS_APP_ACTION_RESTART_CANCEL);
+    cyd_ui_add_button(screen,
+                      "OK",
+                      22,
+                      20,
+                      14,
+                      3,
+                      CYD_UI_COLOR_RED,
+                      CYD_UI_COLOR_YELLOW,
+                      CYD_SETTINGS_APP_ACTION_RESTART_CONFIRM);
+    return ESP_OK;
+}
+
 static esp_err_t cyd_settings_render_general_page(cyd_display_screen_t *screen)
 {
     char brightness_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
@@ -1381,6 +1409,11 @@ static esp_err_t cyd_settings_app_show(void)
         ESP_RETURN_ON_ERROR(cyd_settings_render_clear_nvs_confirm(screen),
                             TAG,
                             "render clear NVS confirm failed");
+        return cyd_ui_submit(screen);
+    }
+
+    if (s_settings_view == CYD_SETTINGS_VIEW_RESTART_CONFIRM) {
+        ESP_RETURN_ON_ERROR(cyd_settings_render_restart_confirm(screen), TAG, "render restart confirm failed");
         return cyd_ui_submit(screen);
     }
 
@@ -1862,6 +1895,60 @@ static esp_err_t cyd_settings_handle_clear_nvs_confirm_action(uint16_t action_id
     return ESP_OK;
 }
 
+/*
+ * True when settings is where the device booted to, rather than somewhere the
+ * user navigated into.
+ *
+ * app_shell_start() enters the first app with from_app == NULL, so a boot entry
+ * records no return app. That is the same condition as "there is nowhere to go
+ * back to", which is the honest reason to offer something other than leaving:
+ * app_shell_return_to() would fall back to the home app, and on a unit that was
+ * booted into settings the home app is usually the one that cannot work yet -
+ * it is missing the Wi-Fi or backend configuration that lives behind this very
+ * screen.
+ */
+static bool cyd_settings_entered_at_boot(void)
+{
+    return s_settings_return_app == NULL;
+}
+
+/*
+ * Root `<<` asks before restarting instead of leaving settings, but only when
+ * the device booted straight here. The enclosure has no reachable reset button,
+ * so this is the only way to reboot from the UI - and after configuring Wi-Fi
+ * or the backend at boot, restarting is what actually puts the settings to use.
+ *
+ * Entered the ordinary way, `<<` still just goes back: the user came from a
+ * working screen and asked to return to it, and rebooting instead would be a
+ * surprising answer to that.
+ */
+static esp_err_t cyd_settings_handle_restart_confirm_action(uint16_t action_id, bool *handled)
+{
+    ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
+    *handled = false;
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_RESTART_CANCEL) {
+        s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_RESTART_CONFIRM) {
+        ESP_RETURN_ON_ERROR(cyd_input_discard_pending_events(), TAG, "discard input events failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_save_pending_values(), TAG, "save settings before restart failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_show_restart_message("Restarting", "Restarting..."),
+                            TAG,
+                            "show restart message failed");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        *handled = true;
+        esp_restart();
+        return ESP_OK;
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t cyd_settings_handle_nvs_page_action(uint16_t action_id, bool *handled)
 {
     ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
@@ -2002,6 +2089,8 @@ static esp_err_t cyd_settings_handle_active_screen_action(uint16_t action_id, bo
         return cyd_settings_handle_clear_nvs_confirm_action(action_id, handled);
     case CYD_SETTINGS_VIEW_CLEAR_APP_DATA_CONFIRM:
         return cyd_settings_handle_clear_app_data_confirm_action(action_id, handled);
+    case CYD_SETTINGS_VIEW_RESTART_CONFIRM:
+        return cyd_settings_handle_restart_confirm_action(action_id, handled);
     case CYD_SETTINGS_VIEW_PAGES:
     default:
         break;
@@ -2061,6 +2150,11 @@ static esp_err_t cyd_settings_app_step(void *ctx)
     }
 
     if (action_id == CYD_SETTINGS_APP_ACTION_BACK) {
+        if (cyd_settings_entered_at_boot()) {
+            s_settings_view = CYD_SETTINGS_VIEW_RESTART_CONFIRM;
+            ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+            return ESP_OK;
+        }
         ESP_RETURN_ON_ERROR(app_shell_return_to(s_settings_return_app), TAG, "switch back from settings failed");
     }
 
