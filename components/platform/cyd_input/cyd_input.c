@@ -1072,8 +1072,34 @@ static void cyd_input_task(void *arg)
                 last_wake = xTaskGetTickCount();
                 continue;
             }
+
+#if CONFIG_CYD_TOUCH_ENABLED
+            /*
+             * Ask the controller before deciding the line is stuck.
+             *
+             * This guard exists so a shorted or floating PENIRQ cannot make the
+             * driver report an endless stream of phantom touches. A finger held
+             * on the panel through boot looks identical on the line alone, so
+             * the two cases are told apart by an actual SPI read: a real touch
+             * returns a coordinate, a stuck line does not.
+             *
+             * English supplement: without this, holding the panel while powering
+             * on can never be detected, because the guard latches before the
+             * first sample is ever taken. That gesture is the only way into
+             * settings on a device with no network configured, so the guard must
+             * not swallow it.
+             */
+            bool guard_pressed = false;
+            if (cyd_input_touch_read_sample(NULL, NULL, &guard_pressed) == ESP_OK && guard_pressed) {
+                ESP_LOGI(TAG, "touch IRQ low with a real touch present; sampling normally");
+                boot_low_guard_active = false;
+                last_wake = xTaskGetTickCount();
+                continue;
+            }
+#endif
+
             if (!boot_low_logged) {
-                ESP_LOGI(TAG, "touch IRQ is held low; deferring touch sampling until release");
+                ESP_LOGI(TAG, "touch IRQ is held low with no touch reported; deferring until release");
                 boot_low_logged = true;
             }
             cyd_input_handle_boot_button_sample(xTaskGetTickCount());

@@ -15,7 +15,12 @@
 
 #define TAG "system_boot"
 #define SYSTEM_BOOT_TOUCH_IRQ_SETUP_EARLY_WINDOW_MS 100
-#define SYSTEM_BOOT_TOUCH_IRQ_SETUP_POST_DISPLAY_WINDOW_MS 1000
+/*
+ * Window for the SPI-based check that runs after cyd_input_init(). It replaces
+ * the old post-display raw-GPIO window rather than adding to it, so boot time
+ * is unchanged for a device that is not being held.
+ */
+#define SYSTEM_BOOT_TOUCH_SETUP_POST_INPUT_WINDOW_MS 1200
 #define SYSTEM_BOOT_TOUCH_IRQ_SETUP_POLL_INTERVAL_MS 10
 #define SYSTEM_BOOT_TOUCH_IRQ_SETUP_RELEASE_WAIT_MS 10000
 
@@ -52,23 +57,28 @@ static bool system_boot_touch_irq_setup_requested(const char *phase, uint32_t de
 
     TickType_t start = xTaskGetTickCount();
     TickType_t detect_window_ticks = pdMS_TO_TICKS(detect_window_ms);
+    unsigned int samples = 0;
+    unsigned int low_samples = 0;
+
     if (detect_window_ticks == 0) {
         detect_window_ticks = 1;
     }
 
     while (xTaskGetTickCount() - start <= detect_window_ticks) {
+        samples++;
         if (gpio_get_level(irq_gpio) != 0) {
             vTaskDelay(pdMS_TO_TICKS(SYSTEM_BOOT_TOUCH_IRQ_SETUP_POLL_INTERVAL_MS));
             continue;
         }
+        low_samples++;
 
         TickType_t hold_start = xTaskGetTickCount();
         TickType_t release_wait_ticks = pdMS_TO_TICKS(SYSTEM_BOOT_TOUCH_IRQ_SETUP_RELEASE_WAIT_MS);
         ESP_LOGI(TAG,
-                 "%s Wi-Fi setup requested by touch IRQ low: gpio=%d window=%ums",
+                 "%s shortcut detected: touch IRQ gpio=%d low after %u samples",
                  phase != NULL ? phase : "boot",
                  CONFIG_CYD_TOUCH_PIN_INT,
-                 (unsigned)detect_window_ms);
+                 samples);
 
         while (gpio_get_level(irq_gpio) == 0 &&
                xTaskGetTickCount() - hold_start < release_wait_ticks) {
@@ -77,9 +87,86 @@ static bool system_boot_touch_irq_setup_requested(const char *phase, uint32_t de
         return true;
     }
 
+    /*
+     * Report the miss. A silent false is indistinguishable from "the window
+     * never ran", and on this board the touch IRQ is the input-only pad GPIO36,
+     * which has no internal pull-up: if the panel's PENIRQ pull-up is absent or
+     * the controller is not asserting, the line simply never reads low and the
+     * shortcut can never fire. The sample count makes that visible.
+     */
+    ESP_LOGI(TAG,
+             "%s shortcut not detected: gpio=%d stayed high for %u/%u samples over %ums",
+             phase != NULL ? phase : "boot",
+             CONFIG_CYD_TOUCH_PIN_INT,
+             samples - low_samples,
+             samples,
+             (unsigned)detect_window_ms);
     return false;
 #else
     (void)phase;
+    (void)detect_window_ms;
+    return false;
+#endif
+}
+
+/*
+ * Authoritative shortcut check, run after cyd_input_init().
+ *
+ * The raw PENIRQ line is not reliable at boot: the XPT2046 only drives it low
+ * while it is in power-down between conversions, and after a warm reset it can
+ * come up in a state where it never asserts until the host has actually talked
+ * to it over SPI. Both raw-GPIO windows above run before the controller has
+ * been touched by any driver, so on those boots the shortcut can never fire.
+ *
+ * cyd_input's task reads the panel over SPI, so its touch state reflects the
+ * controller itself rather than a side-band line that may be stuck high.
+ *
+ * English supplement: this is why the detection lives after input init. Moving
+ * it back before cyd_input_init() reintroduces the boot where holding the panel
+ * does nothing.
+ */
+static bool system_boot_touch_state_setup_requested(uint32_t detect_window_ms)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    TickType_t start = xTaskGetTickCount();
+    TickType_t detect_window_ticks = pdMS_TO_TICKS(detect_window_ms);
+    unsigned int samples = 0;
+
+    if (detect_window_ticks == 0) {
+        detect_window_ticks = 1;
+    }
+
+    while (xTaskGetTickCount() - start <= detect_window_ticks) {
+        cyd_input_touch_state_t state = { 0 };
+
+        samples++;
+        if (cyd_input_get_touch_state(&state) == ESP_OK && state.pressed) {
+            ESP_LOGI(TAG,
+                     "post-input shortcut detected: panel pressed at (%d,%d) after %u samples",
+                     (int)state.x,
+                     (int)state.y,
+                     samples);
+
+            /* Wait for release so the touch does not leak into the first app. */
+            TickType_t hold_start = xTaskGetTickCount();
+            TickType_t release_wait_ticks = pdMS_TO_TICKS(SYSTEM_BOOT_TOUCH_IRQ_SETUP_RELEASE_WAIT_MS);
+            while (xTaskGetTickCount() - hold_start < release_wait_ticks) {
+                if (cyd_input_get_touch_state(&state) != ESP_OK || !state.pressed) {
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(SYSTEM_BOOT_TOUCH_IRQ_SETUP_POLL_INTERVAL_MS));
+            }
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(SYSTEM_BOOT_TOUCH_IRQ_SETUP_POLL_INTERVAL_MS));
+    }
+
+    ESP_LOGI(TAG,
+             "post-input shortcut not detected: panel not pressed in %u samples over %ums",
+             samples,
+             (unsigned)detect_window_ms);
+    return false;
+#else
     (void)detect_window_ms;
     return false;
 #endif
@@ -127,17 +214,28 @@ esp_err_t system_boot_start(system_boot_result_t *result)
     ESP_RETURN_ON_ERROR(cyd_speaker_init(), TAG, "speaker init failed");
     ESP_RETURN_ON_ERROR(cyd_display_init(), TAG, "display init failed");
 
+    ESP_RETURN_ON_ERROR(cyd_input_init(), TAG, "input init failed");
+
+    /*
+     * Detection happens here, not before input init: the raw PENIRQ windows
+     * above run while the XPT2046 has never been addressed, and on a warm reset
+     * it can stay high throughout. Reading the panel through cyd_input asks the
+     * controller over SPI instead, which is what makes holding the screen at
+     * boot actually work.
+     */
     if (!setup_requested_on_boot) {
-        setup_requested_on_boot = system_boot_touch_irq_setup_requested(
-            "post-display",
-            SYSTEM_BOOT_TOUCH_IRQ_SETUP_POST_DISPLAY_WINDOW_MS
+        setup_requested_on_boot = system_boot_touch_state_setup_requested(
+            SYSTEM_BOOT_TOUCH_SETUP_POST_INPUT_WINDOW_MS
         );
     }
 
-    ESP_RETURN_ON_ERROR(cyd_input_init(), TAG, "input init failed");
     ESP_RETURN_ON_ERROR(system_boot_run_touch_calibration_if_needed(),
                         TAG,
                         "initial touch calibration failed");
+    if (setup_requested_on_boot) {
+        /* The hold must not arrive at the first app as a stray tap. */
+        (void)cyd_input_discard_pending_events();
+    }
 
     if (result != NULL) {
         result->setup_shortcut_requested = setup_requested_on_boot;
