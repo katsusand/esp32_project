@@ -19,7 +19,11 @@ main
        -> app_shell(cyd_clock_app)
 ```
 
-`system_boot` が検出した起動ショートカットは `system_boot_result_t` で受け取り、時計製品ではWi-Fi setup要求として解釈します。
+`system_boot` が検出した起動ショートカット (`system_boot_result_t.setup_shortcut_requested`) は、時計製品では **settings app を初期 app にする** 要求として解釈します。画面を押したまま電源を入れると時計ではなく settings が開きます。
+
+以前はここで Wi-Fi setup ウィザードを予約していました。settings に変えたのは、settings が Wi-Fi setup・タッチ補正・Initialize NVS のいずれにも届く単一の行き先であり、「Wi-Fi profile が存在するかどうか」で意味が変わる shortcut より予測しやすいためです。またウィザードの予約は Wi-Fi build feature の `#if` の内側にあったため、Wi-Fi を無効にしたビルドでは shortcut が何もしていませんでした。
+
+NVS が不正な場合は、この判定より前に settings と Initialize NVS 確認画面が選ばれており、そちらが優先されます。
 
 ## Feature Switches
 

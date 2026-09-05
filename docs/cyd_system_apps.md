@@ -48,6 +48,21 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
 
 戻る操作は `app_shell_return_to()` を通します。`from_app` が NULL のときは home app へフォールバックするため、戻り先が無い画面でも `<<` が死にません。
 
+settings の root page の `<<` は、**settings にどう入ったか**で振る舞いが変わります。
+
+| 入り方 | `from_app` | root の `<<` |
+|---|---|---|
+| 起動時のタッチ長押し、NVS初期化の強制 | `NULL` | **再起動確認画面** を開く。`Cancel` で page に戻り、`OK` で保存してから `esp_restart()` |
+| 通常画面からの遷移 | 遷移元 app | これまで通り return app へ戻る |
+
+判定は「return app が記録されていないこと」です。`app_shell_start()` は最初の app の `enter()` を `from_app = NULL` で呼ぶため、起動直後に settings へ入った場合だけこうなります。これは「戻る先が無い」という状態そのものであり、そこで `app_shell_return_to()` に任せると home app へフォールバックしますが、起動時に settings へ来た端末の home app は、たいていこの画面の奥にある Wi-Fi や backend の設定がまだ無くて動けない app です。再起動の方が、今設定した内容を実際に反映させる操作になります。
+
+逆に通常経路では、利用者は動いている画面から来て「戻る」と言っているので、再起動を返すのは答えとしてずれます。
+
+sub-view（`Stored SSIDs` や各確認画面）の `<<` / `Cancel` はこれまで通り、1 階層戻る、あるいは直接遷移で入った場合は return app へ戻ります。
+
+English contract: `<<` on the settings root reboots only when settings is where the device booted to; otherwise it navigates back. Sub-views keep their own back semantics.
+
 settings は「settings 自身が開いた画面」から戻ってきた場合だけ、戻り先を更新しません。判定は `cyd_settings_is_own_subscreen()` で、Wi-Fi Setup、Touch Calibration、登録済み app の固有設定画面が対象です。`cyd_settings_is_app_settings_screen()` は、そのうち app 固有設定画面だけを判定する内部 helper です。registry の app 本体まで対象にすると、clock から settings に入ったときに戻り先が記録されず `<<` が効かなくなります。
 
 保存済みSSID一覧、touch calibration消去確認、NVS消去確認は、次のAPIで次回のsettings遷移先として直接指定できます。
@@ -130,7 +145,7 @@ prefix を持たない namespace は `unknown` になります。ここには ES
 - `APPS` page
   設定画面を持つ app の一覧。ボタンでその app の設定画面へ遷移する
   app 自体ではなく **app 固有設定への導線**であり、設定画面を持たない app は出ない
-- `<<`: `enter()` の `from_app` として受け取った return app へ戻る
+- `<<`: 起動時に settings へ入った場合は再起動確認画面を開く（`Cancel` で page へ戻り、`OK` で設定を保存してから `esp_restart()`）。通常の遷移で入った場合は `enter()` の `from_app` として受け取った return app へ戻る
 
 ページ切り替えは画面下部の `<` / `>` ボタンで行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消えます。`APPS` page は、設定画面を持つ app が 1 つも無いときだけ消えます。
 
