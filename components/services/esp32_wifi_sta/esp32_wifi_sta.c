@@ -60,6 +60,7 @@
 
 #define ESP32_WIFI_STA_CONNECTED_BIT BIT0
 #define ESP32_WIFI_STA_FAIL_BIT      BIT1
+#define ESP32_WIFI_STA_CANCEL_BIT    BIT2
 
 static const char *TAG = "esp32_wifi_sta";
 
@@ -75,6 +76,10 @@ typedef struct {
     esp32_wifi_sta_failure_reason_t last_failure_reason;
     wifi_err_reason_t last_disconnect_reason;
     esp32_wifi_sta_config_t config;
+    /* Owned copies behind config's string pointers (see esp32_wifi_sta_store_config). */
+    char config_ssid[sizeof(((wifi_config_t *)0)->sta.ssid) + 1];
+    char config_password[sizeof(((wifi_config_t *)0)->sta.password) + 1];
+    char config_sae_h2e_identifier[sizeof(((wifi_config_t *)0)->sta.sae_h2e_identifier) + 1];
     esp_netif_ip_info_t ip_info;
     esp32_wifi_sta_scan_record_t scan_records[CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE];
     esp_netif_t *netif;
@@ -247,6 +252,53 @@ static bool esp32_wifi_sta_config_has_ssid(const esp32_wifi_sta_config_t *config
     return config != NULL && config->ssid != NULL && config->ssid[0] != '\0';
 }
 
+/*
+ * Keeps the config with strings this component owns.
+ *
+ * English contract: callers pass pointers into their own buffers, which are
+ * often on the stack (wifi_connection builds each candidate's config inside a
+ * local array). Storing those pointers left s_wifi_sta.config pointing at dead
+ * stack frames, and esp32_wifi_sta_get_configured_ssid() read from them.
+ */
+static void esp32_wifi_sta_store_config(const esp32_wifi_sta_config_t *config)
+{
+    if (xSemaphoreTake(s_wifi_sta.mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+
+    s_wifi_sta.config = *config;
+    strlcpy(s_wifi_sta.config_ssid, config->ssid != NULL ? config->ssid : "", sizeof(s_wifi_sta.config_ssid));
+    strlcpy(s_wifi_sta.config_password,
+            config->password != NULL ? config->password : "",
+            sizeof(s_wifi_sta.config_password));
+    strlcpy(s_wifi_sta.config_sae_h2e_identifier,
+            config->sae_h2e_identifier != NULL ? config->sae_h2e_identifier : "",
+            sizeof(s_wifi_sta.config_sae_h2e_identifier));
+    s_wifi_sta.config.ssid = s_wifi_sta.config_ssid;
+    s_wifi_sta.config.password = s_wifi_sta.config_password;
+    s_wifi_sta.config.sae_h2e_identifier = s_wifi_sta.config_sae_h2e_identifier;
+    xSemaphoreGive(s_wifi_sta.mutex);
+}
+
+/*
+ * esp_wifi_connect() here runs on the event task and can race a stop issued by
+ * another task, which makes it return ESP_ERR_WIFI_NOT_STARTED. As an
+ * ESP_ERROR_CHECK that race rebooted the device; now the attempt just ends as
+ * failed, which also releases esp32_wifi_sta_wait_connected() promptly.
+ */
+static void esp32_wifi_sta_connect_from_event(void)
+{
+    esp_err_t err = esp_wifi_connect();
+    if (err == ESP_OK) {
+        return;
+    }
+
+    ESP_LOGW(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(err));
+    esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_FAILED);
+    s_wifi_sta.last_failure_reason = ESP32_WIFI_STA_FAILURE_CONNECT;
+    xEventGroupSetBits(s_wifi_sta.event_group, ESP32_WIFI_STA_FAIL_BIT);
+}
+
 static void esp32_wifi_sta_on_wifi_event(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
@@ -255,7 +307,7 @@ static void esp32_wifi_sta_on_wifi_event(void *arg, esp_event_base_t event_base,
 
     if (event_id == WIFI_EVENT_STA_START && s_wifi_sta.connect_on_start) {
         esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_CONNECTING);
-        ESP_ERROR_CHECK(esp_wifi_connect());
+        esp32_wifi_sta_connect_from_event();
         return;
     }
 
@@ -275,7 +327,7 @@ static void esp32_wifi_sta_on_wifi_event(void *arg, esp_event_base_t event_base,
                      "Wi-Fi disconnected; retrying %u/%u",
                      (unsigned)s_wifi_sta.retry_count,
                      (unsigned)s_wifi_sta.config.max_retry);
-            ESP_ERROR_CHECK(esp_wifi_connect());
+            esp32_wifi_sta_connect_from_event();
             return;
         }
 
@@ -399,7 +451,7 @@ esp_err_t esp32_wifi_sta_init_with_config(const esp32_wifi_sta_config_t *config)
         }
     }
 
-    s_wifi_sta.config = *config;
+    esp32_wifi_sta_store_config(config);
     s_wifi_sta.configured = false;
     s_wifi_sta.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
     s_wifi_sta.last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
@@ -426,7 +478,8 @@ esp_err_t esp32_wifi_sta_start(void)
         return ESP_OK;
     }
 
-    xEventGroupClearBits(s_wifi_sta.event_group, ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT);
+    xEventGroupClearBits(s_wifi_sta.event_group,
+                         ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT | ESP32_WIFI_STA_CANCEL_BIT);
     s_wifi_sta.retry_count = 0;
     s_wifi_sta.connect_on_start = true;
     esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_CONNECTING);
@@ -558,7 +611,7 @@ esp_err_t esp32_wifi_sta_wait_connected(TickType_t wait_ticks)
     ESP_RETURN_ON_FALSE(s_wifi_sta.initialized, ESP_ERR_INVALID_STATE, TAG, "Wi-Fi STA not initialized");
 
     bits = xEventGroupWaitBits(s_wifi_sta.event_group,
-                               ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT,
+                               ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT | ESP32_WIFI_STA_CANCEL_BIT,
                                pdFALSE,
                                pdFALSE,
                                wait_ticks);
@@ -566,10 +619,21 @@ esp_err_t esp32_wifi_sta_wait_connected(TickType_t wait_ticks)
     if ((bits & ESP32_WIFI_STA_CONNECTED_BIT) != 0) {
         return ESP_OK;
     }
+    if ((bits & ESP32_WIFI_STA_CANCEL_BIT) != 0) {
+        xEventGroupClearBits(s_wifi_sta.event_group, ESP32_WIFI_STA_CANCEL_BIT);
+        return ESP_ERR_INVALID_STATE;
+    }
     if ((bits & ESP32_WIFI_STA_FAIL_BIT) != 0) {
         return ESP_FAIL;
     }
     return ESP_ERR_TIMEOUT;
+}
+
+void esp32_wifi_sta_cancel_wait(void)
+{
+    if (s_wifi_sta.initialized && s_wifi_sta.event_group != NULL) {
+        xEventGroupSetBits(s_wifi_sta.event_group, ESP32_WIFI_STA_CANCEL_BIT);
+    }
 }
 
 esp_err_t esp32_wifi_sta_get_status(esp32_wifi_sta_status_t *status)

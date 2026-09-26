@@ -37,6 +37,7 @@ English supplement: Treat `products/` as the replaceable composition layer and `
 ```text
 components/
   apps/
+    cyd_clock_alarm/
     cyd_clock_app/
     cyd_clock_settings_app/
     cyd_system_apps/
@@ -81,6 +82,8 @@ foreground app を置く層です。ここがプロジェクト固有のメイ�
 
 - `cyd_clock_app/`
   通常時の時計表示
+- `cyd_clock_alarm/`
+  時計のアラーム。`cyd_clock_app_register()` だけがインストールする時計の一部
 - `cyd_clock_settings_app/`
   時計固有設定
 - `cyd_system_apps/`
@@ -217,7 +220,7 @@ English supplement: Most derived projects should change `apps/` first and keep t
 
 ## Notes
 
-- clock alarm は独立 component を持たず、現在は `app_scheduler` を clock app から直接利用する構成です
+- clock alarm は `apps/cyd_clock_alarm/` にあり、時計の一部として `cyd_clock_app_register()` からだけインストールされます。状態を持たず、保存先は `app_scheduler` の entry (app scope) だけです。独自の保存を持って scheduler と二重管理になっていた旧 `cyd_alarm` の再導入ではありません
 - `cyd_system_apps/` は system-level app ですが、foreground app であるため `apps/` に置いています
 - `cyd_wifi_setup/` は UI を持ちますが、Wi-Fi service の一部として `services/` に置いています
 - `app_shell` のような framework component は domain service へ直接依存させず、必要な製品固有判定は composition が hook として登録します

@@ -11,7 +11,7 @@
 #include "error_log_store.h"
 #include "esp32_wifi_sta.h"
 #include "wifi_connection.h"
-#include "wifi_connection.h"
+#include "wifi_connection_internal.h"
 
 #ifndef CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS
 #define CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS 15000
@@ -45,6 +45,10 @@
 #define WIFI_CONNECTION_OFF_BIT         BIT4
 #define WIFI_CONNECTION_NO_SETUP_BIT    BIT5
 
+/* Covers one blocking scan plus the steps between abort checks. */
+#define WIFI_CONNECTION_SETUP_TAKEOVER_TIMEOUT_MS 10000U
+#define WIFI_CONNECTION_SETUP_TAKEOVER_POLL_MS    50U
+
 #define TAG "wifi_connection"
 
 typedef struct {
@@ -58,6 +62,7 @@ typedef struct {
     volatile uint32_t connected_duration_high_water_seconds;
     volatile bool setup_requested_explicitly;
     volatile bool setup_starting;
+    volatile bool connect_in_progress;
     volatile bool setup_requested_on_start;
     volatile bool ssid_configured;
     volatile bool last_connection_succeeded;
@@ -183,6 +188,14 @@ static void wifi_connection_log_stack_usage(void)
     APP_STACK_MONITOR_CHECK(TAG, "wifi_connection", CONFIG_WIFI_CONNECTION_STACK_LOG_INTERVAL_MS);
 }
 
+static bool wifi_connection_setup_takeover_requested(void)
+{
+    /* A setup state counts too: if begin_setup() gave up waiting it has already
+       moved on to SETUP_RUNNING, and the attempt must still not write over it. */
+    return s_wifi_connection.setup_starting ||
+           wifi_connection_state_is_setup(s_wifi_connection.state);
+}
+
 static esp_err_t wifi_connection_try_connect_once(esp32_wifi_sta_failure_reason_t *failure_reason)
 {
     esp32_wifi_sta_failure_reason_t local_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
@@ -190,9 +203,10 @@ static esp_err_t wifi_connection_try_connect_once(esp32_wifi_sta_failure_reason_
     s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
     xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT | WIFI_CONNECTION_OFF_BIT);
 
-    esp_err_t err = wifi_connection_connect_configured(
+    esp_err_t err = wifi_connection_connect_configured_abortable(
         pdMS_TO_TICKS(CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS),
-        &local_failure_reason
+        &local_failure_reason,
+        wifi_connection_setup_takeover_requested
     );
     if (failure_reason != NULL) {
         *failure_reason = local_failure_reason;
@@ -200,16 +214,57 @@ static esp_err_t wifi_connection_try_connect_once(esp32_wifi_sta_failure_reason_
     return err;
 }
 
+/* Sleeps in short steps so a setup takeover is noticed within one step. */
+static bool wifi_connection_delay_unless_setup(uint32_t delay_ms)
+{
+    TickType_t remaining = pdMS_TO_TICKS(delay_ms);
+    const TickType_t step_max = pdMS_TO_TICKS(100) > 0 ? pdMS_TO_TICKS(100) : 1;
+
+    while (remaining > 0) {
+        if (wifi_connection_setup_takeover_requested()) {
+            return false;
+        }
+        TickType_t step = remaining > step_max ? step_max : remaining;
+        vTaskDelay(step);
+        remaining -= step;
+    }
+    return !wifi_connection_setup_takeover_requested();
+}
+
+static void wifi_connection_set_connect_in_progress(bool in_progress)
+{
+    portENTER_CRITICAL(&s_wifi_connection_lock);
+    s_wifi_connection.connect_in_progress = in_progress;
+    portEXIT_CRITICAL(&s_wifi_connection_lock);
+}
+
+/*
+ * Runs only on the manager task. wifi_connection_begin_setup() raises
+ * setup_starting and waits for connect_in_progress to drop, so everything
+ * between the entry check and the final clear is guaranteed not to overlap the
+ * setup app driving the STA.
+ */
 static esp_err_t wifi_connection_try_connect(wifi_connection_state_t state)
 {
     esp32_wifi_sta_failure_reason_t failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
     esp_err_t err = ESP_FAIL;
 
+    portENTER_CRITICAL(&s_wifi_connection_lock);
+    bool allowed = !s_wifi_connection.setup_starting &&
+                   !wifi_connection_state_is_setup(s_wifi_connection.state);
+    if (allowed) {
+        s_wifi_connection.connect_in_progress = true;
+    }
+    portEXIT_CRITICAL(&s_wifi_connection_lock);
+    if (!allowed) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     wifi_connection_set_state(state);
 
     for (uint32_t attempt = 1; attempt <= CONFIG_WIFI_CONNECTION_SCAN_RETRY_ATTEMPTS; ++attempt) {
         err = wifi_connection_try_connect_once(&failure_reason);
-        if (err == ESP_OK) {
+        if (err == ESP_OK || wifi_connection_setup_takeover_requested()) {
             break;
         }
 
@@ -223,7 +278,17 @@ static esp_err_t wifi_connection_try_connect(wifi_connection_state_t state)
                  (unsigned)CONFIG_WIFI_CONNECTION_SCAN_RETRY_DELAY_MS,
                  (unsigned)attempt,
                  (unsigned)CONFIG_WIFI_CONNECTION_SCAN_RETRY_ATTEMPTS);
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_WIFI_CONNECTION_SCAN_RETRY_DELAY_MS));
+        if (!wifi_connection_delay_unless_setup(CONFIG_WIFI_CONNECTION_SCAN_RETRY_DELAY_MS)) {
+            break;
+        }
+    }
+
+    /* Setup owns the STA and the state from here; writing CONNECTED/FAILED
+       now would overwrite the SETUP_RUNNING it is about to set. */
+    if (wifi_connection_setup_takeover_requested()) {
+        ESP_LOGI(TAG, "Wi-Fi connect abandoned: setup is taking over");
+        wifi_connection_set_connect_in_progress(false);
+        return ESP_ERR_INVALID_STATE;
     }
 
     if (err == ESP_OK) {
@@ -244,6 +309,7 @@ static esp_err_t wifi_connection_try_connect(wifi_connection_state_t state)
                  (int)failure_reason);
         (void)error_log_store_append_esp_err(TAG, "Wi-Fi connection connect failed", err);
     }
+    wifi_connection_set_connect_in_progress(false);
     return err;
 }
 
@@ -555,6 +621,32 @@ esp_err_t wifi_connection_request_connection_without_setup_async(void)
     return wifi_connection_request_connection_async_internal(false);
 }
 
+/*
+ * Waits until the manager task has left wifi_connection_try_connect().
+ *
+ * English contract: setup drives the STA from the app_shell task, so it may
+ * only start once the manager task has stopped touching it. An in-flight
+ * attempt used to carry on, restart the STA under the setup scan, and finally
+ * overwrite SETUP_RUNNING with CONNECTED or FAILED. setup_starting makes that
+ * loop bail out at its next step; cancelling the STA wait makes "next step"
+ * come now instead of after the connect timeout.
+ */
+static void wifi_connection_wait_for_connect_to_stop(void)
+{
+    TickType_t started_at = xTaskGetTickCount();
+
+    while (s_wifi_connection.connect_in_progress) {
+        esp32_wifi_sta_cancel_wait();
+        if (xTaskGetTickCount() - started_at >= pdMS_TO_TICKS(WIFI_CONNECTION_SETUP_TAKEOVER_TIMEOUT_MS)) {
+            ESP_LOGW(TAG,
+                     "connect attempt still running after %u ms; starting setup anyway",
+                     (unsigned)WIFI_CONNECTION_SETUP_TAKEOVER_TIMEOUT_MS);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(WIFI_CONNECTION_SETUP_TAKEOVER_POLL_MS));
+    }
+}
+
 esp_err_t wifi_connection_begin_setup(void)
 {
     ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
@@ -567,7 +659,10 @@ esp_err_t wifi_connection_begin_setup(void)
                          WIFI_CONNECTION_NO_SETUP_BIT);
 
     /* Gate the monitor before stopping STA so an in-flight monitor pass cannot reconnect it. */
+    portENTER_CRITICAL(&s_wifi_connection_lock);
     s_wifi_connection.setup_starting = true;
+    portEXIT_CRITICAL(&s_wifi_connection_lock);
+    wifi_connection_wait_for_connect_to_stop();
     esp_err_t err = wifi_connection_disable_sta();
     if (err != ESP_OK) {
         s_wifi_connection.setup_starting = false;
@@ -773,26 +868,22 @@ esp32_wifi_sta_failure_reason_t wifi_connection_get_last_failure_reason(void)
     return s_wifi_connection.last_failure_reason;
 }
 
+/*
+ * Retries go straight to a connection request, with no wifi_connection_disable()
+ * first. FAILED already accepts a request (wifi_connection_can_request_connection),
+ * the request clears the stale OFF bit, and every attempt begins by stopping the
+ * STA. The disable waited up to 7 s on the caller's task for an OFF that never
+ * came while radio_manager still held Wi-Fi, so RETRY and SYNC NOW froze the UI
+ * and then failed.
+ */
 esp_err_t wifi_connection_retry_connection_without_setup(TickType_t wait_ticks)
 {
     ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-
-    wifi_connection_state_t state = s_wifi_connection.state;
-    if (state == WIFI_CONNECTION_STATE_FAILED) {
-        ESP_RETURN_ON_ERROR(wifi_connection_disable(), TAG, "Wi-Fi connection disable before retry failed");
-    }
-
     return wifi_connection_request_connection_without_setup(wait_ticks);
 }
 
 esp_err_t wifi_connection_retry_connection_without_setup_async(void)
 {
     ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-
-    wifi_connection_state_t state = s_wifi_connection.state;
-    if (state == WIFI_CONNECTION_STATE_FAILED) {
-        ESP_RETURN_ON_ERROR(wifi_connection_disable(), TAG, "Wi-Fi connection disable before retry failed");
-    }
-
     return wifi_connection_request_connection_without_setup_async();
 }

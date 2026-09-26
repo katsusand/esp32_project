@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -14,11 +15,17 @@
 #include "app_scheduler.h"
 #include "time_tick.h"
 
-/* This component owns this data, so the namespace is declared here.
-   The "ftr_" prefix is what lets nvs_schema classify it by scanning flash. */
-NVS_SCHEMA_DECLARE_NS(NVS_NS, "ftr_sched");
-static const nvs_key_descriptor_t NVS_KEY_APP_SCHEDULER_CONFIG = {
-    .ns = NVS_NS,
+/* This component owns both namespaces. An entry's scope picks the one it is
+   stored in, and the prefix is what lets nvs_schema clear app-owned schedules
+   with the rest of the app's data while service-owned ones stay. */
+NVS_SCHEMA_DECLARE_NS(NVS_NS_FEATURE, "ftr_sched");
+NVS_SCHEMA_DECLARE_NS(NVS_NS_APP, "app_sched");
+static const nvs_key_descriptor_t NVS_KEY_APP_SCHEDULER_FEATURE_CONFIG = {
+    .ns = NVS_NS_FEATURE,
+    .key = "config_v1",
+};
+static const nvs_key_descriptor_t NVS_KEY_APP_SCHEDULER_APP_CONFIG = {
+    .ns = NVS_NS_APP,
     .key = "config_v1",
 };
 
@@ -43,11 +50,34 @@ typedef struct {
     int64_t last_event_stamp;
 } app_scheduler_entry_t;
 
+/*
+ * On-flash layout of one entry, frozen at what APP_SCHEDULER_CONFIG_VERSION 2
+ * blobs already hold. Deliberately not app_scheduler_config_t: that struct
+ * gained `scope`, which the namespace an entry is stored in already tells, and
+ * letting the API struct define the stored format is how adding a field would
+ * silently invalidate every stored blob and force Initialize NVS on update.
+ */
+typedef struct {
+    char owner[APP_SCHEDULER_OWNER_MAX_LEN + 1];
+    char tag[APP_SCHEDULER_TAG_MAX_LEN + 1];
+    app_scheduler_mode_t mode;
+    app_scheduler_behavior_t behavior;
+    bool enabled;
+    bool repeat;
+    uint8_t weekday_mask;
+    app_scheduler_time_of_day_t at;
+    app_scheduler_time_of_day_t to;
+} app_scheduler_disk_config_t;
+
 typedef struct {
     uint32_t version;
-    app_scheduler_config_t configs[APP_SCHEDULER_MAX_ENTRIES];
+    app_scheduler_disk_config_t configs[APP_SCHEDULER_MAX_ENTRIES];
     uint8_t occupied[APP_SCHEDULER_MAX_ENTRIES];
 } app_scheduler_disk_t;
+
+/* The sizes blobs written by earlier firmware have; checked against them. */
+ESP_STATIC_ASSERT(sizeof(app_scheduler_disk_config_t) == 52, "scheduler entry layout on flash changed");
+ESP_STATIC_ASSERT(sizeof(app_scheduler_disk_t) == 272, "scheduler blob layout on flash changed");
 
 typedef struct {
     bool occupied;
@@ -63,6 +93,9 @@ static QueueHandle_t s_event_queue;
 static QueueHandle_t s_tick_queue;
 static TaskHandle_t s_scheduler_task_handle;
 static bool s_scheduler_started;
+/* Serializes app_scheduler_write_scope(); see there. */
+static SemaphoreHandle_t s_persist_mutex;
+static StaticSemaphore_t s_persist_mutex_storage;
 
 /*
  * Only drops bits outside the weekday range.
@@ -145,6 +178,11 @@ static esp_err_t app_scheduler_validate_config(const app_scheduler_config_t *con
                         ESP_ERR_INVALID_ARG,
                         TAG,
                         "window schedules only support event behavior");
+    ESP_RETURN_ON_FALSE(config->scope == APP_SCHEDULER_SCOPE_APP ||
+                            config->scope == APP_SCHEDULER_SCOPE_FEATURE,
+                        ESP_ERR_INVALID_ARG,
+                        TAG,
+                        "invalid scope");
 
     if (config->mode == APP_SCHEDULER_MODE_WINDOW) {
         ESP_RETURN_ON_FALSE(app_scheduler_valid_time(config->to), ESP_ERR_INVALID_ARG, TAG, "invalid to time");
@@ -173,31 +211,14 @@ static void app_scheduler_make_event_locked(size_t index,
     strlcpy(event->tag, s_entries[index].config.tag, sizeof(event->tag));
 }
 
-static void app_scheduler_publish_event(size_t index, app_scheduler_event_t *event)
-{
-    bool missed = false;
-
-    if (event == NULL || s_event_queue == NULL) {
-        missed = true;
-    } else if (xQueueSend(s_event_queue, event, 0) != pdTRUE) {
-        missed = true;
-    }
-
-    if (missed && index < APP_SCHEDULER_MAX_ENTRIES) {
-        portENTER_CRITICAL(&s_scheduler_lock);
-        ++s_entries[index].missed_event_count;
-        portEXIT_CRITICAL(&s_scheduler_lock);
-        ESP_LOGW(TAG, "event queue full: slot=%u", (unsigned)index);
-    }
-}
-
-static void app_scheduler_dispatch_event(const app_scheduler_event_t *event)
+/* Returns true when the owner had a handler and it ran. */
+static bool app_scheduler_dispatch_event(const app_scheduler_event_t *event)
 {
     app_scheduler_event_handler_t handler = NULL;
     void *ctx = NULL;
 
     if (event == NULL) {
-        return;
+        return false;
     }
 
     portENTER_CRITICAL(&s_scheduler_lock);
@@ -210,57 +231,177 @@ static void app_scheduler_dispatch_event(const app_scheduler_event_t *event)
     }
     portEXIT_CRITICAL(&s_scheduler_lock);
 
-    if (handler != NULL) {
-        handler(event, ctx);
+    if (handler == NULL) {
+        return false;
+    }
+    handler(event, ctx);
+    return true;
+}
+
+/*
+ * Queue for observers, then the owner's handler.
+ *
+ * English contract: an event its owner's handler received counts as delivered
+ * even when the observer queue is full. Nothing in this project drains that
+ * queue, so it filled after 16 events and from then on every alarm logged
+ * "event queue full" and counted as missed although its handler had run. Only
+ * an event that reached neither the queue nor a handler is missed.
+ */
+static void app_scheduler_deliver_event(size_t index, const app_scheduler_event_t *event)
+{
+    bool queued = event != NULL &&
+                  s_event_queue != NULL &&
+                  xQueueSend(s_event_queue, event, 0) == pdTRUE;
+    bool handled = app_scheduler_dispatch_event(event);
+
+    if (!queued && !handled && index < APP_SCHEDULER_MAX_ENTRIES) {
+        portENTER_CRITICAL(&s_scheduler_lock);
+        ++s_entries[index].missed_event_count;
+        portEXIT_CRITICAL(&s_scheduler_lock);
+        ESP_LOGW(TAG, "event reached no handler and the queue is full: slot=%u", (unsigned)index);
     }
 }
 
-static esp_err_t app_scheduler_write_configs(void)
+static const nvs_key_descriptor_t *app_scheduler_scope_key(app_scheduler_scope_t scope)
 {
+    return scope == APP_SCHEDULER_SCOPE_FEATURE ? &NVS_KEY_APP_SCHEDULER_FEATURE_CONFIG
+                                                : &NVS_KEY_APP_SCHEDULER_APP_CONFIG;
+}
+
+static app_scheduler_disk_config_t app_scheduler_to_disk_config(const app_scheduler_config_t *config)
+{
+    app_scheduler_disk_config_t disk = {
+        .mode = config->mode,
+        .behavior = config->behavior,
+        .enabled = config->enabled,
+        .repeat = config->repeat,
+        .weekday_mask = config->weekday_mask,
+        .at = config->at,
+        .to = config->to,
+    };
+
+    memcpy(disk.owner, config->owner, sizeof(disk.owner));
+    memcpy(disk.tag, config->tag, sizeof(disk.tag));
+    return disk;
+}
+
+static app_scheduler_config_t app_scheduler_from_disk_config(const app_scheduler_disk_config_t *disk,
+                                                             app_scheduler_scope_t scope)
+{
+    app_scheduler_config_t config = {
+        .mode = disk->mode,
+        .behavior = disk->behavior,
+        .enabled = disk->enabled,
+        .repeat = disk->repeat,
+        .weekday_mask = app_scheduler_normalize_weekday_mask(disk->weekday_mask),
+        .at = disk->at,
+        .to = disk->to,
+        .scope = scope,
+    };
+
+    memcpy(config.owner, disk->owner, sizeof(config.owner));
+    memcpy(config.tag, disk->tag, sizeof(config.tag));
+    config.owner[APP_SCHEDULER_OWNER_MAX_LEN] = '\0';
+    config.tag[APP_SCHEDULER_TAG_MAX_LEN] = '\0';
+    return config;
+}
+
+/*
+ * Rewrites one scope's blob from the entries currently in that scope. A scope
+ * left without entries has its key erased, so a namespace holds data only while
+ * it has schedules.
+ *
+ * English contract: snapshot and write happen under s_persist_mutex as one
+ * step. The tick task (disabling a fired one-shot) and a UI edit can both get
+ * here; without the mutex the older snapshot could be written last and a
+ * reboot would bring back the stale setting.
+ */
+static esp_err_t app_scheduler_write_scope(app_scheduler_scope_t scope)
+{
+    const nvs_key_descriptor_t *key = app_scheduler_scope_key(scope);
     nvs_handle_t nvs_handle;
+    size_t stored = 0;
     app_scheduler_disk_t disk = {
         .version = APP_SCHEDULER_CONFIG_VERSION,
     };
 
+    xSemaphoreTake(s_persist_mutex, portMAX_DELAY);
     portENTER_CRITICAL(&s_scheduler_lock);
     for (size_t i = 0; i < APP_SCHEDULER_MAX_ENTRIES; ++i) {
-        disk.occupied[i] = s_entries[i].occupied ? 1U : 0U;
-        disk.configs[i] = s_entries[i].config;
+        if (!s_entries[i].occupied || s_entries[i].config.scope != scope) {
+            continue;
+        }
+        disk.configs[stored] = app_scheduler_to_disk_config(&s_entries[i].config);
+        disk.occupied[stored] = 1U;
+        ++stored;
     }
     portEXIT_CRITICAL(&s_scheduler_lock);
 
-    ESP_RETURN_ON_ERROR(nvs_open_descriptor(NVS_KEY_APP_SCHEDULER_CONFIG.ns, NVS_READWRITE, &nvs_handle),
-                        TAG,
-                        "open NVS failed");
-    esp_err_t err = nvs_set_blob(nvs_handle, NVS_KEY_APP_SCHEDULER_CONFIG.key, &disk, sizeof(disk));
+    esp_err_t err = nvs_open_descriptor(key->ns, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        xSemaphoreGive(s_persist_mutex);
+        ESP_LOGE(TAG, "open NVS failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = stored > 0 ? nvs_set_blob(nvs_handle, key->key, &disk, sizeof(disk))
+                     : nvs_erase_key(nvs_handle, key->key);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK;
+    }
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
     }
     nvs_close(nvs_handle);
+    xSemaphoreGive(s_persist_mutex);
     return err;
 }
 
-static esp_err_t app_scheduler_load_configs(void)
+/* Persists `scope`, and `previous_scope` too when an entry moved out of it.
+   The destination is written first, so a reset in between leaves a duplicate
+   (resolved on load) rather than a lost entry. */
+static esp_err_t app_scheduler_persist(app_scheduler_scope_t scope, app_scheduler_scope_t previous_scope)
 {
+    esp_err_t err = app_scheduler_write_scope(scope);
+    if (err == ESP_OK && previous_scope != scope) {
+        err = app_scheduler_write_scope(previous_scope);
+    }
+    return err;
+}
+
+/*
+ * Adds one scope's stored entries to the pool, into free slots.
+ *
+ * An entry whose owner and tag are already loaded is skipped. That only happens
+ * when a move between scopes was cut short by a reset, and init loads app scope
+ * first because the only move this project makes is into app scope. The stale
+ * copy is then removed from this scope's blob; left there, it would come back
+ * as soon as the other scope is cleared (Clear App Data would restore an old
+ * alarm instead of the defaults). Runs from init, before the task exists.
+ */
+static esp_err_t app_scheduler_load_scope(app_scheduler_scope_t scope)
+{
+    const nvs_key_descriptor_t *key = app_scheduler_scope_key(scope);
     nvs_handle_t nvs_handle;
     app_scheduler_disk_t disk = { 0 };
     size_t disk_size = sizeof(disk);
+    size_t duplicates = 0;
+    size_t overflow = 0;
 
-    esp_err_t err = nvs_open_descriptor(NVS_KEY_APP_SCHEDULER_CONFIG.ns, NVS_READONLY, &nvs_handle);
+    esp_err_t err = nvs_open_descriptor(key->ns, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
         return err;
     }
 
-    err = nvs_get_blob(nvs_handle, NVS_KEY_APP_SCHEDULER_CONFIG.key, &disk, &disk_size);
+    err = nvs_get_blob(nvs_handle, key->key, &disk, &disk_size);
     nvs_close(nvs_handle);
     if (err != ESP_OK) {
         if (err == ESP_ERR_NVS_INVALID_LENGTH) {
-            nvs_health_report_invalid(&NVS_KEY_APP_SCHEDULER_CONFIG, err, "invalid scheduler blob length");
+            nvs_health_report_invalid(key, err, "invalid scheduler blob length");
         }
         return err;
     }
     if (disk_size != sizeof(disk) || disk.version != APP_SCHEDULER_CONFIG_VERSION) {
-        nvs_health_report_invalid(&NVS_KEY_APP_SCHEDULER_CONFIG, ESP_ERR_INVALID_VERSION, "invalid scheduler blob");
+        nvs_health_report_invalid(key, ESP_ERR_INVALID_VERSION, "invalid scheduler blob");
         return ESP_ERR_INVALID_VERSION;
     }
 
@@ -268,30 +409,56 @@ static esp_err_t app_scheduler_load_configs(void)
         if (disk.occupied[i] == 0) {
             continue;
         }
-        disk.configs[i].owner[APP_SCHEDULER_OWNER_MAX_LEN] = '\0';
-        disk.configs[i].tag[APP_SCHEDULER_TAG_MAX_LEN] = '\0';
-        disk.configs[i].weekday_mask = app_scheduler_normalize_weekday_mask(disk.configs[i].weekday_mask);
-        if (app_scheduler_validate_config(&disk.configs[i]) != ESP_OK) {
-            nvs_health_report_invalid(&NVS_KEY_APP_SCHEDULER_CONFIG, ESP_ERR_INVALID_ARG, "invalid scheduler entry");
+        app_scheduler_config_t config = app_scheduler_from_disk_config(&disk.configs[i], scope);
+        if (app_scheduler_validate_config(&config) != ESP_OK) {
+            nvs_health_report_invalid(key, ESP_ERR_INVALID_ARG, "invalid scheduler entry");
             return ESP_ERR_INVALID_ARG;
         }
     }
 
     portENTER_CRITICAL(&s_scheduler_lock);
-    memset(s_entries, 0, sizeof(s_entries));
     for (size_t i = 0; i < APP_SCHEDULER_MAX_ENTRIES; ++i) {
         if (disk.occupied[i] == 0) {
             continue;
         }
-        s_entries[i].occupied = true;
-        s_entries[i].config = disk.configs[i];
-        s_entries[i].config.owner[APP_SCHEDULER_OWNER_MAX_LEN] = '\0';
-        s_entries[i].config.tag[APP_SCHEDULER_TAG_MAX_LEN] = '\0';
-        s_entries[i].config.weekday_mask = app_scheduler_normalize_weekday_mask(s_entries[i].config.weekday_mask);
-        s_entries[i].state = app_scheduler_initial_state(&s_entries[i].config);
-        s_entries[i].last_event_stamp = -1;
+        app_scheduler_config_t config = app_scheduler_from_disk_config(&disk.configs[i], scope);
+        size_t target = APP_SCHEDULER_MAX_ENTRIES;
+        bool duplicate = false;
+        for (size_t j = 0; j < APP_SCHEDULER_MAX_ENTRIES; ++j) {
+            if (app_scheduler_entry_matches(&s_entries[j], config.owner, config.tag)) {
+                duplicate = true;
+                break;
+            }
+            if (target == APP_SCHEDULER_MAX_ENTRIES && !s_entries[j].occupied) {
+                target = j;
+            }
+        }
+        if (duplicate) {
+            ++duplicates;
+            continue;
+        }
+        if (target == APP_SCHEDULER_MAX_ENTRIES) {
+            ++overflow;
+            continue;
+        }
+        s_entries[target].occupied = true;
+        s_entries[target].config = config;
+        s_entries[target].state = app_scheduler_initial_state(&config);
+        s_entries[target].last_event_stamp = -1;
     }
     portEXIT_CRITICAL(&s_scheduler_lock);
+
+    if (overflow > 0) {
+        ESP_LOGW(TAG, "%s: no free slot for %u entries", key->ns, (unsigned)overflow);
+    }
+    /* Not while anything overflowed: the rewrite would drop those for good. */
+    if (duplicates > 0 && overflow == 0) {
+        ESP_LOGW(TAG, "%s: removing %u stale duplicate entries", key->ns, (unsigned)duplicates);
+        err = app_scheduler_write_scope(scope);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "%s: removing duplicates failed: %s", key->ns, esp_err_to_name(err));
+        }
+    }
     return ESP_OK;
 }
 
@@ -346,6 +513,7 @@ static void app_scheduler_process_entry(size_t index, const struct tm *timeinfo,
     app_scheduler_event_t event = { 0 };
     bool publish = false;
     bool persist = false;
+    app_scheduler_scope_t persist_scope = APP_SCHEDULER_SCOPE_APP;
 
     portENTER_CRITICAL(&s_scheduler_lock);
     if (index >= APP_SCHEDULER_MAX_ENTRIES ||
@@ -421,13 +589,13 @@ static void app_scheduler_process_entry(size_t index, const struct tm *timeinfo,
             s_entries[index].state = APP_SCHEDULER_STATE_WAITING;
         }
     }
+    persist_scope = s_entries[index].config.scope;
     portEXIT_CRITICAL(&s_scheduler_lock);
 
     if (publish) {
-        app_scheduler_publish_event(index, &event);
-        app_scheduler_dispatch_event(&event);
+        app_scheduler_deliver_event(index, &event);
         if (persist) {
-            (void)app_scheduler_write_configs();
+            (void)app_scheduler_write_scope(persist_scope);
         }
     }
 }
@@ -458,6 +626,10 @@ esp_err_t app_scheduler_init(void)
     if (s_scheduler_started) {
         return ESP_OK;
     }
+    /* Before loading: a load can rewrite a scope. Static, so it cannot fail. */
+    if (s_persist_mutex == NULL) {
+        s_persist_mutex = xSemaphoreCreateMutexStatic(&s_persist_mutex_storage);
+    }
 
     portENTER_CRITICAL(&s_scheduler_lock);
     memset(s_entries, 0, sizeof(s_entries));
@@ -466,13 +638,21 @@ esp_err_t app_scheduler_init(void)
     }
     portEXIT_CRITICAL(&s_scheduler_lock);
 
-    esp_err_t err = app_scheduler_load_configs();
-    if (err != ESP_OK &&
-        err != ESP_ERR_NVS_NOT_FOUND &&
-        err != ESP_ERR_NVS_INVALID_LENGTH &&
-        err != ESP_ERR_INVALID_VERSION &&
-        err != ESP_ERR_INVALID_ARG) {
-        ESP_RETURN_ON_ERROR(err, TAG, "load scheduler config failed");
+    /* App scope first; see app_scheduler_load_scope(). A bad blob in one scope
+       is reported to nvs_health and leaves the other scope's entries intact. */
+    static const app_scheduler_scope_t load_order[] = {
+        APP_SCHEDULER_SCOPE_APP,
+        APP_SCHEDULER_SCOPE_FEATURE,
+    };
+    for (size_t i = 0; i < (sizeof(load_order) / sizeof(load_order[0])); ++i) {
+        esp_err_t err = app_scheduler_load_scope(load_order[i]);
+        if (err != ESP_OK &&
+            err != ESP_ERR_NVS_NOT_FOUND &&
+            err != ESP_ERR_NVS_INVALID_LENGTH &&
+            err != ESP_ERR_INVALID_VERSION &&
+            err != ESP_ERR_INVALID_ARG) {
+            ESP_RETURN_ON_ERROR(err, TAG, "load scheduler config failed");
+        }
     }
 
     s_event_queue = xQueueCreate(APP_SCHEDULER_EVENT_QUEUE_LEN, sizeof(app_scheduler_event_t));
@@ -496,6 +676,7 @@ esp_err_t app_scheduler_upsert(const app_scheduler_config_t *config)
     size_t target = APP_SCHEDULER_MAX_ENTRIES;
     app_scheduler_config_t normalized = { 0 };
 
+    ESP_RETURN_ON_FALSE(s_scheduler_started, ESP_ERR_INVALID_STATE, TAG, "scheduler not initialized");
     ESP_RETURN_ON_ERROR(app_scheduler_validate_config(config), TAG, "invalid config");
     normalized = *config;
     normalized.owner[APP_SCHEDULER_OWNER_MAX_LEN] = '\0';
@@ -522,27 +703,31 @@ esp_err_t app_scheduler_upsert(const app_scheduler_config_t *config)
         return ESP_ERR_NO_MEM;
     }
 
+    app_scheduler_scope_t previous_scope = s_entries[target].occupied ? s_entries[target].config.scope
+                                                                      : normalized.scope;
     s_entries[target].occupied = true;
     s_entries[target].config = normalized;
     s_entries[target].state = app_scheduler_initial_state(&normalized);
     s_entries[target].last_event_stamp = -1;
     portEXIT_CRITICAL(&s_scheduler_lock);
 
-    return app_scheduler_write_configs();
+    return app_scheduler_persist(normalized.scope, previous_scope);
 }
 
 esp_err_t app_scheduler_remove(const char *owner, const char *tag)
 {
+    ESP_RETURN_ON_FALSE(s_scheduler_started, ESP_ERR_INVALID_STATE, TAG, "scheduler not initialized");
     ESP_RETURN_ON_FALSE(app_scheduler_valid_name(owner), ESP_ERR_INVALID_ARG, TAG, "owner is required");
     ESP_RETURN_ON_FALSE(app_scheduler_valid_name(tag), ESP_ERR_INVALID_ARG, TAG, "tag is required");
 
     portENTER_CRITICAL(&s_scheduler_lock);
     for (size_t i = 0; i < APP_SCHEDULER_MAX_ENTRIES; ++i) {
         if (app_scheduler_entry_matches(&s_entries[i], owner, tag)) {
+            app_scheduler_scope_t scope = s_entries[i].config.scope;
             memset(&s_entries[i], 0, sizeof(s_entries[i]));
             s_entries[i].last_event_stamp = -1;
             portEXIT_CRITICAL(&s_scheduler_lock);
-            return app_scheduler_write_configs();
+            return app_scheduler_write_scope(scope);
         }
     }
     portEXIT_CRITICAL(&s_scheduler_lock);
@@ -551,6 +736,7 @@ esp_err_t app_scheduler_remove(const char *owner, const char *tag)
 
 esp_err_t app_scheduler_set_enabled(const char *owner, const char *tag, bool enabled)
 {
+    ESP_RETURN_ON_FALSE(s_scheduler_started, ESP_ERR_INVALID_STATE, TAG, "scheduler not initialized");
     ESP_RETURN_ON_FALSE(app_scheduler_valid_name(owner), ESP_ERR_INVALID_ARG, TAG, "owner is required");
     ESP_RETURN_ON_FALSE(app_scheduler_valid_name(tag), ESP_ERR_INVALID_ARG, TAG, "tag is required");
 
@@ -560,8 +746,9 @@ esp_err_t app_scheduler_set_enabled(const char *owner, const char *tag, bool ena
             s_entries[i].config.enabled = enabled;
             s_entries[i].state = app_scheduler_initial_state(&s_entries[i].config);
             s_entries[i].last_event_stamp = -1;
+            app_scheduler_scope_t scope = s_entries[i].config.scope;
             portEXIT_CRITICAL(&s_scheduler_lock);
-            return app_scheduler_write_configs();
+            return app_scheduler_write_scope(scope);
         }
     }
     portEXIT_CRITICAL(&s_scheduler_lock);
@@ -572,8 +759,10 @@ esp_err_t app_scheduler_stop(const char *owner, const char *tag)
 {
     app_scheduler_event_t event = { 0 };
     size_t target = APP_SCHEDULER_MAX_ENTRIES;
+    app_scheduler_scope_t scope = APP_SCHEDULER_SCOPE_APP;
     time_t now = 0;
 
+    ESP_RETURN_ON_FALSE(s_scheduler_started, ESP_ERR_INVALID_STATE, TAG, "scheduler not initialized");
     ESP_RETURN_ON_FALSE(app_scheduler_valid_name(owner), ESP_ERR_INVALID_ARG, TAG, "owner is required");
     ESP_RETURN_ON_FALSE(app_scheduler_valid_name(tag), ESP_ERR_INVALID_ARG, TAG, "tag is required");
     time(&now);
@@ -594,6 +783,7 @@ esp_err_t app_scheduler_stop(const char *owner, const char *tag)
             }
             app_scheduler_make_event_locked(i, APP_SCHEDULER_EVENT_STOPPED_BY_USER, now, &event);
             target = i;
+            scope = s_entries[i].config.scope;
             break;
         }
     }
@@ -602,9 +792,8 @@ esp_err_t app_scheduler_stop(const char *owner, const char *tag)
     if (target == APP_SCHEDULER_MAX_ENTRIES) {
         return ESP_ERR_NOT_FOUND;
     }
-    app_scheduler_publish_event(target, &event);
-    app_scheduler_dispatch_event(&event);
-    return app_scheduler_write_configs();
+    app_scheduler_deliver_event(target, &event);
+    return app_scheduler_write_scope(scope);
 }
 
 esp_err_t app_scheduler_get_status(const char *owner, const char *tag, app_scheduler_status_t *status)

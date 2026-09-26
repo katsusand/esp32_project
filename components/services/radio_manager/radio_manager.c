@@ -36,8 +36,6 @@ static const nvs_key_descriptor_t NVS_KEY_RADIO_MANAGER_CONFIG = {
 #ifndef CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS
 #define CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS 30000
 #endif
-#define RADIO_MANAGER_NOTIFY_GRANTED 0x80000000UL
-#define RADIO_MANAGER_TOKEN_MASK     0x7fffffffUL
 #define RADIO_MANAGER_WIFI_WAIT_MS   1000U
 #define RADIO_MANAGER_CONFIG_VERSION 1U
 static const char *TAG = "radio_manager";
@@ -50,10 +48,15 @@ typedef struct {
 
 typedef struct {
     radio_manager_request_t request;
-    TaskHandle_t notify_task;
     uint32_t request_id;
+    bool has_deadline;
     TickType_t expires_at;
 } radio_manager_pending_request_t;
+
+typedef struct {
+    uint32_t request_id;
+    bool granted;
+} radio_manager_response_t;
 
 typedef enum {
     RADIO_MANAGER_CONTROL_RELEASE = 0,
@@ -75,6 +78,17 @@ typedef struct {
 
 static QueueHandle_t s_request_queue;
 static QueueHandle_t s_control_queue;
+/*
+ * One reply slot per client, written by the manager task, read by acquire().
+ *
+ * English contract: replies must not travel as task notifications. The calling
+ * task's notification is shared with everything else that signals it, and
+ * time_sync wakes its own task with xTaskNotifyGive(); one of those arriving
+ * mid-acquire used to read as a rejection, leaving a grant nobody would ever
+ * release. Each reply carries its request id, so a late answer to a request the
+ * client already gave up on is recognised and dropped.
+ */
+static QueueHandle_t s_response_queues[RADIO_MANAGER_CLIENT_COUNT];
 static TaskHandle_t s_task_handle;
 static uint32_t s_next_request_id = 1;
 static portMUX_TYPE s_request_id_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -141,8 +155,12 @@ static esp_err_t radio_manager_load_idle_timeout_if_needed(void)
 
     uint16_t timeout_seconds = CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS / 1000U;
     esp_err_t err = radio_manager_load_idle_timeout_blob(&timeout_seconds);
-    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
-        return err;
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK;
+    } else if (err != ESP_OK) {
+        /* Same as app_shell: settle on the default so a bad blob is reported
+           once, not on every pass of the manager loop. */
+        timeout_seconds = CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS / 1000U;
     }
 
     portENTER_CRITICAL(&s_request_id_lock);
@@ -151,7 +169,7 @@ static esp_err_t radio_manager_load_idle_timeout_if_needed(void)
         s_idle_timeout_loaded = true;
     }
     portEXIT_CRITICAL(&s_request_id_lock);
-    return ESP_OK;
+    return err;
 }
 
 static TickType_t radio_manager_idle_timeout_wait_ticks(void)
@@ -167,7 +185,7 @@ static uint32_t radio_manager_next_request_id(void)
     uint32_t id = 0;
     portENTER_CRITICAL(&s_request_id_lock);
     id = s_next_request_id++;
-    if (s_next_request_id == 0 || (s_next_request_id & RADIO_MANAGER_NOTIFY_GRANTED) != 0) {
+    if (s_next_request_id == 0) {
         s_next_request_id = 1;
     }
     portEXIT_CRITICAL(&s_request_id_lock);
@@ -181,7 +199,31 @@ static bool radio_manager_tick_reached(TickType_t now, TickType_t target)
 
 static bool radio_manager_request_expired(const radio_manager_pending_request_t *pending)
 {
-    return radio_manager_tick_reached(xTaskGetTickCount(), pending->expires_at);
+    /* portMAX_DELAY means "wait forever"; adding it to the tick count wrapped
+       into a deadline that had already passed. */
+    return pending->has_deadline &&
+           radio_manager_tick_reached(xTaskGetTickCount(), pending->expires_at);
+}
+
+static QueueHandle_t radio_manager_response_queue(radio_manager_client_t client)
+{
+    if ((size_t)client >= RADIO_MANAGER_CLIENT_COUNT) {
+        return NULL;
+    }
+    return s_response_queues[client];
+}
+
+static void radio_manager_respond(const radio_manager_pending_request_t *pending, bool granted)
+{
+    radio_manager_response_t response = {
+        .request_id = pending->request_id,
+        .granted = granted,
+    };
+    QueueHandle_t queue = radio_manager_response_queue(pending->request.client);
+
+    if (queue != NULL) {
+        (void)xQueueOverwrite(queue, &response);
+    }
 }
 
 static esp_err_t radio_manager_prepare_internet(bool *wifi_acquired)
@@ -239,24 +281,20 @@ static void radio_manager_grant_owner(radio_manager_owner_t *owner,
                                       const radio_manager_pending_request_t *pending)
 {
     owner->pending = *pending;
-    owner->token = pending->request_id & RADIO_MANAGER_TOKEN_MASK;
+    owner->token = pending->request_id;
     owner->granted_at = xTaskGetTickCount();
     owner->active = true;
 
-    xTaskNotify(pending->notify_task,
-                RADIO_MANAGER_NOTIFY_GRANTED | owner->token,
-                eSetValueWithOverwrite);
+    radio_manager_respond(pending, true);
 }
 
 static void radio_manager_reject_request(const radio_manager_pending_request_t *pending)
 {
-    if (pending == NULL || pending->notify_task == NULL) {
+    if (pending == NULL) {
         return;
     }
 
-    (void)xTaskNotify(pending->notify_task,
-                      pending->request_id & RADIO_MANAGER_TOKEN_MASK,
-                      eSetValueWithOverwrite);
+    radio_manager_respond(pending, false);
 }
 
 static bool radio_manager_control_matches_owner(const radio_manager_owner_t *owner,
@@ -373,6 +411,13 @@ esp_err_t radio_manager_start(void)
                                        sizeof(radio_manager_control_msg_t));
         ESP_RETURN_ON_FALSE(s_control_queue != NULL, ESP_ERR_NO_MEM, TAG, "control queue alloc failed");
     }
+    for (size_t i = 0; i < RADIO_MANAGER_CLIENT_COUNT; ++i) {
+        if (s_response_queues[i] == NULL) {
+            /* Length 1: a client has at most one acquire in flight. */
+            s_response_queues[i] = xQueueCreate(1, sizeof(radio_manager_response_t));
+            ESP_RETURN_ON_FALSE(s_response_queues[i] != NULL, ESP_ERR_NO_MEM, TAG, "response queue alloc failed");
+        }
+    }
     if (s_task_handle != NULL) {
         return ESP_OK;
     }
@@ -425,37 +470,54 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
     ESP_RETURN_ON_FALSE(s_request_queue != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
     ESP_RETURN_ON_FALSE(request->required != 0, ESP_ERR_INVALID_ARG, TAG, "required capability is empty");
 
+    QueueHandle_t response_queue = radio_manager_response_queue(request->client);
+    ESP_RETURN_ON_FALSE(response_queue != NULL, ESP_ERR_INVALID_ARG, TAG, "unknown client");
+
     uint32_t request_id = radio_manager_next_request_id();
+    TickType_t started_at = xTaskGetTickCount();
     radio_manager_pending_request_t pending = {
         .request = *request,
-        .notify_task = xTaskGetCurrentTaskHandle(),
         .request_id = request_id,
-        .expires_at = xTaskGetTickCount() + wait_ticks,
+        .has_deadline = wait_ticks != portMAX_DELAY,
+        .expires_at = started_at + wait_ticks,
     };
 
-    uint32_t notify_value = 0;
-    (void)xTaskNotifyWait(0, UINT32_MAX, &notify_value, 0);
+    /* An answer to an earlier, abandoned request may still be sitting here. */
+    (void)xQueueReset(response_queue);
 
     if (xQueueSend(s_request_queue, &pending, wait_ticks) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
-    if (xTaskNotifyWait(0, UINT32_MAX, &notify_value, wait_ticks) != pdTRUE) {
-        radio_manager_control_msg_t cancel = {
-            .type = RADIO_MANAGER_CONTROL_CANCEL,
-            .client = request->client,
-            .token = request_id & RADIO_MANAGER_TOKEN_MASK,
-        };
-        (void)xQueueSend(s_control_queue, &cancel, 0);
-        return ESP_ERR_TIMEOUT;
+    radio_manager_response_t response = { 0 };
+    while (true) {
+        TickType_t remaining = portMAX_DELAY;
+        if (pending.has_deadline) {
+            TickType_t elapsed = xTaskGetTickCount() - started_at;
+            remaining = elapsed < wait_ticks ? wait_ticks - elapsed : 0;
+        }
+
+        if (xQueueReceive(response_queue, &response, remaining) != pdTRUE) {
+            radio_manager_control_msg_t cancel = {
+                .type = RADIO_MANAGER_CONTROL_CANCEL,
+                .client = request->client,
+                .token = request_id,
+            };
+            (void)xQueueSend(s_control_queue, &cancel, 0);
+            return ESP_ERR_TIMEOUT;
+        }
+        if (response.request_id == request_id) {
+            break;
+        }
+        /* Late reply to a request this client already timed out on. */
     }
 
-    if ((notify_value & RADIO_MANAGER_NOTIFY_GRANTED) == 0) {
+    if (!response.granted) {
         return ESP_FAIL;
     }
 
     lease->client = request->client;
-    lease->token = notify_value & RADIO_MANAGER_TOKEN_MASK;
+    lease->token = request_id;
     return ESP_OK;
 }
 

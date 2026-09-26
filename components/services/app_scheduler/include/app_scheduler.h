@@ -34,6 +34,20 @@ typedef enum {
     APP_SCHEDULER_BEHAVIOR_LATCHED,
 } app_scheduler_behavior_t;
 
+/*
+ * Where a schedule is persisted, which decides what survives replacing the
+ * foreground app.
+ *
+ * English contract: APP (the default, 0) is stored in the "app_sched" NVS
+ * namespace, so Clear App Data removes it and a swapped-out app's schedules
+ * show up as leftover app data. FEATURE is stored in "ftr_sched" and survives
+ * an app swap; use it only for schedules owned by a reusable service.
+ */
+typedef enum {
+    APP_SCHEDULER_SCOPE_APP = 0,
+    APP_SCHEDULER_SCOPE_FEATURE,
+} app_scheduler_scope_t;
+
 typedef enum {
     APP_SCHEDULER_STATE_DISABLED = 0,
     APP_SCHEDULER_STATE_WAITING,
@@ -64,6 +78,7 @@ typedef struct {
     uint8_t weekday_mask;
     app_scheduler_time_of_day_t at;
     app_scheduler_time_of_day_t to;
+    app_scheduler_scope_t scope;
 } app_scheduler_config_t;
 
 typedef struct {
@@ -87,6 +102,12 @@ typedef struct {
 typedef void (*app_scheduler_event_handler_t)(const app_scheduler_event_t *event, void *ctx);
 
 esp_err_t app_scheduler_init(void);
+/*
+ * upsert / remove / set_enabled / stop return ESP_ERR_INVALID_STATE until
+ * app_scheduler_init() has loaded the stored schedules: each of them rewrites
+ * the stored set, so a write before the load would erase it. upsert also moves
+ * an existing entry to `config->scope`.
+ */
 esp_err_t app_scheduler_upsert(const app_scheduler_config_t *config);
 esp_err_t app_scheduler_remove(const char *owner, const char *tag);
 esp_err_t app_scheduler_set_enabled(const char *owner, const char *tag, bool enabled);

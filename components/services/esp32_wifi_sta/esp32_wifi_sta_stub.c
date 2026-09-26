@@ -28,6 +28,10 @@ esp_err_t esp32_wifi_sta_wait_connected(TickType_t wait_ticks)
     return ESP_ERR_NOT_SUPPORTED;
 }
 
+void esp32_wifi_sta_cancel_wait(void)
+{
+}
+
 esp_err_t esp32_wifi_sta_get_status(esp32_wifi_sta_status_t *status)
 {
     if (status == NULL) {

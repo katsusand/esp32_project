@@ -1,6 +1,7 @@
 #include <string.h>
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_wifi_types.h"
 #include "nvs.h"
 #include "nvs_health.h"
 #include "nvs_schema.h"
@@ -36,9 +37,15 @@ static bool wifi_profile_store_entry_valid(const wifi_profile_store_entry_disk_t
     return entry != NULL && entry->ssid[0] != '\0';
 }
 
+/*
+ * The value is copied straight from a scan record, so any authmode the driver
+ * can report must pass. Bounding by the last enumerator we happen to know
+ * rejected OWE, WAPI and the WPA3 SAE-EXT-KEY modes after a successful save,
+ * which turned a working profile into an invalid blob.
+ */
 static bool wifi_profile_store_authmode_valid(uint8_t authmode)
 {
-    return authmode <= (uint8_t)WIFI_AUTH_WAPI_PSK;
+    return authmode < (uint8_t)WIFI_AUTH_MAX;
 }
 
 static bool wifi_profile_store_blob_valid(const wifi_profile_store_blob_t *blob)

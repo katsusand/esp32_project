@@ -9,7 +9,11 @@ extern "C" {
 
 const app_shell_app_t *cyd_clock_app_get_app(void);
 
-/* See cyd_clock_settings_app_register(): call from the composition. */
+/*
+ * Registers the clock with app_registry together with what belongs to it: its
+ * settings screen and its alarms (cyd_clock_alarm). Call from the composition,
+ * after app_scheduler_init().
+ */
 esp_err_t cyd_clock_app_register(void);
 
 #ifdef __cplusplus

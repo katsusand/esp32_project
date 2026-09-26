@@ -62,6 +62,11 @@ APP_WIFI_STA=0 DEV=1 ninja -C build
 - `radio_manager`
 - `time_sync`
 - `cyd_wifi_setup`
+- `wifi_rssi_history`
+
+値は大文字小文字を区別せず、`0` / `false` / `off` / `no` のいずれかで無効になります。トップの `CMakeLists.txt` と各 component の `CMakeLists.txt` は同じ判定（`string(TOLOWER ...)` のあと `MATCHES "^(0|false|off|no)$"`）を使います。以前は component 側だけ大文字小文字を区別していたため、`APP_WIFI_STA=OFF` ではコードは Wi-Fi 無効としてコンパイルされる一方、実装と依存は Wi-Fi 有効側が選ばれていました。
+
+English supplement: Every place that reads `APP_WIFI_STA` must lower-case it before matching. Component CMakeLists read the environment variable directly because ESP-IDF evaluates them in a separate script-mode pass where the top-level cache variable is not visible.
 
 `APP_WIFI_STA=0` の時、clock composition は Wi-Fi startup 群を起動しません。アプリ側の API 呼び出しは維持できますが、Wi-Fi 接続、NTP 同期、Wi-Fi setup は動作しません。
 

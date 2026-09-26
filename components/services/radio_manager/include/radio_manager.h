@@ -11,6 +11,7 @@ extern "C" {
 
 typedef enum {
     RADIO_MANAGER_CLIENT_TIME_SYNC = 0,
+    RADIO_MANAGER_CLIENT_COUNT, /* not a client; sizes the per-client reply slots */
 } radio_manager_client_t;
 
 typedef enum {

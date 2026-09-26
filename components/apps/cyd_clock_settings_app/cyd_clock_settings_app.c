@@ -1,12 +1,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "app_scheduler.h"
 #include "app_shell.h"
+#include "cyd_clock_alarm.h"
 #include "cyd_clock_settings_app.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
@@ -41,9 +41,6 @@
 #define CYD_CLOCK_SETTINGS_ITEM_BUTTON_SPAN_COLS 3
 #define CYD_CLOCK_SETTINGS_ITEM_BUTTON_SPAN_ROWS 2
 #define CYD_CLOCK_SETTINGS_ITEM_BUTTON_SCALE 1
-#define CYD_CLOCK_ALARM_OWNER "clock"
-#define CYD_CLOCK_ALARM1_TAG "alarm1"
-#define CYD_CLOCK_ALARM2_TAG "alarm2"
 
 typedef enum {
     CYD_CLOCK_SETTINGS_PAGE_ALARM1 = 0,
@@ -58,74 +55,10 @@ typedef struct {
     uint16_t action_id;
 } cyd_clock_settings_touch_tracker_t;
 
-typedef enum {
-    CYD_CLOCK_SETTINGS_ALARM_ID_1 = 0,
-    CYD_CLOCK_SETTINGS_ALARM_ID_2,
-} cyd_clock_settings_alarm_id_t;
-
 static cyd_display_screen_t s_clock_settings_screen;
 static const app_shell_app_t *s_clock_settings_return_app;
 static cyd_clock_settings_page_t s_clock_settings_page = CYD_CLOCK_SETTINGS_PAGE_ALARM1;
 static cyd_clock_settings_touch_tracker_t s_clock_settings_touch_tracker;
-
-static const char *cyd_clock_settings_alarm_tag(cyd_clock_settings_alarm_id_t alarm_id)
-{
-    return alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1 ? CYD_CLOCK_ALARM1_TAG : CYD_CLOCK_ALARM2_TAG;
-}
-
-static app_scheduler_config_t cyd_clock_settings_default_alarm_config(cyd_clock_settings_alarm_id_t alarm_id)
-{
-    app_scheduler_config_t config = { 0 };
-
-    strlcpy(config.owner, CYD_CLOCK_ALARM_OWNER, sizeof(config.owner));
-    strlcpy(config.tag, cyd_clock_settings_alarm_tag(alarm_id), sizeof(config.tag));
-    config.mode = APP_SCHEDULER_MODE_INSTANT;
-    config.behavior = APP_SCHEDULER_BEHAVIOR_EVENT;
-    config.enabled = false;
-    config.repeat = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1;
-    config.weekday_mask = config.repeat ? APP_SCHEDULER_WEEKDAY_ALL : APP_SCHEDULER_WEEKDAY_ALL;
-    config.at.hour = 7;
-    config.at.minute = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1 ? 0 : 30;
-    config.at.second = 0;
-    return config;
-}
-
-static esp_err_t cyd_clock_settings_load_alarm_config(cyd_clock_settings_alarm_id_t alarm_id,
-                                                      app_scheduler_config_t *config)
-{
-    app_scheduler_status_t status = { 0 };
-    const char *tag = cyd_clock_settings_alarm_tag(alarm_id);
-
-    ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "config is null");
-
-    if (app_scheduler_get_status(CYD_CLOCK_ALARM_OWNER, tag, &status) == ESP_OK) {
-        *config = status.config;
-        return ESP_OK;
-    }
-
-    *config = cyd_clock_settings_default_alarm_config(alarm_id);
-    return ESP_OK;
-}
-
-static esp_err_t cyd_clock_settings_save_alarm_config(cyd_clock_settings_alarm_id_t alarm_id,
-                                                      const app_scheduler_config_t *config)
-{
-    app_scheduler_config_t normalized = { 0 };
-
-    ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "config is null");
-    normalized = *config;
-    strlcpy(normalized.owner, CYD_CLOCK_ALARM_OWNER, sizeof(normalized.owner));
-    strlcpy(normalized.tag, cyd_clock_settings_alarm_tag(alarm_id), sizeof(normalized.tag));
-    normalized.mode = APP_SCHEDULER_MODE_INSTANT;
-    normalized.behavior = APP_SCHEDULER_BEHAVIOR_EVENT;
-    normalized.repeat = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1;
-    /* Repeating alarms keep whatever the user picked, including nothing. A
-       one-shot alarm ignores weekdays entirely, so store the full mask rather
-       than an arbitrary subset. */
-    normalized.weekday_mask = normalized.repeat ? normalized.weekday_mask : APP_SCHEDULER_WEEKDAY_ALL;
-    normalized.at.second = 0;
-    return app_scheduler_upsert(&normalized);
-}
 
 static bool cyd_clock_settings_touch_confirmed_action(const cyd_input_event_t *event,
                                                       cyd_clock_settings_touch_tracker_t *tracker,
@@ -276,6 +209,12 @@ static const char *cyd_clock_settings_scheduler_behavior_text(app_scheduler_beha
     return behavior == APP_SCHEDULER_BEHAVIOR_LATCHED ? "l" : "e";
 }
 
+/* a: app scope (cleared with app data), f: feature scope. */
+static const char *cyd_clock_settings_scheduler_scope_text(app_scheduler_scope_t scope)
+{
+    return scope == APP_SCHEDULER_SCOPE_FEATURE ? "f" : "a";
+}
+
 static void cyd_clock_settings_format_scheduler_time(const app_scheduler_status_t *status,
                                                      char *text,
                                                      size_t text_size)
@@ -333,18 +272,22 @@ static esp_err_t cyd_clock_settings_render_scheduler_page(cyd_display_screen_t *
     }
 
     for (size_t i = 0; i < count && i < APP_SCHEDULER_MAX_ENTRIES; ++i) {
-        char line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+        /* Real lines are at most 40 characters (single-digit slot), but the
+           compiler sizes %u for any uint8_t. cyd_ui_add_text() clips to
+           CYD_DISPLAY_TEXT_MAX_LEN either way. */
+        char line[48] = { 0 };
         char time_text[16] = { 0 };
 
         cyd_clock_settings_format_scheduler_time(&statuses[i], time_text, sizeof(time_text));
         snprintf(line,
                  sizeof(line),
-                 "%u %.7s/%.8s %.1s%.1s %.4s %.11s",
+                 "%u %.7s/%.8s %.1s%.1s %.1s %.4s %.11s",
                  (unsigned)statuses[i].slot_id + 1U,
                  statuses[i].config.owner,
                  statuses[i].config.tag,
                  cyd_clock_settings_scheduler_mode_text(statuses[i].config.mode),
                  cyd_clock_settings_scheduler_behavior_text(statuses[i].config.behavior),
+                 cyd_clock_settings_scheduler_scope_text(statuses[i].config.scope),
                  cyd_clock_settings_scheduler_state_text(statuses[i].state),
                  time_text);
         cyd_ui_add_text(screen,
@@ -362,26 +305,26 @@ static esp_err_t cyd_clock_settings_render_scheduler_page(cyd_display_screen_t *
 }
 
 static esp_err_t cyd_clock_settings_render_alarm_page(cyd_display_screen_t *screen,
-                                                      cyd_clock_settings_alarm_id_t alarm_id)
+                                                      cyd_clock_alarm_id_t alarm_id)
 {
     char hour_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     char minute_value[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     cyd_ui_stepper_row_t rows[2] = { 0 };
-    app_scheduler_config_t alarm = { 0 };
-    uint16_t hour_down_action = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_HOUR_DOWN
+    cyd_clock_alarm_config_t alarm = { 0 };
+    uint16_t hour_down_action = alarm_id == CYD_CLOCK_ALARM_1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_HOUR_DOWN
                                                                           : CYD_CLOCK_SETTINGS_ACTION_ALARM2_HOUR_DOWN;
-    uint16_t hour_up_action = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_HOUR_UP
+    uint16_t hour_up_action = alarm_id == CYD_CLOCK_ALARM_1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_HOUR_UP
                                                                         : CYD_CLOCK_SETTINGS_ACTION_ALARM2_HOUR_UP;
-    uint16_t minute_down_action = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_DOWN
+    uint16_t minute_down_action = alarm_id == CYD_CLOCK_ALARM_1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_DOWN
                                                                             : CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_DOWN;
-    uint16_t minute_up_action = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_UP
+    uint16_t minute_up_action = alarm_id == CYD_CLOCK_ALARM_1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_UP
                                                                           : CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_UP;
 
-    ESP_RETURN_ON_ERROR(cyd_clock_settings_load_alarm_config(alarm_id, &alarm), TAG, "load alarm config failed");
+    ESP_RETURN_ON_ERROR(cyd_clock_alarm_get(alarm_id, &alarm), TAG, "load alarm config failed");
 
-    snprintf(hour_value, sizeof(hour_value), "%02u", (unsigned)alarm.at.hour);
-    snprintf(minute_value, sizeof(minute_value), "%02u", (unsigned)alarm.at.minute);
-    if (alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1) {
+    snprintf(hour_value, sizeof(hour_value), "%02u", (unsigned)alarm.hour);
+    snprintf(minute_value, sizeof(minute_value), "%02u", (unsigned)alarm.minute);
+    if (alarm_id == CYD_CLOCK_ALARM_1) {
         static const struct {
             const char *label;
             uint8_t mask;
@@ -417,7 +360,7 @@ static esp_err_t cyd_clock_settings_render_alarm_page(cyd_display_screen_t *scre
     rows[0] = (cyd_ui_stepper_row_t){
         .label_text = "Hour:",
         .value_text = hour_value,
-        .row = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1 ? 12 : 10,
+        .row = alarm_id == CYD_CLOCK_ALARM_1 ? 12 : 10,
         .label_col = CYD_CLOCK_SETTINGS_ITEM_LABEL_COL,
         .label_span_cols = CYD_CLOCK_SETTINGS_ITEM_LABEL_SPAN_COLS,
         .label_scale = 1,
@@ -443,7 +386,7 @@ static esp_err_t cyd_clock_settings_render_alarm_page(cyd_display_screen_t *scre
     rows[1] = (cyd_ui_stepper_row_t){
         .label_text = "Minute:",
         .value_text = minute_value,
-        .row = alarm_id == CYD_CLOCK_SETTINGS_ALARM_ID_1 ? 17 : 15,
+        .row = alarm_id == CYD_CLOCK_ALARM_1 ? 17 : 15,
         .label_col = CYD_CLOCK_SETTINGS_ITEM_LABEL_COL,
         .label_span_cols = CYD_CLOCK_SETTINGS_ITEM_LABEL_SPAN_COLS,
         .label_scale = 1,
@@ -482,11 +425,11 @@ static esp_err_t cyd_clock_settings_show(void)
     ESP_RETURN_ON_ERROR(cyd_clock_settings_add_frame(screen), TAG, "add frame failed");
 
     if (s_clock_settings_page == CYD_CLOCK_SETTINGS_PAGE_ALARM1) {
-        ESP_RETURN_ON_ERROR(cyd_clock_settings_render_alarm_page(screen, CYD_CLOCK_SETTINGS_ALARM_ID_1),
+        ESP_RETURN_ON_ERROR(cyd_clock_settings_render_alarm_page(screen, CYD_CLOCK_ALARM_1),
                             TAG,
                             "render alarm1 page failed");
     } else if (s_clock_settings_page == CYD_CLOCK_SETTINGS_PAGE_ALARM2) {
-        ESP_RETURN_ON_ERROR(cyd_clock_settings_render_alarm_page(screen, CYD_CLOCK_SETTINGS_ALARM_ID_2),
+        ESP_RETURN_ON_ERROR(cyd_clock_settings_render_alarm_page(screen, CYD_CLOCK_ALARM_2),
                             TAG,
                             "render alarm2 page failed");
     } else {
@@ -500,25 +443,25 @@ static esp_err_t cyd_clock_settings_show(void)
 
 static esp_err_t cyd_clock_settings_handle_alarm_action(uint16_t action_id, bool *handled)
 {
-    app_scheduler_config_t alarm1 = { 0 };
-    app_scheduler_config_t alarm2 = { 0 };
+    cyd_clock_alarm_config_t alarm1 = { 0 };
+    cyd_clock_alarm_config_t alarm2 = { 0 };
 
     ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
     *handled = false;
 
-    ESP_RETURN_ON_ERROR(cyd_clock_settings_load_alarm_config(CYD_CLOCK_SETTINGS_ALARM_ID_1, &alarm1),
+    ESP_RETURN_ON_ERROR(cyd_clock_alarm_get(CYD_CLOCK_ALARM_1, &alarm1),
                         TAG,
                         "get alarm1 config failed");
-    ESP_RETURN_ON_ERROR(cyd_clock_settings_load_alarm_config(CYD_CLOCK_SETTINGS_ALARM_ID_2, &alarm2),
+    ESP_RETURN_ON_ERROR(cyd_clock_alarm_get(CYD_CLOCK_ALARM_2, &alarm2),
                         TAG,
                         "get alarm2 config failed");
 
     if (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM1_HOUR_DOWN ||
         action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM1_HOUR_UP) {
-        alarm1.at.hour = (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM1_HOUR_DOWN)
-                             ? cyd_clock_settings_wrap_u8_down(alarm1.at.hour, 0, 23)
-                             : cyd_clock_settings_wrap_u8_up(alarm1.at.hour, 0, 23);
-        ESP_RETURN_ON_ERROR(cyd_clock_settings_save_alarm_config(CYD_CLOCK_SETTINGS_ALARM_ID_1, &alarm1),
+        alarm1.hour = (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM1_HOUR_DOWN)
+                          ? cyd_clock_settings_wrap_u8_down(alarm1.hour, 0, 23)
+                          : cyd_clock_settings_wrap_u8_up(alarm1.hour, 0, 23);
+        ESP_RETURN_ON_ERROR(cyd_clock_alarm_set(CYD_CLOCK_ALARM_1, &alarm1),
                             TAG,
                             "set alarm1 hour failed");
         ESP_RETURN_ON_ERROR(cyd_clock_settings_show(), TAG, "refresh clock settings failed");
@@ -528,10 +471,10 @@ static esp_err_t cyd_clock_settings_handle_alarm_action(uint16_t action_id, bool
 
     if (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_DOWN ||
         action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_UP) {
-        alarm1.at.minute = (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_DOWN)
-                               ? cyd_clock_settings_wrap_u8_down(alarm1.at.minute, 0, 59)
-                               : cyd_clock_settings_wrap_u8_up(alarm1.at.minute, 0, 59);
-        ESP_RETURN_ON_ERROR(cyd_clock_settings_save_alarm_config(CYD_CLOCK_SETTINGS_ALARM_ID_1, &alarm1),
+        alarm1.minute = (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_DOWN)
+                            ? cyd_clock_settings_wrap_u8_down(alarm1.minute, 0, 59)
+                            : cyd_clock_settings_wrap_u8_up(alarm1.minute, 0, 59);
+        ESP_RETURN_ON_ERROR(cyd_clock_alarm_set(CYD_CLOCK_ALARM_1, &alarm1),
                             TAG,
                             "set alarm1 minute failed");
         ESP_RETURN_ON_ERROR(cyd_clock_settings_show(), TAG, "refresh clock settings failed");
@@ -541,10 +484,10 @@ static esp_err_t cyd_clock_settings_handle_alarm_action(uint16_t action_id, bool
 
     if (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM2_HOUR_DOWN ||
         action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM2_HOUR_UP) {
-        alarm2.at.hour = (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM2_HOUR_DOWN)
-                             ? cyd_clock_settings_wrap_u8_down(alarm2.at.hour, 0, 23)
-                             : cyd_clock_settings_wrap_u8_up(alarm2.at.hour, 0, 23);
-        ESP_RETURN_ON_ERROR(cyd_clock_settings_save_alarm_config(CYD_CLOCK_SETTINGS_ALARM_ID_2, &alarm2),
+        alarm2.hour = (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM2_HOUR_DOWN)
+                          ? cyd_clock_settings_wrap_u8_down(alarm2.hour, 0, 23)
+                          : cyd_clock_settings_wrap_u8_up(alarm2.hour, 0, 23);
+        ESP_RETURN_ON_ERROR(cyd_clock_alarm_set(CYD_CLOCK_ALARM_2, &alarm2),
                             TAG,
                             "set alarm2 hour failed");
         ESP_RETURN_ON_ERROR(cyd_clock_settings_show(), TAG, "refresh clock settings failed");
@@ -554,10 +497,10 @@ static esp_err_t cyd_clock_settings_handle_alarm_action(uint16_t action_id, bool
 
     if (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_DOWN ||
         action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_UP) {
-        alarm2.at.minute = (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_DOWN)
-                               ? cyd_clock_settings_wrap_u8_down(alarm2.at.minute, 0, 59)
-                               : cyd_clock_settings_wrap_u8_up(alarm2.at.minute, 0, 59);
-        ESP_RETURN_ON_ERROR(cyd_clock_settings_save_alarm_config(CYD_CLOCK_SETTINGS_ALARM_ID_2, &alarm2),
+        alarm2.minute = (action_id == CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_DOWN)
+                            ? cyd_clock_settings_wrap_u8_down(alarm2.minute, 0, 59)
+                            : cyd_clock_settings_wrap_u8_up(alarm2.minute, 0, 59);
+        ESP_RETURN_ON_ERROR(cyd_clock_alarm_set(CYD_CLOCK_ALARM_2, &alarm2),
                             TAG,
                             "set alarm2 minute failed");
         ESP_RETURN_ON_ERROR(cyd_clock_settings_show(), TAG, "refresh clock settings failed");
@@ -596,7 +539,7 @@ static esp_err_t cyd_clock_settings_handle_alarm_action(uint16_t action_id, bool
 
         if (toggle_mask != 0) {
             alarm1.weekday_mask ^= toggle_mask;
-            ESP_RETURN_ON_ERROR(cyd_clock_settings_save_alarm_config(CYD_CLOCK_SETTINGS_ALARM_ID_1, &alarm1),
+            ESP_RETURN_ON_ERROR(cyd_clock_alarm_set(CYD_CLOCK_ALARM_1, &alarm1),
                                 TAG,
                                 "set alarm1 weekday mask failed");
             ESP_RETURN_ON_ERROR(cyd_clock_settings_show(), TAG, "refresh clock settings failed");

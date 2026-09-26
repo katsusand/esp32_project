@@ -1,4 +1,3 @@
-#include <string.h>
 #include "esp_check.h"
 #include "esp_log.h"
 #include "nvs_health.h"
@@ -10,7 +9,6 @@
 #include "cyd_clock_app.h"
 #include "cyd_clock_composition.h"
 #include "cyd_display.h"
-#include "cyd_speaker.h"
 #include "cyd_system_apps.h"
 #include "error_log_store.h"
 #include "sd_card_storage.h"
@@ -41,82 +39,6 @@
 #else
 #define CYD_CLOCK_COMPOSITION_HOME_APP() cyd_clock_app_get_app()
 #endif
-#define CYD_CLOCK_ALARM_OWNER "clock"
-#define CYD_CLOCK_ALARM1_TAG "alarm1"
-#define CYD_CLOCK_ALARM2_TAG "alarm2"
-#define CYD_CLOCK_ALARM_WEEKDAY_ALL 0x7fU
-
-static app_scheduler_config_t cyd_clock_composition_default_alarm_config(const char *tag)
-{
-    app_scheduler_config_t config = { 0 };
-
-    strlcpy(config.owner, CYD_CLOCK_ALARM_OWNER, sizeof(config.owner));
-    strlcpy(config.tag, tag, sizeof(config.tag));
-    config.mode = APP_SCHEDULER_MODE_INSTANT;
-    config.behavior = APP_SCHEDULER_BEHAVIOR_EVENT;
-    config.enabled = false;
-    config.repeat = strcmp(tag, CYD_CLOCK_ALARM1_TAG) == 0;
-    config.weekday_mask = config.repeat ? CYD_CLOCK_ALARM_WEEKDAY_ALL : APP_SCHEDULER_WEEKDAY_ALL;
-    config.at.hour = strcmp(tag, CYD_CLOCK_ALARM1_TAG) == 0 ? 7 : 7;
-    config.at.minute = strcmp(tag, CYD_CLOCK_ALARM1_TAG) == 0 ? 0 : 30;
-    config.at.second = 0;
-    return config;
-}
-
-static bool cyd_clock_composition_alarm_schedule_exists(const char *tag)
-{
-    app_scheduler_status_t status = { 0 };
-    return app_scheduler_get_status(CYD_CLOCK_ALARM_OWNER, tag, &status) == ESP_OK;
-}
-
-static esp_err_t cyd_clock_composition_upsert_alarm_config(const app_scheduler_config_t *config)
-{
-    ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "alarm config is null");
-    return app_scheduler_upsert(config);
-}
-
-static esp_err_t cyd_clock_composition_ensure_alarm_schedules(void)
-{
-    bool alarm1_exists = cyd_clock_composition_alarm_schedule_exists(CYD_CLOCK_ALARM1_TAG);
-    bool alarm2_exists = cyd_clock_composition_alarm_schedule_exists(CYD_CLOCK_ALARM2_TAG);
-
-    if (alarm1_exists && alarm2_exists) {
-        return ESP_OK;
-    }
-
-    if (!alarm1_exists) {
-        app_scheduler_config_t alarm1 = cyd_clock_composition_default_alarm_config(CYD_CLOCK_ALARM1_TAG);
-        ESP_RETURN_ON_ERROR(cyd_clock_composition_upsert_alarm_config(&alarm1),
-                            TAG,
-                            "upsert alarm1 failed");
-    }
-
-    if (!alarm2_exists) {
-        app_scheduler_config_t alarm2 = cyd_clock_composition_default_alarm_config(CYD_CLOCK_ALARM2_TAG);
-        ESP_RETURN_ON_ERROR(cyd_clock_composition_upsert_alarm_config(&alarm2),
-                            TAG,
-                            "upsert alarm2 failed");
-    }
-    return ESP_OK;
-}
-
-static void cyd_clock_composition_alarm_handler(const app_scheduler_event_t *event, void *ctx)
-{
-    (void)ctx;
-
-    if (event == NULL ||
-        event->type != APP_SCHEDULER_EVENT_FIRED ||
-        strcmp(event->owner, CYD_CLOCK_ALARM_OWNER) != 0) {
-        return;
-    }
-    if (strcmp(event->tag, CYD_CLOCK_ALARM1_TAG) != 0 &&
-        strcmp(event->tag, CYD_CLOCK_ALARM2_TAG) != 0) {
-        return;
-    }
-
-    ESP_LOGI(TAG, "alarm triggered: %s", event->tag);
-    (void)cyd_speaker_play_event(CYD_SPEAKER_EVENT_ALARM);
-}
 
 static bool cyd_clock_composition_home_return_allowed(void *ctx)
 {
@@ -175,8 +97,9 @@ static void cyd_clock_composition_preflight_nvs_health(void)
  */
 static void cyd_clock_composition_register_apps(void)
 {
-    /* Registering the clock also brings its settings screen; a product that
-       omits the clock gets neither. */
+    /* Registering the clock also brings its settings screen and its alarms; a
+       product that omits the clock gets none of them. Runs after
+       app_scheduler_init(), which the alarms need. */
     cyd_clock_composition_start_optional("register clock app failed",
                                          cyd_clock_app_register());
 }
@@ -203,23 +126,14 @@ esp_err_t cyd_clock_composition_start(void)
         (void)error_log_store_append_esp_err(TAG, "time tick start failed", err);
         ESP_RETURN_ON_ERROR(err, TAG, "time tick start failed");
     }
-    err = app_scheduler_init();
-    if (err != ESP_OK) {
-        (void)error_log_store_append_esp_err(TAG, "scheduler init failed", err);
-        ESP_RETURN_ON_ERROR(err, TAG, "scheduler init failed");
-    }
-    err = app_scheduler_register_handler(CYD_CLOCK_ALARM_OWNER,
-                                         cyd_clock_composition_alarm_handler,
-                                         NULL);
-    if (err != ESP_OK) {
-        (void)error_log_store_append_esp_err(TAG, "alarm handler register failed", err);
-        ESP_RETURN_ON_ERROR(err, TAG, "alarm handler register failed");
-    }
-    err = cyd_clock_composition_ensure_alarm_schedules();
-    if (err != ESP_OK) {
-        (void)error_log_store_append_esp_err(TAG, "alarm schedule init failed", err);
-        ESP_RETURN_ON_ERROR(err, TAG, "alarm schedule init failed");
-    }
+    /*
+     * The scheduler is a shared service; what runs on it belongs to the apps
+     * (the clock installs its alarms in cyd_clock_app_register()). Optional in
+     * the same sense as Wi-Fi: the clock face works without it. It used to be
+     * fatal, so an NVS write failure became a reboot loop that never reached
+     * the Initialize NVS screen meant to recover from exactly that.
+     */
+    cyd_clock_composition_start_optional("scheduler init failed", app_scheduler_init());
 
 #if APP_WIFI_STA_ENABLED && CONFIG_ESP32_WIFI_STA_AUTO_START
     cyd_clock_composition_start_optional("status indicator start failed", status_indicator_start());

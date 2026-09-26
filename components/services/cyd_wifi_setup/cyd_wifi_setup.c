@@ -363,7 +363,13 @@ static void wifi_wait_ok_dialog(const char *title, const char *message)
     const char *buttons[] = { "OK" };
     wifi_touch_mode_button_tracker_t touch_tracker = { 0 };
 
-    ESP_ERROR_CHECK(cyd_display_show_mode_screen(title, lines, 1, buttons, 1, 0));
+    esp_err_t err = cyd_display_show_mode_screen(title, lines, 1, buttons, 1, 0);
+    if (err != ESP_OK) {
+        /* Not ESP_ERROR_CHECK: a failed draw must not reboot the device. With no
+           OK button on screen there is nothing to wait for, so skip the dialog. */
+        ESP_LOGW(TAG, "show OK dialog failed: %s", esp_err_to_name(err));
+        return;
+    }
     while (true) {
         cyd_input_event_t event = { 0 };
         if (cyd_input_read_event(&event, pdMS_TO_TICKS(WIFI_IDLE_POLL_MS)) != ESP_OK) {

@@ -39,5 +39,6 @@ English supplement: This API avoids implicit file creation during append and avo
 ## Notes
 
 - 親ディレクトリの自動作成はまだ行いません
+- FATFS は ESP-IDF 既定の `CONFIG_FATFS_LFN_NONE` なので、path の各要素は 8.3 形式（拡張子の前 8 文字以内、拡張子 3 文字以内）に収めてください。長い名前は `fopen()` が失敗します。長い filename が必要なら `CONFIG_FATFS_LFN_HEAP` などを有効にします
 - binary の `size == 0` は空ファイル作成や truncate を含む明示操作として許可します
 - seek や read-modify-write をしたい場合は従来どおり `fopen()` 系を直接使ってください
