@@ -167,6 +167,22 @@ static TaskHandle_t s_display_owner_task_handle = nullptr;
 static cyd_display_screen_t s_current_screen = {};
 static cyd_display_screen_t s_previous_screen = {};
 static cyd_display_screen_t s_log_screen = {};
+typedef struct {
+    uint8_t col;
+    uint8_t row;
+    uint8_t span_cols;
+    uint8_t span_rows;
+    uint16_t action_id;
+} cyd_display_hit_button_t;
+
+/*
+ * Hit-test maps, guarded by s_hit_map_lock. Written when the owner submits a
+ * screen (and when the display task shows the log view), read by the owner's
+ * hit tests. See cyd_display_update_hit_map().
+ */
+static portMUX_TYPE s_hit_map_lock = portMUX_INITIALIZER_UNLOCKED;
+static cyd_display_hit_button_t s_hit_buttons[CYD_DISPLAY_MAX_WIDGETS];
+static size_t s_hit_button_count = 0;
 static cyd_display_grid_rect_t s_mode_button_rects[CYD_DISPLAY_MAX_MODE_BUTTONS];
 static size_t s_mode_button_count = 0;
 static bool s_has_previous_screen = false;
@@ -299,7 +315,7 @@ static void cyd_display_clear_mode_button_map(void);
 static int32_t cyd_display_col_to_px(uint8_t col);
 static int32_t cyd_display_row_to_px(uint8_t row);
 static bool cyd_display_mode_button_rect_for_count(size_t button_count, size_t index, cyd_display_grid_rect_t *rect);
-static void cyd_display_update_button_map_from_screen(const cyd_display_screen_t &screen);
+static void cyd_display_update_hit_map(const cyd_display_screen_t &screen);
 static void cyd_display_copy_text(char *dst, size_t dst_size, const char *src);
 static bool cyd_display_add_widget(cyd_display_screen_t *screen, const cyd_display_widget_t *widget);
 static bool cyd_display_widget_equals(const cyd_display_widget_t &lhs, const cyd_display_widget_t &rhs);
@@ -462,8 +478,11 @@ static void cyd_display_draw_calibration_marker(TDisplay &display,
 
 static void cyd_display_clear_mode_button_map(void)
 {
+    portENTER_CRITICAL(&s_hit_map_lock);
+    s_hit_button_count = 0;
     s_mode_button_count = 0;
     memset(s_mode_button_rects, 0, sizeof(s_mode_button_rects));
+    portEXIT_CRITICAL(&s_hit_map_lock);
 }
 
 static int32_t cyd_display_col_to_px(uint8_t col)
@@ -527,22 +546,46 @@ static uint16_t cyd_display_resolve_bg(const cyd_display_widget_t &widget)
     return widget.bg_color != 0 ? widget.bg_color : TFT_BLACK;
 }
 
-static void cyd_display_update_button_map_from_screen(const cyd_display_screen_t &screen)
+/*
+ * Hit tests answer from the screen the owner last submitted, under a lock.
+ *
+ * English contract: they used to read s_current_screen, which the display task
+ * overwrites (a ~3.4 KB xQueueReceive) while the owner task reads it, and which
+ * lags the owner's latest submit until the display task gets to it. The app
+ * decides what a tap means from what it submitted, so that is what the map
+ * reflects. Only enabled buttons are hit-testable.
+ */
+static void cyd_display_update_hit_map(const cyd_display_screen_t &screen)
 {
-    cyd_display_clear_mode_button_map();
+    portENTER_CRITICAL(&s_hit_map_lock);
+    s_hit_button_count = 0;
+    s_mode_button_count = 0;
+    memset(s_mode_button_rects, 0, sizeof(s_mode_button_rects));
 
-    for (size_t i = 0; i < screen.widget_count; ++i) {
+    for (size_t i = 0; i < screen.widget_count && i < CYD_DISPLAY_MAX_WIDGETS; ++i) {
         const cyd_display_widget_t &widget = screen.widgets[i];
-        if (widget.type != CYD_DISPLAY_WIDGET_BUTTON || !widget.enabled || s_mode_button_count >= CYD_DISPLAY_MAX_MODE_BUTTONS) {
+        if (widget.type != CYD_DISPLAY_WIDGET_BUTTON || !widget.enabled) {
             continue;
         }
 
-        s_mode_button_rects[s_mode_button_count].col = widget.col;
-        s_mode_button_rects[s_mode_button_count].row = widget.row;
-        s_mode_button_rects[s_mode_button_count].width = widget.span_cols;
-        s_mode_button_rects[s_mode_button_count].height = widget.span_rows;
-        ++s_mode_button_count;
+        s_hit_buttons[s_hit_button_count] = {
+            .col = widget.col,
+            .row = widget.row,
+            .span_cols = widget.span_cols,
+            .span_rows = widget.span_rows,
+            .action_id = widget.action_id,
+        };
+        ++s_hit_button_count;
+
+        if (s_mode_button_count < CYD_DISPLAY_MAX_MODE_BUTTONS) {
+            s_mode_button_rects[s_mode_button_count].col = widget.col;
+            s_mode_button_rects[s_mode_button_count].row = widget.row;
+            s_mode_button_rects[s_mode_button_count].width = widget.span_cols;
+            s_mode_button_rects[s_mode_button_count].height = widget.span_rows;
+            ++s_mode_button_count;
+        }
     }
+    portEXIT_CRITICAL(&s_hit_map_lock);
 }
 
 /*
@@ -1013,7 +1056,6 @@ static void cyd_display_flush_rects(const cyd_display_dirty_rect_t *rects, size_
 static void cyd_display_apply_screen(const cyd_display_screen_t &screen)
 {
     s_current_screen = screen;
-    cyd_display_update_button_map_from_screen(s_current_screen);
     size_t dirty_rect_count = 0;
     cyd_display_collect_dirty_rects(s_dirty_rects, &dirty_rect_count);
     cyd_display_flush_rects(s_dirty_rects, dirty_rect_count);
@@ -1081,6 +1123,9 @@ static void cyd_display_render_log_screen(void)
         cyd_display_add_widget(&s_log_screen, &line_widget);
     }
 
+    /* The log view replaces the app screen without a submit, so its (empty)
+       button set has to reach the hit map here. */
+    cyd_display_update_hit_map(s_log_screen);
     cyd_display_apply_screen(s_log_screen);
 }
 
@@ -1097,6 +1142,7 @@ static void cyd_display_handle_log_cmd(const cyd_display_log_cmd_t &cmd)
         case CYD_DISPLAY_LOG_CMD_HIDE: {
             s_log_state.visible = false;
             memset(&s_log_screen, 0, sizeof(s_log_screen));
+            cyd_display_update_hit_map(s_log_screen);
             cyd_display_apply_screen(s_log_screen);
             break;
         }
@@ -1228,31 +1274,40 @@ extern "C" bool cyd_display_hit_test_action(int16_t x, int16_t y, uint16_t *acti
         return false;
     }
 
-    for (size_t i = 0; i < s_current_screen.widget_count; ++i) {
-        const cyd_display_widget_t &widget = s_current_screen.widgets[i];
-        if (widget.type != CYD_DISPLAY_WIDGET_BUTTON || !widget.enabled) {
-            continue;
-        }
-        if (col >= widget.col && col < (widget.col + widget.span_cols) &&
-            row >= widget.row && row < (widget.row + widget.span_rows)) {
-            if (action_id != nullptr) {
-                *action_id = widget.action_id;
-            }
-            return true;
+    bool hit = false;
+    uint16_t hit_action_id = 0;
+    portENTER_CRITICAL(&s_hit_map_lock);
+    for (size_t i = 0; i < s_hit_button_count; ++i) {
+        const cyd_display_hit_button_t &button = s_hit_buttons[i];
+        if (col >= button.col && col < (button.col + button.span_cols) &&
+            row >= button.row && row < (button.row + button.span_rows)) {
+            hit = true;
+            hit_action_id = button.action_id;
+            break;
         }
     }
+    portEXIT_CRITICAL(&s_hit_map_lock);
 
-    return false;
+    if (hit && action_id != nullptr) {
+        *action_id = hit_action_id;
+    }
+    return hit;
 }
 
 extern "C" bool cyd_display_get_mode_button_grid_rect(size_t index, cyd_display_grid_rect_t *rect)
 {
-    if (rect == nullptr || index >= s_mode_button_count) {
+    if (rect == nullptr) {
         return false;
     }
 
-    *rect = s_mode_button_rects[index];
-    return true;
+    bool found = false;
+    portENTER_CRITICAL(&s_hit_map_lock);
+    if (index < s_mode_button_count) {
+        *rect = s_mode_button_rects[index];
+        found = true;
+    }
+    portEXIT_CRITICAL(&s_hit_map_lock);
+    return found;
 }
 
 extern "C" bool cyd_display_hit_test_mode_button(int16_t x, int16_t y, size_t *button_index)
@@ -1263,18 +1318,24 @@ extern "C" bool cyd_display_hit_test_mode_button(int16_t x, int16_t y, size_t *b
         return false;
     }
 
+    bool hit = false;
+    size_t hit_index = 0;
+    portENTER_CRITICAL(&s_hit_map_lock);
     for (size_t i = 0; i < s_mode_button_count; ++i) {
         const cyd_display_grid_rect_t &rect = s_mode_button_rects[i];
         if (col >= rect.col && col < (rect.col + rect.width) &&
             row >= rect.row && row < (rect.row + rect.height)) {
-            if (button_index != nullptr) {
-                *button_index = i;
-            }
-            return true;
+            hit = true;
+            hit_index = i;
+            break;
         }
     }
+    portEXIT_CRITICAL(&s_hit_map_lock);
 
-    return false;
+    if (hit && button_index != nullptr) {
+        *button_index = hit_index;
+    }
+    return hit;
 }
 
 extern "C" bool cyd_display_get_mode_button_bounds(size_t button_count,
@@ -1440,6 +1501,7 @@ extern "C" esp_err_t cyd_display_submit_screen(const cyd_display_screen_t *scree
     ESP_RETURN_ON_ERROR(cyd_display_check_owner(), TAG, "display owner required");
     ESP_RETURN_ON_FALSE(screen != nullptr, ESP_ERR_INVALID_ARG, TAG, "screen required");
 
+    cyd_display_update_hit_map(*screen);
     if (xQueueSendToBack(s_display_queue, screen, 0) == pdTRUE) {
         return ESP_OK;
     }

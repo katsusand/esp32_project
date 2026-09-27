@@ -6,6 +6,11 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include "sdkconfig.h"
+/* Same rule as esp32_wifi_sta.h: the real enum whenever esp_wifi is reachable,
+   the fallback only for the APP_WIFI_STA=0 stub build. */
+#if __has_include("esp_wifi_types.h")
+#include "esp_wifi_types.h"
+#endif
 #if !defined(__ESP_WIFI_TYPES_H__)
 #ifndef WIFI_AUTH_MODE_T_FALLBACK_DEFINED
 #define WIFI_AUTH_MODE_T_FALLBACK_DEFINED

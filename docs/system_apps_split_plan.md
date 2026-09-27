@@ -99,7 +99,7 @@ English supplement: This is a translation-unit split only. It does not split the
 
 次に構造整理を進めるなら、以下が候補です。
 
-- clock alarm は `app_scheduler` へ統合済み。`cyd_alarm` の再導入はしない
+- clock alarm の保存は `app_scheduler` へ統合済み。独自の保存を持つ `cyd_alarm` の再導入はしない。既定値と handler は、状態を持たない時計の一部 `cyd_clock_alarm` にまとめてある ([cyd_clock_alarm.md](cyd_clock_alarm.md))
 - `cyd_system_apps` の network 設定が Wi-Fi 前提でよいか、派生プロジェクト向けに optional 化するかを検討する
 - `products/` の composition を増やす場合に、共通 composition helper が本当に必要になるかを見極める
 

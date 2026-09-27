@@ -28,6 +28,27 @@ English supplement: The scheduler is a system service. Applications should ident
 
 English supplement: `owner/tag` is the stable application contract. `slot_id` is diagnostic metadata and may change when entries are removed and recreated.
 
+## Scope
+
+各スケジュールは `scope` を持ち、どの NVS namespace に保存されるかが決まります。
+
+| Scope | NVS namespace | Clear App Data | 用途 |
+| --- | --- | --- | --- |
+| `APP_SCHEDULER_SCOPE_APP` (既定値 `0`) | `app_sched` | 消える | アプリが所有する schedule。例: 時計のアラーム |
+| `APP_SCHEDULER_SCOPE_FEATURE` | `ftr_sched` | 残る | 再利用 service が所有する schedule |
+
+`scope` を指定せずゼロ初期化した config は `APP` になります。アプリの schedule はアプリのデータと一緒に消せるべきなので、残したい側 (service) だけが `FEATURE` を明示します。
+
+メインアプリを差し替えると、前のアプリの `APP` scope schedule は handler のいない「残骸」として slot を占有し続けます。`SCHED` 診断ページで確認でき、Clear App Data で消えます。
+
+English contract: `scope` selects the namespace, not behavior. APP (zero default) lives in `app_sched` and is removed by Clear App Data together with the rest of the app's data; FEATURE lives in `ftr_sched` and survives it. After an app swap, the old app's APP-scope entries stay as ownerless leftovers until Clear App Data.
+
+`app_scheduler_upsert()` で既存 entry の `scope` を変えると、その entry は新しい scope へ移動します。移動先を先に書き込むため、途中でリセットされても entry は失われず、両方の scope に同じ `owner/tag` が残るだけです。起動時は `APP` を先に読み、`FEATURE` 側の重複は読み捨てたうえで `ftr_sched` から削除します。
+
+scope 導入前に保存された schedule はすべて `ftr_sched` にあり、`FEATURE` として読み込まれます。所有者が必要に応じて `APP` へ移します。時計のアラームは `cyd_clock_alarm_register()` がこれを行います。
+
+English supplement: Moving scopes writes the destination first, so an interrupted move leaves a duplicate rather than a lost entry. Init loads APP before FEATURE and removes the stale FEATURE copy, because the only move this project makes is into APP scope.
+
 ## Modes
 
 `app_scheduler` には2つの mode があります。
@@ -114,7 +135,9 @@ English supplement: `STOPPED` suppresses reactivation only until the current win
 
 アプリは通常 `app_scheduler_register_handler()` で owner ごとの callback を登録します。複数のアプリが横断的にイベントを監視したい場合は `app_scheduler_receive_event()` でキューから読むこともできます。
 
-イベントキュー長は内部で `16` 件です。キューが満杯でイベントを積めなかった場合、その schedule の `missed_event_count` が増えます。この値は `app_scheduler_get_status()` または `app_scheduler_list()` で確認できます。
+イベントキュー長は内部で `16` 件です。キューが満杯で積めず、かつ owner handler も登録されていない場合に限り、その schedule の `missed_event_count` が増えます。handler が受け取ったイベントは、キューが満杯でも取りこぼし扱いにしません。この値は `app_scheduler_get_status()` または `app_scheduler_list()` で確認できます。
+
+キューは読む側がいなければ 16 件で満杯のままになります。以前はその状態で発火のたびに `event queue full` を出し、handler が処理していても `missed_event_count` を加算していました。
 
 English supplement: The callback is dispatched immediately after publishing the event to the queue. Callback code should return quickly and should hand off long work to its own task or app logic.
 
@@ -126,11 +149,15 @@ English supplement: The callback is dispatched immediately after publishing the 
 #include "app_scheduler.h"
 ```
 
-初期化は起動処理で一度だけ行います。この時計製品では `cyd_clock_composition` が `app_scheduler_init()` のあとに clock alarm 用 entry の存在確認を行います。
+初期化は起動処理で一度だけ行います。この時計製品では `cyd_clock_composition` が `app_scheduler_init()` を呼び、そのあとで `cyd_clock_app_register()` が時計のアラーム (`cyd_clock_alarm`) を登録します。scheduler 自身はどのアプリの schedule も作りません。
 
 ```c
 ESP_ERROR_CHECK(app_scheduler_init());
 ```
+
+`app_scheduler_upsert()`、`app_scheduler_remove()`、`app_scheduler_set_enabled()`、`app_scheduler_stop()` は、init 前に呼ぶと `ESP_ERR_INVALID_STATE` を返します。これらは保存済みの schedule 群を書き直すため、読み込み前に書くと保存内容を消してしまうからです。
+
+English contract: mutators return `ESP_ERR_INVALID_STATE` before `app_scheduler_init()`. Each rewrites a scope's stored set, so writing before the load would erase it. Register app schedules after init.
 
 登録または更新は `app_scheduler_upsert()` を使います。同じ `owner/tag` がすでにある場合は更新され、なければ空き slot に追加されます。
 
@@ -144,6 +171,7 @@ app_scheduler_config_t config = {
     .repeat = true,
     .weekday_mask = APP_SCHEDULER_WEEKDAY_ALL,
     .at = { .hour = 8, .minute = 0, .second = 0 },
+    .scope = APP_SCHEDULER_SCOPE_APP,
 };
 
 ESP_ERROR_CHECK(app_scheduler_upsert(&config));
@@ -184,7 +212,7 @@ if (app_scheduler_get_status("clock", "alarm1", &status) == ESP_OK) {
 
 ## Instant Example
 
-時計アプリの Alarm 1 のような繰り返しアラームは `INSTANT` + `EVENT` + `repeat = true` で登録します。
+時計アプリの Alarm 1 のような繰り返しアラームは `INSTANT` + `EVENT` + `repeat = true` で登録します。以下は scheduler API の説明用の例です。実際の時計アラームは `cyd_clock_alarm` が登録し、その既定値と設定はそこにだけ書かれています ([cyd_clock_alarm.md](cyd_clock_alarm.md))。
 
 ```c
 app_scheduler_config_t alarm1 = {
@@ -333,19 +361,25 @@ owner callback は scheduler task から呼ばれます。callback 内では長�
 3. `event->type` で ON/OFF/鳴動などの最小処理を行う
 4. 時間のかかる処理は自分の task、queue、app state へ渡す
 
-時計アプリでは `owner = "clock"` の handler を登録し、`alarm1` と `alarm2` の `FIRED` で speaker alarm event を再生します。latched instant を使う場合は `STARTED` で鳴動開始、`STOPPED_BY_USER` で鳴動停止にします。
+時計では `cyd_clock_alarm` が `owner = "clock"` の handler を登録し、`alarm1` と `alarm2` の `FIRED` で speaker alarm event を再生します。latched instant を使う場合は `STARTED` で鳴動開始、`STOPPED_BY_USER` で鳴動停止にします。
 
 English supplement: Keep scheduler callbacks short. They are notification hooks, not worker threads.
 
 ## Persistence
 
-`app_scheduler_upsert()`、`app_scheduler_remove()`、`app_scheduler_set_enabled()` は scheduler の NVS 設定を保存します。
+`app_scheduler_upsert()`、`app_scheduler_remove()`、`app_scheduler_set_enabled()`、`app_scheduler_stop()`、および one-shot の自動 disable は scheduler の NVS 設定を保存します。書き直すのは変更された entry の scope の blob だけです (scope を移した upsert は移動先と移動元の 2 つ)。entry がなくなった scope は key ごと削除します。
 
 保存されるのは scheduler の config です。`fired_count`、`missed_event_count`、`last_event_at` のような runtime status は再起動でリセットされます。
 
 起動時は NVS から config を読み戻し、各 entry は初期状態へ戻ります。
 
-English supplement: Runtime counters are diagnostic only and are not part of the persisted contract.
+on-flash 形式は API の `app_scheduler_config_t` とは別の固定 struct (`app_scheduler_disk_config_t` 52 byte × 5 件、blob 全体 272 byte、key `config_v1`) で、`ESP_STATIC_ASSERT` でサイズを固定しています。`scope` は blob ではなく namespace で表すので、scope 導入前の blob もそのまま読めます。API struct に field を足しても保存形式は変わりません。
+
+保存は snapshot と NVS 書き込みを 1 つの mutex で直列化しています。scheduler task (one-shot の disable) と UI 操作が同時に保存しても、古い snapshot が後から書かれることはありません。
+
+Clear App Data は `app_sched` を消したあと約 2 秒のメッセージ表示を経て再起動します。この間に one-shot が発火すると、その disable の保存で `app_sched` が書き戻されます。実害はそのアラーム設定が残る程度です。
+
+English supplement: Runtime counters are diagnostic only and are not part of the persisted contract. The on-flash layout is frozen separately from the API struct; changing it requires a new version or key. Writes are serialized, so the last snapshot taken is the last one written.
 
 ## Time Assumptions
 
@@ -362,9 +396,11 @@ English supplement: The scheduler intentionally ignores obviously invalid wall-c
 表示内容は以下です。
 
 - 登録数: `schedules: n/5`
-- 各 entry: `slot owner/tag mode+behavior state time`
+- 各 entry: `slot owner/tag mode+behavior scope state time`
 
 `mode+behavior` は短縮表示です。`ie` は instant/event、`il` は instant/latched、`we` は window/event を表します。
+
+`scope` は `a` (app scope、`app_sched`) または `f` (feature scope、`ftr_sched`) です。アプリ差し替え後の残骸や、scope 導入前の保存データかどうかをここで確認できます。
 
 表示幅の都合で `owner` や `tag` は短縮されます。詳細な状態をアプリ側で確認する場合は `app_scheduler_get_status()` または `app_scheduler_list()` を使ってください。
 
@@ -376,6 +412,9 @@ English supplement: Scheduler diagnostics are product UI in this project. Keep r
 
 - `freertos`
 - `nvs_flash`
+- `nvs_health`
+- `nvs_schema`
+- `time_tick`
 
 利用するコンポーネントは `CMakeLists.txt` の `REQUIRES` に `app_scheduler` を追加してください。
 

@@ -103,7 +103,9 @@ typedef struct {
     float touch_affine[6];
     cyd_input_touch_state_t touch_state;
     TickType_t last_activity_tick;
+    volatile bool pause_requested;
     SemaphoreHandle_t mutex;
+    SemaphoreHandle_t pause_ack;
     QueueHandle_t event_queue;
     TaskHandle_t task_handle;
 } cyd_input_state_t;
@@ -142,15 +144,28 @@ static cyd_input_state_t s_input = {
         .tick = 0,
     },
     .last_activity_tick = 0,
+    .pause_requested = false,
     .mutex = NULL,
+    .pause_ack = NULL,
     .event_queue = NULL,
     .task_handle = NULL,
 };
+
+#define CYD_INPUT_PAUSE_ACK_TIMEOUT_MS 1000
 
 static esp_err_t cyd_input_check_ready(void)
 {
     ESP_RETURN_ON_FALSE(s_input.initialized, ESP_ERR_INVALID_STATE, TAG, "input not initialized");
     return ESP_OK;
+}
+
+/* At CONFIG_FREERTOS_HZ=100 a few milliseconds round down to zero ticks, and
+   vTaskDelay(0) only yields: a wait loop built on it spins its core and starves
+   that core's IDLE task into task watchdog warnings. */
+static void cyd_input_delay_ms(uint32_t delay_ms)
+{
+    TickType_t ticks = pdMS_TO_TICKS(delay_ms);
+    vTaskDelay(ticks > 0 ? ticks : 1);
 }
 
 static uint16_t cyd_input_u16_min(uint16_t lhs, uint16_t rhs)
@@ -1006,13 +1021,13 @@ static esp_err_t cyd_input_touch_collect_calibration_point(uint16_t *raw_x, uint
     for (int j = 0; j < 8; ++j) {
         do {
             do {
-                vTaskDelay(pdMS_TO_TICKS(2));
+                cyd_input_delay_ms(2);
                 ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(&sample_x, &sample_y, &sample_pressed),
                                     TAG,
                                     "touch raw read failed");
             } while (!sample_pressed);
 
-            vTaskDelay(pdMS_TO_TICKS(10));
+            cyd_input_delay_ms(10);
             ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(&confirm_x, &confirm_y, &confirm_pressed),
                                 TAG,
                                 "touch raw confirm failed");
@@ -1041,13 +1056,47 @@ static esp_err_t cyd_input_touch_wait_for_release(void)
 #if CONFIG_CYD_TOUCH_ENABLED
     bool pressed = false;
     do {
-        vTaskDelay(pdMS_TO_TICKS(1));
+        cyd_input_delay_ms(1);
         ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(NULL, NULL, &pressed), TAG, "touch release read failed");
     } while (pressed);
     return ESP_OK;
 #else
     return ESP_ERR_NOT_SUPPORTED;
 #endif
+}
+
+/*
+ * Parks the input task at the top of its loop, where it holds neither the state
+ * mutex nor a half-clocked XPT2046 frame, so the caller can drive the touch
+ * controller directly.
+ *
+ * English contract: this replaced vTaskSuspend(). Suspending from outside could
+ * stop the task while it held s_input.mutex, so the next xSemaphoreTake on it
+ * never returned, or midway through the 57-byte frame, leaving the controller
+ * in PD=01 with PENIRQ disabled so no touch was ever reported again.
+ */
+static void cyd_input_pause_task(void)
+{
+    if (s_input.task_handle == NULL) {
+        return;
+    }
+
+    (void)xSemaphoreTake(s_input.pause_ack, 0);
+    s_input.pause_requested = true;
+    xTaskNotifyGive(s_input.task_handle);
+    if (xSemaphoreTake(s_input.pause_ack, pdMS_TO_TICKS(CYD_INPUT_PAUSE_ACK_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "input task did not park within %d ms; continuing", CYD_INPUT_PAUSE_ACK_TIMEOUT_MS);
+    }
+}
+
+static void cyd_input_resume_task(void)
+{
+    if (s_input.task_handle == NULL) {
+        return;
+    }
+
+    s_input.pause_requested = false;
+    xTaskNotifyGive(s_input.task_handle);
 }
 
 static void cyd_input_task(void *arg)
@@ -1065,6 +1114,15 @@ static void cyd_input_task(void *arg)
 
     while (true) {
         APP_STACK_MONITOR_CHECK(TAG, "cyd_input", 30000);
+
+        if (s_input.pause_requested) {
+            xSemaphoreGive(s_input.pause_ack);
+            while (s_input.pause_requested) {
+                (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            }
+            last_wake = xTaskGetTickCount();
+            continue;
+        }
 
         if (boot_low_guard_active) {
             if (cyd_input_touch_irq_level() != 0) {
@@ -1293,6 +1351,9 @@ esp_err_t cyd_input_init(void)
     s_input.mutex = xSemaphoreCreateMutex();
     ESP_RETURN_ON_FALSE(s_input.mutex != NULL, ESP_ERR_NO_MEM, TAG, "mutex create failed");
 
+    s_input.pause_ack = xSemaphoreCreateBinary();
+    ESP_RETURN_ON_FALSE(s_input.pause_ack != NULL, ESP_ERR_NO_MEM, TAG, "pause semaphore create failed");
+
     s_input.event_queue = xQueueCreate(CONFIG_CYD_INPUT_EVENT_QUEUE_LENGTH, sizeof(cyd_input_event_t));
     ESP_RETURN_ON_FALSE(s_input.event_queue != NULL, ESP_ERR_NO_MEM, TAG, "queue create failed");
 
@@ -1474,26 +1535,13 @@ esp_err_t cyd_input_discard_pending_events(void)
     return ESP_OK;
 }
 
-esp_err_t cyd_input_run_touch_calibration(void)
-{
 #if CONFIG_CYD_TOUCH_ENABLED
-    uint16_t params[8] = { 0 };
-    bool task_suspended = false;
+/* Shows the four targets and collects one raw point per target. */
+static esp_err_t cyd_input_touch_collect_calibration_set(const int32_t *target_x,
+                                                         const int32_t *target_y,
+                                                         uint16_t *params)
+{
     static const uint8_t CAL_RADIUS = 14;
-    int32_t target_x[4] = { 0 };
-    int32_t target_y[4] = { 0 };
-
-    for (size_t i = 0; i < 4; ++i) {
-        cyd_input_touch_get_calibration_target(i, &target_x[i], &target_y[i]);
-    }
-
-    if (s_input.task_handle != NULL) {
-        vTaskSuspend(s_input.task_handle);
-        task_suspended = true;
-    }
-    if (cyd_input_touch_irq_enabled()) {
-        gpio_intr_disable((gpio_num_t)CONFIG_CYD_TOUCH_PIN_INT);
-    }
 
     esp_err_t err = cyd_display_show_touch_calibration_screen();
     if (err == ESP_OK) {
@@ -1517,14 +1565,57 @@ esp_err_t cyd_input_run_touch_calibration(void)
 
         err = cyd_input_touch_wait_for_release();
     }
-    if (err == ESP_OK) {
-        err = cyd_input_touch_calibration_set_runtime(params);
+    return err;
+}
+#endif
+
+esp_err_t cyd_input_run_touch_calibration(void)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    uint16_t params[8] = { 0 };
+    int32_t target_x[4] = { 0 };
+    int32_t target_y[4] = { 0 };
+
+    for (size_t i = 0; i < 4; ++i) {
+        cyd_input_touch_get_calibration_target(i, &target_x[i], &target_y[i]);
+    }
+
+    cyd_input_pause_task();
+    if (cyd_input_touch_irq_enabled()) {
+        gpio_intr_disable((gpio_num_t)CONFIG_CYD_TOUCH_PIN_INT);
+    }
+
+    /*
+     * The set is validated before it is applied or saved, and a bad one is
+     * simply asked for again. Validation used to run only on load, so a
+     * degenerate set (the same spot tapped four times) was saved, left the
+     * running session with an unusable mapping, and on the next boot tripped
+     * the forced Initialize NVS flow.
+     */
+    esp_err_t err = ESP_OK;
+    while (true) {
+        err = cyd_input_touch_collect_calibration_set(target_x, target_y, params);
+        if (err != ESP_OK) {
+            break;
+        }
+        if (cyd_input_touch_calibration_params_valid(params) &&
+            cyd_input_touch_calibration_set_runtime(params) == ESP_OK) {
+            break;
+        }
+        ESP_LOGW(TAG,
+                 "touch calibration rejected: [%u,%u] [%u,%u] [%u,%u] [%u,%u]; asking again",
+                 params[0],
+                 params[1],
+                 params[2],
+                 params[3],
+                 params[4],
+                 params[5],
+                 params[6],
+                 params[7]);
     }
     (void)cyd_display_invalidate();
     cyd_input_reset_touch_runtime_state();
-    if (task_suspended) {
-        vTaskResume(s_input.task_handle);
-    }
+    cyd_input_resume_task();
     ESP_RETURN_ON_ERROR(err, TAG, "touch calibration failed");
     return cyd_input_touch_calibration_save_to_nvs(params);
 #else

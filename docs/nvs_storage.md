@@ -66,8 +66,13 @@ prefix が 4 文字なので、component 側に使えるのは 11 文字です�
 | `ftr_sched` | feature | `app_scheduler` |
 | `ftr_timesync` | feature | `time_sync` |
 | `ftr_wifi` | feature | `wifi_profile_store` |
+| `app_sched` | app | `app_scheduler` (app scope の schedule) |
 
-`app_` の namespace は現在ありません。時計アプリは NVS を使わないためです。
+`app_scheduler` は 2 つの namespace を持ち、schedule ごとの `scope` で保存先を選びます ([app_scheduler.md](app_scheduler.md#scope))。`app_sched` の中身は現在、時計のアラーム (`cyd_clock_alarm`) だけです。時計アプリ自身は NVS を直接使いません。
+
+`Clear App Data` で `app_sched` を消しても、次回起動時に時計が既定の (無効な) アラームを作り直すので、namespace はすぐに戻ります。消えるのはユーザーが設定した時刻と曜日です。
+
+English supplement: `app_sched` belongs to `app_scheduler`, but its contents belong to apps. Clearing it resets the clock's alarms to their disabled defaults; the namespace itself reappears on the next boot.
 
 タッチ補正は以前 `cyd_display` の namespace に間借りしていましたが、所有者は `cyd_input` なので `sys_input` として分離しました。
 

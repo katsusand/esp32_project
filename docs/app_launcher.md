@@ -54,12 +54,15 @@ launcher は `app_registry` の内容をそのまま並べるだけなので、*
 ```c
 static void cyd_clock_composition_register_apps(void)
 {
+    /* Registering the clock also brings its settings screen and its alarms; a
+       product that omits the clock gets none of them. Runs after
+       app_scheduler_init(), which the alarms need. */
     cyd_clock_composition_start_optional("register clock app failed",
                                          cyd_clock_app_register());
-    cyd_clock_composition_start_optional("register clock settings app failed",
-                                         cyd_clock_settings_app_register());
 }
 ```
+
+`Clock Settings` は独立した entry ではなく、`cyd_clock_app_register()` が時計の `settings_app` として紐付けます。時計のアラーム (`cyd_clock_alarm`) も同じ関数がインストールします。
 
 English contract: apps expose a `*_register()` function; the composition decides which apps exist. Registration must never depend on which app happens to run.
 

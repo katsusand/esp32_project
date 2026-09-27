@@ -229,9 +229,17 @@ esp_err_t system_boot_start(system_boot_result_t *result)
         );
     }
 
-    ESP_RETURN_ON_ERROR(system_boot_run_touch_calibration_if_needed(),
-                        TAG,
-                        "initial touch calibration failed");
+    /*
+     * Not fatal. A bad tap set is already asked for again inside the
+     * calibration; what can still fail here is saving it (NVS), and failing the
+     * boot turned that into a reboot loop. The session keeps the calibration it
+     * just applied, and without a saved one the clock app routes to the
+     * calibration app again at its first enter.
+     */
+    esp_err_t calibration_err = system_boot_run_touch_calibration_if_needed();
+    if (calibration_err != ESP_OK) {
+        ESP_LOGW(TAG, "initial touch calibration failed: %s; continuing", esp_err_to_name(calibration_err));
+    }
     if (setup_requested_on_boot) {
         /* The hold must not arrive at the first app as a stray tap. */
         (void)cyd_input_discard_pending_events();

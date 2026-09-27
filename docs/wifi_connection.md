@@ -48,4 +48,6 @@ English supplement: Credential persistence is gated by a successful live connect
 
 setup UIは `wifi_connection_begin_setup()` で通常接続を停止してSTA所有権を取得し、完了時に `wifi_connection_complete_setup()` を呼びます。
 
-English supplement: `wifi_connection` is the single owner of normal STA lifetime. Setup receives an explicit exclusive handoff rather than controlling STA concurrently.
+`wifi_connection_begin_setup()` は、管理taskが接続処理（scan、各接続試行、再試行待ち）の途中なら、その処理が抜けるまで待ってから STA を止めます。接続処理は各ステップの間で setup の開始を確認して中断し、STA の接続待ちは `esp32_wifi_sta_cancel_wait()` で即座に打ち切ります。以前は接続処理が setup と並行して STA を再起動し、最後に `SETUP_RUNNING` を `CONNECTED` / `FAILED` で上書きしていました。
+
+English supplement: `wifi_connection` is the single owner of normal STA lifetime. Setup receives an explicit exclusive handoff rather than controlling STA concurrently. The handoff waits (up to 10 s) for an in-flight connection attempt to abandon itself; the attempt never writes CONNECTED/FAILED once setup has asked for the STA.

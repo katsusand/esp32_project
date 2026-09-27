@@ -5,9 +5,10 @@ menu "Wi-Fi RSSI History"
         default 3072
         range 2048 8192
         help
-            サンプリングと radio lease 取得を行う task の stack size です。
-            English: this task exists so the blocking radio_manager_acquire()
-            never runs on the app_shell task.
+            接続中の AP の RSSI をサンプリングする task の stack size です。
+            この task は radio を起動せず、radio lease も取得しません。
+            English: stack of the sampler task. It only reads what an already
+            associated STA reports and never acquires a radio lease.
 
     config WIFI_RSSI_HISTORY_TASK_PRIORITY
         int "RSSI sampler task priority"
@@ -20,9 +21,10 @@ menu "Wi-Fi RSSI History"
         range 200 60000
         help
             接続中の AP の RSSI を取得する間隔です。
-            未接続時はサンプルを記録しません。
-            English: sampling is skipped while not associated, so gaps do not
-            appear as fake readings.
+            未接続になったときは切断を表す gap marker を 1 つだけ記録し、
+            その後は記録しません。
+            English: while not associated, a single gap marker records the
+            break, so gaps never appear as fake readings.
 
     config WIFI_RSSI_HISTORY_MAX_SAMPLES
         int "RSSI history length (samples)"

@@ -10,6 +10,10 @@ LCD owner は `app_shell` task であり、`cyd_clock_app` 自身はその task 
 
 English supplement: `cyd_clock_app` is no longer a standalone task. It is a shell-managed foreground app that can request transitions to other apps.
 
+アラーム (`cyd_clock_alarm`) と設定画面 (`cyd_clock_settings_app`) は時計の一部です。どちらも `cyd_clock_app_register()` がまとめてインストールするので、時計を載せない製品やメインアプリを差し替えた製品には入りません。
+
+English contract: the clock owns its alarm and its settings screen. Registering the clock installs both; nothing else installs them.
+
 ## Public API
 
 利用するファイルでは、次のヘッダーを include します。
@@ -24,6 +28,10 @@ English supplement: `cyd_clock_app` is no longer a standalone task. It is a shel
 ESP_ERROR_CHECK(app_shell_start(cyd_clock_app_get_app()));
 ```
 
+`cyd_clock_app_register()` は時計を `app_registry` に登録し、あわせて設定画面を時計の子として紐付け、`cyd_clock_alarm_register()` でアラームをインストールします。アラームが `app_scheduler` を使うため、`app_scheduler_init()` の後に呼びます。
+
+アラームの登録だけが失敗した場合も時計の登録は済んでおり、時計として動作します。戻り値はエラーになるので、composition はそれを記録して起動を続けます。
+
 `cyd_clock_app` は `app_shell_app_t` を返すだけで、task を自前で作りません。停止 API や表示形式を外部から設定する API はありません。
 
 ## Display Behavior
@@ -36,11 +44,14 @@ ESP_ERROR_CHECK(app_shell_start(cyd_clock_app_get_app()));
 - 状態: 最後の NTP 同期状態
 - Wi-Fi 状態: `wifi: off`、`wifi: connecting`、`wifi: setup needed` など
 - `SYNC NOW` ボタン
+- `ALARM` ボタン: `ALARM OFF` → `ALARM1 ON` → `ALARM2 ON` → `ALARM1/2 ON` の順に有効状態を切り替える
 - `SETTINGS` / `INFO` ボタン
 
 `SYNC NOW` は Wi-Fi が `connected`、`failed`、`off`、`setup needed` のときだけ有効です。ただし `time_sync_is_busy()` が `true` の間は、Wi-Fi が `connected` でも NTP 同期処理中または retry 待ちとして無効表示になり、タッチしても action は発火しません。
 
 ローカル時刻の年が 2024 年未満の場合、未同期とみなし、時刻欄は `--:--:--`、日付欄は `Waiting for NTP` を表示します。状態欄は `time_sync_get_last_success_at()` と `time_sync_get_last_attempt_status()` を使い、`sync: pending`、`sync: failed`、または `sync: MM-DD HH:MM OK` を表示します。
+
+`ALARM` ボタンは `cyd_clock_alarm_set_enabled()` で有効/無効だけを切り替えます。時刻と曜日は `Clock Settings` で変更します ([cyd_clock_alarm.md](cyd_clock_alarm.md))。
 
 `SETTINGS` は `settings app`、`INFO` は `info app` へ切り替えます。戻り先は `app_shell` が `enter()` に渡す `from_app` により、遷移先 app 側で保持されます。
 
@@ -89,12 +100,18 @@ English supplement: Clock app owns clock/failure/retrying modes only. Wi-Fi setu
 
 `cyd_clock_app` は以下のコンポーネントに依存します。
 
+- `app_diagnostics`
+- `app_registry`
+- `app_shell`
+- `cyd_clock_alarm`
+- `cyd_clock_settings_app`
 - `cyd_display`
 - `cyd_input`
+- `cyd_system_apps`
 - `cyd_ui`
 - `cyd_wifi_setup`
 - `time_sync`
+- `time_tick`
 - `wifi_connection`
-- `app_shell`
 
 このプロジェクトでは、`main/app_main()` は `cyd_clock_composition_start()` を呼びます。表示・入力は`system_boot`、時計固有serviceと必要に応じたWi-Fi/time sync起動はcompositionが担当し、その後に`app_shell_start(cyd_clock_app_get_app())`を呼びます。

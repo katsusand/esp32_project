@@ -1378,6 +1378,31 @@ static esp_err_t cyd_settings_show_restart_message(const char *title, const char
     return cyd_ui_submit(screen);
 }
 
+/*
+ * Saves what it can, then restarts regardless.
+ *
+ * English contract: the enclosure has no reachable reset button, so a restart
+ * the user confirmed must happen even when a save fails. Aborting on the first
+ * failed save left the device on the confirm screen with no way to reboot it
+ * from the UI. The failure is logged and shown on the restart message.
+ */
+static void cyd_settings_save_and_restart(const char *title, uint32_t delay_ms)
+{
+    (void)cyd_input_discard_pending_events();
+    esp_err_t save_err = cyd_settings_save_pending_values();
+    if (save_err != ESP_OK) {
+        ESP_LOGW(TAG, "saving settings before restart failed: %s", esp_err_to_name(save_err));
+    }
+    esp_err_t show_err = cyd_settings_show_restart_message(title,
+                                                           save_err == ESP_OK ? "Restarting..."
+                                                                              : "Save failed; restarting...");
+    if (show_err != ESP_OK) {
+        ESP_LOGW(TAG, "show restart message failed: %s", esp_err_to_name(show_err));
+    }
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    esp_restart();
+}
+
 static esp_err_t cyd_settings_app_show(void)
 {
     cyd_display_screen_t *screen = &s_settings_screen;
@@ -1796,14 +1821,8 @@ static esp_err_t cyd_settings_handle_clear_touch_calib_confirm_action(uint16_t a
 
     if (action_id == CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB_CONFIRM) {
         ESP_RETURN_ON_ERROR(cyd_input_clear_touch_calibration(), TAG, "clear touch calibration failed");
-        ESP_RETURN_ON_ERROR(cyd_input_discard_pending_events(), TAG, "discard input events failed");
-        ESP_RETURN_ON_ERROR(cyd_settings_save_pending_values(), TAG, "save settings before restart failed");
-        ESP_RETURN_ON_ERROR(cyd_settings_show_restart_message("Touch calibration cleared", "Restarting..."),
-                            TAG,
-                            "show restart message failed");
-        vTaskDelay(pdMS_TO_TICKS(2000));
         *handled = true;
-        esp_restart();
+        cyd_settings_save_and_restart("Touch calibration cleared", 2000);
         return ESP_OK;
     }
 
@@ -1842,14 +1861,8 @@ static esp_err_t cyd_settings_handle_clear_app_data_confirm_action(uint16_t acti
         /* Restarting is the point, not a formality: apps read their NVS data at
            startup, so anything already running would keep stale state. */
         snprintf(detail, sizeof(detail), "%u namespaces erased", (unsigned)erased);
-        ESP_RETURN_ON_ERROR(cyd_input_discard_pending_events(), TAG, "discard input events failed");
-        ESP_RETURN_ON_ERROR(cyd_settings_save_pending_values(), TAG, "save settings before restart failed");
-        ESP_RETURN_ON_ERROR(cyd_settings_show_restart_message(detail, "Restarting..."),
-                            TAG,
-                            "show restart message failed");
-        vTaskDelay(pdMS_TO_TICKS(2000));
         *handled = true;
-        esp_restart();
+        cyd_settings_save_and_restart(detail, 2000);
         return ESP_OK;
     }
 
@@ -1935,14 +1948,8 @@ static esp_err_t cyd_settings_handle_restart_confirm_action(uint16_t action_id, 
     }
 
     if (action_id == CYD_SETTINGS_APP_ACTION_RESTART_CONFIRM) {
-        ESP_RETURN_ON_ERROR(cyd_input_discard_pending_events(), TAG, "discard input events failed");
-        ESP_RETURN_ON_ERROR(cyd_settings_save_pending_values(), TAG, "save settings before restart failed");
-        ESP_RETURN_ON_ERROR(cyd_settings_show_restart_message("Restarting", "Restarting..."),
-                            TAG,
-                            "show restart message failed");
-        vTaskDelay(pdMS_TO_TICKS(1000));
         *handled = true;
-        esp_restart();
+        cyd_settings_save_and_restart("Restarting", 1000);
         return ESP_OK;
     }
 

@@ -6,6 +6,20 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include "sdkconfig.h"
+/*
+ * Real builds compile against ESP-IDF's own Wi-Fi types. The fallback enums
+ * below exist only for the APP_WIFI_STA=0 stub build, where esp_wifi is not on
+ * the include path.
+ *
+ * English contract: the fallback enumerators do not track ESP-IDF (v5.x added
+ * WIFI_AUTH_ENTERPRISE before WIFI_AUTH_WPA3_PSK), so a translation unit that
+ * picked them in a real build would disagree with the driver about every value
+ * from 5 upwards. Guarding on the header guard alone let that happen whenever
+ * esp_wifi_types.h simply had not been included yet.
+ */
+#if __has_include("esp_wifi_types.h")
+#include "esp_wifi_types.h"
+#endif
 #if !defined(__ESP_WIFI_TYPES_H__)
 #ifndef WIFI_AUTH_MODE_T_FALLBACK_DEFINED
 #define WIFI_AUTH_MODE_T_FALLBACK_DEFINED
@@ -90,6 +104,12 @@ esp_err_t esp32_wifi_sta_init_with_config(const esp32_wifi_sta_config_t *config)
 esp_err_t esp32_wifi_sta_start(void);
 esp_err_t esp32_wifi_sta_stop(void);
 esp_err_t esp32_wifi_sta_wait_connected(TickType_t wait_ticks);
+/*
+ * Makes a pending (or the next) esp32_wifi_sta_wait_connected() return
+ * ESP_ERR_INVALID_STATE right away. esp32_wifi_sta_start() clears the request,
+ * so it only ever cuts short the attempt that was already under way.
+ */
+void esp32_wifi_sta_cancel_wait(void);
 esp_err_t esp32_wifi_sta_get_status(esp32_wifi_sta_status_t *status);
 esp_err_t esp32_wifi_sta_get_configured_ssid(char *ssid, size_t ssid_size);
 bool esp32_wifi_sta_has_configured_ssid(void);

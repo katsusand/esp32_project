@@ -97,6 +97,22 @@ static esp_err_t cyd_speaker_apply_tone(uint32_t frequency_hz)
 #endif
 }
 
+/* A failed LEDC call loses one tone; ESP_ERROR_CHECK here used to reboot the
+   clock over it. */
+static void cyd_speaker_log_on_error(esp_err_t err, const char *what)
+{
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "%s failed: %s", what, esp_err_to_name(err));
+    }
+}
+
+/*
+ * Returns true when the current sequence must end here: on STOP, and also when
+ * a newer PLAY arrives, which is put back at the front for the task loop.
+ * Returning false for the latter used to carry on with the old sequence, and
+ * every later wait found the requeued command at once, so the remaining notes
+ * played at zero length before the new sound started.
+ */
 static bool cyd_speaker_delay_or_stop(uint32_t delay_ms)
 {
     cyd_speaker_cmd_t cmd;
@@ -106,13 +122,12 @@ static bool cyd_speaker_delay_or_stop(uint32_t delay_ms)
         TickType_t step_ticks = remaining_ticks > pdMS_TO_TICKS(20) ? pdMS_TO_TICKS(20) : remaining_ticks;
 
         if (xQueueReceive(s_speaker_queue, &cmd, step_ticks) == pdTRUE) {
-            if (cmd.id == CYD_SPEAKER_CMD_STOP) {
-                ESP_ERROR_CHECK(cyd_speaker_apply_silence());
-                return true;
+            cyd_speaker_log_on_error(cyd_speaker_apply_silence(), "speaker silence");
+            if (cmd.id != CYD_SPEAKER_CMD_STOP &&
+                xQueueSendToFront(s_speaker_queue, &cmd, 0) != pdTRUE) {
+                ESP_LOGW(TAG, "speaker queue full; dropped the interrupting command");
             }
-
-            xQueueSendToFront(s_speaker_queue, &cmd, 0);
-            return false;
+            return true;
         }
 
         remaining_ticks -= step_ticks;
@@ -127,20 +142,20 @@ static void cyd_speaker_play_notes(const cyd_speaker_cmd_t *cmd)
         const cyd_speaker_note_t *note = &cmd->notes[i];
 
         if (note->frequency_hz > 0 && note->duration_ms > 0) {
-            ESP_ERROR_CHECK(cyd_speaker_apply_tone(note->frequency_hz));
+            cyd_speaker_log_on_error(cyd_speaker_apply_tone(note->frequency_hz), "speaker tone");
             if (cyd_speaker_delay_or_stop(note->duration_ms)) {
                 return;
             }
         }
 
-        ESP_ERROR_CHECK(cyd_speaker_apply_silence());
+        cyd_speaker_log_on_error(cyd_speaker_apply_silence(), "speaker silence");
 
         if (note->gap_ms > 0 && cyd_speaker_delay_or_stop(note->gap_ms)) {
             return;
         }
     }
 
-    ESP_ERROR_CHECK(cyd_speaker_apply_silence());
+    cyd_speaker_log_on_error(cyd_speaker_apply_silence(), "speaker silence");
 }
 
 static void cyd_speaker_task(void *arg)
@@ -161,7 +176,7 @@ static void cyd_speaker_task(void *arg)
                 cyd_speaker_play_notes(&cmd);
                 break;
             case CYD_SPEAKER_CMD_STOP:
-                ESP_ERROR_CHECK(cyd_speaker_apply_silence());
+                cyd_speaker_log_on_error(cyd_speaker_apply_silence(), "speaker silence");
                 break;
             default:
                 break;

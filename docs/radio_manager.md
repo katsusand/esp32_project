@@ -27,6 +27,10 @@ radio準備に失敗した要求は要求元へ即時reject通知します。要
 
 English supplement: Preparation failure completes the pending acquire immediately with rejection; it is not left waiting for its caller-side timeout.
 
+grant / reject の応答は client ごとの応答 queue で返し、呼び出し元 task の task notification は使いません。以前は task notification で返していたため、`time_sync` が自分の task を起こす `xTaskNotifyGive()` が acquire 中に届くと reject と誤認し、誰も release しない lease が `max_hold_ticks` まで残っていました。応答には request id が付いており、timeout で諦めた要求への遅れた応答は読み捨てます。
+
+English supplement: acquire replies travel through a per-client reply queue keyed by request id, never through the caller's task notification. Client tasks may therefore use their own task notifications for wake-ups. Adding a client means adding an enumerator before `RADIO_MANAGER_CLIENT_COUNT`.
+
 現在は Internet 利用の調停だけが責務です。ESP-NOW channel 管理、peer 管理、送受信 queue、payload 保持などは未実装です。
 
 ## Why It Exists

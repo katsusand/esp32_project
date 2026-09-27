@@ -219,6 +219,7 @@ English supplement guidance:
 - macOS の sandbox 制限下では、`idf.py build` / `idf.py fullclean` が `idf_component_manager` 内の `psutil` で `PermissionError: [Errno 1] Operation not permitted` を返しうる。この場合は権限付きで同じコマンドを再実行して純粋なビルド成否を確認する
 - `python_env` が存在する環境では、`source ~/.espressif/v5.4.3/esp-idf/export.sh && DEV=1 ninja -C build -v` でも動作することがある
 - `idf.py build` が既存 `build/` ディレクトリの Python / 環境差分で扱いづらい場合でも、環境を正しく読み込んだ上での `DEV=1 ninja -C build -v` は有効な切り分け手段になりうる
+- ただし `DEV` は CMake 構成時に読まれて `build/` に残るため、`ninja` に付けた `DEV=1` は CMake が再実行されない限り `APP_DEV` に影響しない。`APP_DEV` の有無を変えるときは、その `DEV` を付けて `idf.py reconfigure` する
 - 明示的に release 相当を確認したい場合を除き、通常のローカル開発ビルド確認では `DEV=1` を優先する
 
 English supplement: For EIM-based setups, `source ~/.espressif/tools/activate_idf_v5.4.3.sh && DEV=1 ninja -C build -v` is the preferred quick compile verification flow. Prefer `DEV=1` for normal local development unless release behavior is being validated on purpose.

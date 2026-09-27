@@ -58,7 +58,7 @@ English supplement: Treat `components/products/` as the replaceable product comp
 - flash frequency: `40m`
 - display panel: `ST7789`
 - display: 320x240 landscape
-- touch: XPT2046 on SPI3
+- touch: XPT2046 via software SPI (SCLK 25 / MOSI 32 / MISO 39 / CS 33 / IRQ 36)
 - speaker GPIO: 26
 - RGB LED GPIO: red 4, green 16, blue 17
 
@@ -82,6 +82,7 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `components/services/time_sync/`: SNTP/NTP 時刻同期
 - `components/services/app_scheduler/`: アプリ共通の時刻スケジューラー
 - `components/apps/cyd_clock_app/`: clock app
+- `components/apps/cyd_clock_alarm/`: clock app の alarm (時計の一部。`cyd_clock_app_register()` がインストールする)
 - `components/apps/cyd_clock_settings_app/`: clock-specific settings app
 - `components/apps/cyd_system_apps/`: reusable `INFO` / `SETTINGS` / touch calibration apps
 - `components/platform/cyd_status_led/`: RGB status LED
@@ -91,6 +92,7 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `docs/components_reorg_plan.md`: `components/` の現状アーキテクチャと層ごとの役割
 - `docs/system_apps_split_plan.md`: 共通 `INFO/SETTINGS` と clock-specific settings 分離の完了状態
 - `docs/cyd_clock_settings_app.md`: clock-specific settings / scheduler diagnostics
+- `docs/cyd_clock_alarm.md`: clock alarm の ownership と保存先 (app scope)
 - `docs/nvs_storage.md`: NVS 保存先一覧と ownership / migration 方針
 - `third_party/lovyangfx_upstream/`: LovyanGFX upstream source
 
@@ -298,6 +300,10 @@ DEV=1 python "$IDF_PATH/tools/idf.py" -p PORT flash monitor
 
 `DEV=1` が設定されている場合、ビルド時に `APP_DEV=1` が定義されます。
 
+`DEV` は CMake の構成（configure）時に読まれ、その結果が `build/` に残ります。そのため `DEV=1 ninja -C build` の `DEV=1` は、CMake の再実行が起きない限り効きません。`idf.py build` も既存の `build/` では通常 CMake を再実行しないので、`scripts/idf-build.sh` でも同じです。`APP_DEV` の有無を切り替えたいときは、切り替えたい `DEV` を付けて `idf.py reconfigure` を実行します。
+
+English supplement: `DEV` is read at CMake configure time and baked into `build/`. Passing `DEV=1` to a plain `ninja` run has no effect unless CMake re-runs; reconfigure to change `APP_DEV`.
+
 VS Code の ESP-IDF 拡張からビルドする場合も、`DEV=1` が漏れないように `.vscode/settings.json` に以下を入れておきます。
 
 ```json
@@ -306,7 +312,7 @@ VS Code の ESP-IDF 拡張からビルドする場合も、`DEV=1` が漏れな�
 }
 ```
 
-このリポジトリの `.vscode/settings.json` には、上記設定を入れておくことを前提とします。
+`.vscode/` は `.gitignore` の対象でリポジトリには含まれないため、各環境のローカル設定として入れてください。
 
 English supplement: Unless there is a specific reason to validate a non-development build, assume `DEV=1` for normal firmware iteration and device flashing.
 
@@ -441,6 +447,7 @@ source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py
 - [Time Tick](docs/time_tick.md)
 - [Time Sync](docs/time_sync.md)
 - [CYD Clock App](docs/cyd_clock_app.md)
+- [CYD Clock Alarm](docs/cyd_clock_alarm.md)
 - [CYD Clock Composition](docs/cyd_clock_composition.md)
 - [CYD Status LED Driver](docs/cyd_status_led.md)
 - [CYD Speaker Driver](docs/cyd_speaker.md)

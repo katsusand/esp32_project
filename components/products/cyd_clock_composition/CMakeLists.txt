@@ -5,7 +5,6 @@ set(CYD_CLOCK_COMPOSITION_REQUIRES
     app_shell
     cyd_clock_app
     cyd_system_apps
-    cyd_speaker
     error_log_store
     nvs_flash
     nvs_health
@@ -14,7 +13,10 @@ set(CYD_CLOCK_COMPOSITION_REQUIRES
     system_boot
     time_tick)
 
-if(NOT DEFINED ENV{APP_WIFI_STA} OR NOT "$ENV{APP_WIFI_STA}" MATCHES "^(0|false|off|no)$")
+# Case-insensitive, matching the top-level CMakeLists.txt: "OFF" must not
+# select the real sources while the code is compiled as Wi-Fi disabled.
+string(TOLOWER "$ENV{APP_WIFI_STA}" APP_WIFI_STA_ENV)
+if(NOT "${APP_WIFI_STA_ENV}" MATCHES "^(0|false|off|no)$")
     list(APPEND CYD_CLOCK_COMPOSITION_REQUIRES
         radio_manager
         status_indicator

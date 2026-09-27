@@ -14,6 +14,15 @@
 static const char *ERROR_LOG_TAG = "error_log_store";
 static const size_t ERROR_LOG_LINE_MAX = 256;
 #define ERROR_LOG_PATH_MAX 32
+/*
+ * 8.3 on purpose. The project builds FATFS with CONFIG_FATFS_LFN_NONE (the
+ * ESP-IDF default), where FatFs rejects a longer name with FR_INVALID_NAME; the
+ * old "error_0000.log" had 10 characters before the dot, so no log file could
+ * ever be created. Upper case matches what readdir() reports for a short name,
+ * which the index scan relies on.
+ */
+#define ERROR_LOG_FILE_FORMAT "ERR_%04u.LOG"
+#define ERROR_LOG_FILE_SCAN_FORMAT "ERR_%4u.LOG"
 #define ERROR_LOG_MAX_LINES_PER_FILE 5000U
 #define ERROR_LOG_MAX_INDEX 9999U
 static bool s_sink_warning_emitted = false;
@@ -39,7 +48,7 @@ static void error_log_store_warn_sink_failure_once(esp_err_t err, const char *de
 
 static esp_err_t error_log_store_build_relative_path(uint16_t file_index, char *path, size_t path_size)
 {
-    int written = snprintf(path, path_size, "error_%04u.log", (unsigned)file_index);
+    int written = snprintf(path, path_size, ERROR_LOG_FILE_FORMAT, (unsigned)file_index);
     ESP_RETURN_ON_FALSE(written > 0 && (size_t)written < path_size,
                         ESP_ERR_INVALID_SIZE,
                         ERROR_LOG_TAG,
@@ -72,10 +81,10 @@ static esp_err_t error_log_store_find_next_index(uint16_t *out_next_index)
     while ((entry = readdir(dir)) != NULL) {
         unsigned int index = 0;
 
-        if (sscanf(entry->d_name, "error_%4u.log", &index) == 1 && index > max_index) {
+        if (sscanf(entry->d_name, ERROR_LOG_FILE_SCAN_FORMAT, &index) == 1 && index > max_index) {
             max_index = index;
             found = true;
-        } else if (sscanf(entry->d_name, "error_%4u.log", &index) == 1) {
+        } else if (sscanf(entry->d_name, ERROR_LOG_FILE_SCAN_FORMAT, &index) == 1) {
             found = true;
         }
     }

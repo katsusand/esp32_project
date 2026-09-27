@@ -10,8 +10,8 @@
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
 #include "app_registry.h"
-#include "app_scheduler.h"
 #include "app_shell.h"
+#include "cyd_clock_alarm.h"
 #include "cyd_clock_app.h"
 #include "cyd_clock_settings_app.h"
 #include "cyd_display.h"
@@ -44,19 +44,18 @@
 #define CYD_CLOCK_APP_TIME_ROW 10
 #define CYD_CLOCK_APP_TIME_SPAN_COLS CYD_DISPLAY_GRID_COLS
 #define CYD_CLOCK_APP_TIME_SPAN_ROWS 6
-#define CYD_CLOCK_ALARM_OWNER "clock"
-#define CYD_CLOCK_ALARM1_TAG "alarm1"
-#define CYD_CLOCK_ALARM2_TAG "alarm2"
 
 static cyd_display_screen_t s_clock_screen;
 static bool s_clock_use_24_hour = true;
 
+/* What the ALARM button shows and cycles through; the alarms themselves are
+   cyd_clock_alarm's. */
 typedef enum {
-    CYD_CLOCK_ALARM_MODE_OFF = 0,
-    CYD_CLOCK_ALARM_MODE_1,
-    CYD_CLOCK_ALARM_MODE_2,
-    CYD_CLOCK_ALARM_MODE_1_2,
-} cyd_clock_alarm_mode_t;
+    CYD_CLOCK_APP_ALARM_MODE_OFF = 0,
+    CYD_CLOCK_APP_ALARM_MODE_1,
+    CYD_CLOCK_APP_ALARM_MODE_2,
+    CYD_CLOCK_APP_ALARM_MODE_1_2,
+} cyd_clock_app_alarm_mode_t;
 
 typedef enum {
     CYD_CLOCK_APP_MODE_CLOCK = 0,
@@ -85,85 +84,65 @@ typedef struct {
 static cyd_clock_touch_tracker_t s_clock_touch_tracker;
 static cyd_clock_mode_button_tracker_t s_clock_action_tracker;
 
-static bool cyd_clock_alarm_load_status(const char *tag, app_scheduler_status_t *status)
+static cyd_clock_app_alarm_mode_t cyd_clock_app_alarm_mode(void)
 {
-    if (status == NULL) {
-        return false;
-    }
-    return app_scheduler_get_status(CYD_CLOCK_ALARM_OWNER, tag, status) == ESP_OK;
-}
-
-static bool cyd_clock_alarm_enabled(const char *tag)
-{
-    app_scheduler_status_t status = { 0 };
-    return cyd_clock_alarm_load_status(tag, &status) && status.config.enabled;
-}
-
-static cyd_clock_alarm_mode_t cyd_clock_alarm_get_mode(void)
-{
-    bool alarm1_enabled = cyd_clock_alarm_enabled(CYD_CLOCK_ALARM1_TAG);
-    bool alarm2_enabled = cyd_clock_alarm_enabled(CYD_CLOCK_ALARM2_TAG);
+    bool alarm1_enabled = cyd_clock_alarm_is_enabled(CYD_CLOCK_ALARM_1);
+    bool alarm2_enabled = cyd_clock_alarm_is_enabled(CYD_CLOCK_ALARM_2);
 
     if (alarm1_enabled && alarm2_enabled) {
-        return CYD_CLOCK_ALARM_MODE_1_2;
+        return CYD_CLOCK_APP_ALARM_MODE_1_2;
     }
     if (alarm1_enabled) {
-        return CYD_CLOCK_ALARM_MODE_1;
+        return CYD_CLOCK_APP_ALARM_MODE_1;
     }
     if (alarm2_enabled) {
-        return CYD_CLOCK_ALARM_MODE_2;
+        return CYD_CLOCK_APP_ALARM_MODE_2;
     }
-    return CYD_CLOCK_ALARM_MODE_OFF;
+    return CYD_CLOCK_APP_ALARM_MODE_OFF;
 }
 
-static const char *cyd_clock_alarm_mode_label(cyd_clock_alarm_mode_t mode)
+static const char *cyd_clock_app_alarm_mode_label(cyd_clock_app_alarm_mode_t mode)
 {
     switch (mode) {
-    case CYD_CLOCK_ALARM_MODE_1:
+    case CYD_CLOCK_APP_ALARM_MODE_1:
         return "ALARM1 ON";
-    case CYD_CLOCK_ALARM_MODE_2:
+    case CYD_CLOCK_APP_ALARM_MODE_2:
         return "ALARM2 ON";
-    case CYD_CLOCK_ALARM_MODE_1_2:
+    case CYD_CLOCK_APP_ALARM_MODE_1_2:
         return "ALARM1/2 ON";
-    case CYD_CLOCK_ALARM_MODE_OFF:
+    case CYD_CLOCK_APP_ALARM_MODE_OFF:
     default:
         return "ALARM OFF";
     }
 }
 
-static esp_err_t cyd_clock_alarm_set_enabled(const char *tag, bool enabled)
+static esp_err_t cyd_clock_app_cycle_alarm_mode(void)
 {
-    return app_scheduler_set_enabled(CYD_CLOCK_ALARM_OWNER, tag, enabled);
-}
+    cyd_clock_app_alarm_mode_t next_mode = CYD_CLOCK_APP_ALARM_MODE_OFF;
 
-static esp_err_t cyd_clock_alarm_cycle_mode(void)
-{
-    cyd_clock_alarm_mode_t next_mode = CYD_CLOCK_ALARM_MODE_OFF;
-    cyd_clock_alarm_mode_t current_mode = cyd_clock_alarm_get_mode();
-
-    switch (current_mode) {
-    case CYD_CLOCK_ALARM_MODE_OFF:
-        next_mode = CYD_CLOCK_ALARM_MODE_1;
+    switch (cyd_clock_app_alarm_mode()) {
+    case CYD_CLOCK_APP_ALARM_MODE_OFF:
+        next_mode = CYD_CLOCK_APP_ALARM_MODE_1;
         break;
-    case CYD_CLOCK_ALARM_MODE_1:
-        next_mode = CYD_CLOCK_ALARM_MODE_2;
+    case CYD_CLOCK_APP_ALARM_MODE_1:
+        next_mode = CYD_CLOCK_APP_ALARM_MODE_2;
         break;
-    case CYD_CLOCK_ALARM_MODE_2:
-        next_mode = CYD_CLOCK_ALARM_MODE_1_2;
+    case CYD_CLOCK_APP_ALARM_MODE_2:
+        next_mode = CYD_CLOCK_APP_ALARM_MODE_1_2;
         break;
-    case CYD_CLOCK_ALARM_MODE_1_2:
+    case CYD_CLOCK_APP_ALARM_MODE_1_2:
     default:
-        next_mode = CYD_CLOCK_ALARM_MODE_OFF;
+        next_mode = CYD_CLOCK_APP_ALARM_MODE_OFF;
         break;
     }
 
-    bool enable_alarm1 = next_mode == CYD_CLOCK_ALARM_MODE_1 || next_mode == CYD_CLOCK_ALARM_MODE_1_2;
-    bool enable_alarm2 = next_mode == CYD_CLOCK_ALARM_MODE_2 || next_mode == CYD_CLOCK_ALARM_MODE_1_2;
+    bool enable_alarm1 = next_mode == CYD_CLOCK_APP_ALARM_MODE_1 || next_mode == CYD_CLOCK_APP_ALARM_MODE_1_2;
+    bool enable_alarm2 = next_mode == CYD_CLOCK_APP_ALARM_MODE_2 || next_mode == CYD_CLOCK_APP_ALARM_MODE_1_2;
 
-    ESP_RETURN_ON_ERROR(cyd_clock_alarm_set_enabled(CYD_CLOCK_ALARM1_TAG, enable_alarm1),
+    ESP_RETURN_ON_ERROR(cyd_clock_alarm_set_enabled(CYD_CLOCK_ALARM_1, enable_alarm1),
                         TAG,
                         "set alarm1 enabled failed");
-    return cyd_clock_alarm_set_enabled(CYD_CLOCK_ALARM2_TAG, enable_alarm2);
+    return cyd_clock_alarm_set_enabled(CYD_CLOCK_ALARM_2, enable_alarm2);
 }
 
 esp_err_t cyd_clock_app_register(void)
@@ -181,7 +160,17 @@ esp_err_t cyd_clock_app_register(void)
 
     entry.app = cyd_clock_app_get_app();
     entry.settings_app = cyd_clock_settings_app_get_app();
-    return app_registry_register(&entry);
+    ESP_RETURN_ON_ERROR(app_registry_register(&entry), TAG, "register clock app failed");
+
+    /*
+     * The alarm belongs to the clock the same way: registering the clock is
+     * what installs it, so a product without the clock has no alarm and
+     * swapping the clock out takes the alarm with it. Needs
+     * app_scheduler_init() to have run. On failure the clock itself stays
+     * registered and usable; only the alarms are missing.
+     */
+    ESP_RETURN_ON_ERROR(cyd_clock_alarm_register(), TAG, "clock alarms unavailable");
+    return ESP_OK;
 }
 
 static bool cyd_clock_app_touch_confirmed_mode_button(const cyd_input_event_t *event,
@@ -437,7 +426,7 @@ static bool cyd_clock_app_process_input(void)
                 continue;
             }
             if (action_id == CYD_CLOCK_APP_ACTION_ALARM) {
-                ESP_RETURN_ON_ERROR(cyd_clock_alarm_cycle_mode(), TAG, "cycle alarm mode failed");
+                ESP_RETURN_ON_ERROR(cyd_clock_app_cycle_alarm_mode(), TAG, "cycle alarm mode failed");
                 redraw = true;
                 continue;
             }
@@ -478,8 +467,8 @@ static esp_err_t cyd_clock_app_show_clock(void)
     char status_text[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     char wifi_status_text[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
     cyd_display_screen_t *screen = &s_clock_screen;
-    cyd_clock_alarm_mode_t alarm_mode = cyd_clock_alarm_get_mode();
-    const char *alarm_label = cyd_clock_alarm_mode_label(alarm_mode);
+    cyd_clock_app_alarm_mode_t alarm_mode = cyd_clock_app_alarm_mode();
+    const char *alarm_label = cyd_clock_app_alarm_mode_label(alarm_mode);
 
     time(&now);
     localtime_r(&now, &local_time);
@@ -572,8 +561,8 @@ static esp_err_t cyd_clock_app_show_clock(void)
                               12,
                               3,
                               CYD_UI_COLOR_WHITE,
-                              alarm_mode == CYD_CLOCK_ALARM_MODE_OFF ? CYD_UI_COLOR_DIMGREY : CYD_UI_COLOR_RED,
-                              alarm_mode == CYD_CLOCK_ALARM_MODE_OFF ? CYD_UI_COLOR_LIGHTGREY : CYD_UI_COLOR_YELLOW,
+                              alarm_mode == CYD_CLOCK_APP_ALARM_MODE_OFF ? CYD_UI_COLOR_DIMGREY : CYD_UI_COLOR_RED,
+                              alarm_mode == CYD_CLOCK_APP_ALARM_MODE_OFF ? CYD_UI_COLOR_LIGHTGREY : CYD_UI_COLOR_YELLOW,
                               CYD_CLOCK_APP_ACTION_ALARM);
     return cyd_ui_submit(screen);
 }
@@ -625,10 +614,21 @@ static const char *cyd_clock_app_wifi_failure_text(esp32_wifi_sta_failure_reason
     }
 }
 
+/*
+ * The screens below log a failed draw instead of ESP_ERROR_CHECK-ing it: a
+ * display hiccup inside an app must not reboot the device (app_shell.h).
+ */
+static void cyd_clock_app_log_on_error(esp_err_t err, const char *what)
+{
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "%s failed: %s", what, esp_err_to_name(err));
+    }
+}
+
 static void cyd_clock_app_begin_wifi_setup(void)
 {
     ESP_LOGI(TAG, "switching to Wi-Fi setup app");
-    ESP_ERROR_CHECK(app_shell_switch_to(cyd_wifi_setup_get_app()));
+    cyd_clock_app_log_on_error(app_shell_switch_to(cyd_wifi_setup_get_app()), "switch to Wi-Fi setup");
 }
 
 static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
@@ -640,7 +640,8 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
     const char *buttons[] = { "RETRY", "SETUP" };
     cyd_clock_mode_button_tracker_t tracker = { 0 };
 
-    ESP_ERROR_CHECK(cyd_display_show_mode_screen("Wi-Fi failed", lines, 2, buttons, 2, 0));
+    cyd_clock_app_log_on_error(cyd_display_show_mode_screen("Wi-Fi failed", lines, 2, buttons, 2, 0),
+                               "show Wi-Fi failed screen");
 
     while (true) {
         cyd_input_event_t event = { 0 };
@@ -697,7 +698,7 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
                 lines[0] = "Connecting Wi-Fi";
             }
 
-            ESP_ERROR_CHECK(cyd_display_show_lines("Wi-Fi", lines, 2));
+            cyd_clock_app_log_on_error(cyd_display_show_lines("Wi-Fi", lines, 2), "show Wi-Fi retry screen");
             last_progress = progress;
         }
 

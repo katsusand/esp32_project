@@ -190,8 +190,16 @@ static esp_err_t app_shell_load_idle_return_timeout_if_needed(void)
 
     uint16_t timeout_seconds = CONFIG_APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS;
     esp_err_t err = app_shell_load_idle_return_timeout_blob(&timeout_seconds);
-    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
-        return err;
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK;
+    } else if (err != ESP_OK) {
+        /*
+         * Settle on the default instead of retrying. This runs on every shell
+         * loop through app_shell_is_idle_timeout_elapsed(), so a blob that failed
+         * validation was re-read and re-reported about 20 times a second. The
+         * failure has already reached nvs_health; the caller logs it this once.
+         */
+        timeout_seconds = CONFIG_APP_SHELL_IDLE_RETURN_TIMEOUT_SECONDS;
     }
 
     portENTER_CRITICAL(&s_app_shell_lock);
@@ -200,7 +208,7 @@ static esp_err_t app_shell_load_idle_return_timeout_if_needed(void)
         s_app_shell_idle_timeout_loaded = true;
     }
     portEXIT_CRITICAL(&s_app_shell_lock);
-    return ESP_OK;
+    return err;
 }
 
 static bool app_shell_idle_return_enabled(void)
@@ -263,6 +271,14 @@ bool app_shell_is_idle_timeout_elapsed(void)
     return (now - last_activity_tick) >= timeout_ticks;
 }
 
+static bool app_shell_has_pending_switch(void)
+{
+    portENTER_CRITICAL(&s_app_shell_lock);
+    bool pending = s_app_shell_pending_app != NULL;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+    return pending;
+}
+
 static bool app_shell_apply_one_pending_switch(void)
 {
     const app_shell_app_t *next_app = NULL;
@@ -298,8 +314,16 @@ static bool app_shell_apply_one_pending_switch(void)
     if (s_app_shell_active_app->enter != NULL) {
         esp_err_t enter_err = s_app_shell_active_app->enter(s_app_shell_active_app->ctx, from_app);
         if (enter_err != ESP_OK) {
-            if (app_shell_handle_app_error(s_app_shell_active_app, APP_SHELL_STAGE_ENTER, enter_err) ==
-                APP_SHELL_ON_ERROR_RETURN_HOME) {
+            app_shell_error_action_t action =
+                app_shell_handle_app_error(s_app_shell_active_app, APP_SHELL_STAGE_ENTER, enter_err);
+            /*
+             * A step-less app does all of its work in enter(). Kept active after
+             * a failed enter, nothing would run or read input again, and with no
+             * step() it never adds to the error budget that would rescue it. A
+             * switch the app queued itself is its own way out and still wins.
+             */
+            if (action == APP_SHELL_ON_ERROR_RETURN_HOME ||
+                (s_app_shell_active_app->step == NULL && !app_shell_has_pending_switch())) {
                 app_shell_recover_to_home(s_app_shell_active_app);
             }
             return true;
