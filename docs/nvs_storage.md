@@ -132,14 +132,16 @@ esp_err_t nvs_schema_erase_scope(nvs_schema_scope_t scope, size_t *erased_count)
 
 ## Migration
 
-namespace のリネームを伴う変更では、移行コードを書かず**全消去**する方針を採りました。開発中であり、使い捨ての移行コードを残すより実害が小さいためです。
+保存形式を変えるとき（namespace のリネーム、blob の形式変更）は、移行コードを書かず**全消去**します。
+
+これは開発中の一時的な割り切りではなく、この基盤の方針です。この基盤は汎用の app 基盤ですが、その上に作る app 同士には関連を持たせません。そのため、ある firmware の保存データを別の形式の firmware へ引き継ぐ必要がなく、形式が合わなければ `Initialize NVS` で全部消してやり直すのが最も単純で確実です。key ごとに既定値へ戻す仕組みは用意しません（2026-09-26 のレビューの指摘を受けて検討し、2026-09-28 にこの方針の維持を決めました）。
 
 ```bash
 source ~/.espressif/tools/activate_idf_v5.4.3.sh
 python "$IDF_PATH/tools/idf.py" erase-flash flash monitor
 ```
 
-English supplement: renaming a namespace orphans its data. The project accepts a full erase instead of carrying migration code that would only ever run once.
+English contract: a storage format change (namespace rename, blob layout or version) is handled by a full erase, not by migration code or per-key resets. This is the platform's intended policy: apps built on it are unrelated to each other, so no firmware needs to carry another's saved data forward.
 
 ## Implementation Guidance
 
@@ -151,7 +153,7 @@ English supplement: renaming a namespace orphans its data. The project accepts a
 4. blob を保存するなら先頭に version を持たせ、不一致は `nvs_health_report_invalid()` で報告する
 5. `support/nvs_schema` は編集しない
 
-blob の version チェックに失敗すると、起動時に `Initialize NVS` 画面へ強制遷移します。壊れたデータを黙って使わないための仕組みです。
+blob の version チェックに失敗すると、起動時に `Initialize NVS` 画面へ強制遷移します。壊れたデータや形式の違うデータを黙って使わず、[Migration](#migration) の方針どおり全消去で回復するための仕組みです。
 
 ## Notes
 

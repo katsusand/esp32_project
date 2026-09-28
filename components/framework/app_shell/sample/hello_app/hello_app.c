@@ -23,13 +23,16 @@ typedef struct {
 } hello_app_action_tracker_t;
 
 static cyd_display_screen_t s_hello_screen;
+/* Each app hit-tests the screen it drew, so the info app keeps its own. */
+static cyd_display_screen_t s_info_screen;
 static TickType_t s_hello_last_log_tick;
 static hello_app_action_tracker_t s_hello_action_tracker;
 static hello_app_action_tracker_t s_info_action_tracker;
 
 static const app_shell_app_t *info_app_get_app(void);
 
-static bool hello_app_touch_confirmed_action(const cyd_input_event_t *event,
+static bool hello_app_touch_confirmed_action(const cyd_display_screen_t *screen,
+                                             const cyd_input_event_t *event,
                                              hello_app_action_tracker_t *tracker,
                                              uint16_t *action_id)
 {
@@ -38,7 +41,8 @@ static bool hello_app_touch_confirmed_action(const cyd_input_event_t *event,
     }
 
     if (event->data.touch.action == CYD_INPUT_TOUCH_ACTION_PRESS) {
-        tracker->pending = cyd_display_hit_test_action(event->data.touch.x,
+        tracker->pending = cyd_display_screen_hit_test(screen,
+                                                       event->data.touch.x,
                                                        event->data.touch.y,
                                                        &tracker->action_id);
         tracker->long_pressed = false;
@@ -60,7 +64,8 @@ static bool hello_app_touch_confirmed_action(const cyd_input_event_t *event,
     uint16_t release_action_id = 0;
     bool confirmed = tracker->pending &&
                      !tracker->long_pressed &&
-                     cyd_display_hit_test_action(event->data.touch.x,
+                     cyd_display_screen_hit_test(screen,
+                                                 event->data.touch.x,
                                                  event->data.touch.y,
                                                  &release_action_id) &&
                      release_action_id == tracker->action_id;
@@ -113,10 +118,10 @@ static esp_err_t hello_app_show_main(void)
 
 static esp_err_t info_app_show_main(void)
 {
-    cyd_display_screen_t screen = { 0 };
+    cyd_display_screen_t *screen = &s_info_screen;
 
-    cyd_ui_screen_clear(&screen);
-    cyd_ui_add_text(&screen,
+    cyd_ui_screen_clear(screen);
+    cyd_ui_add_text(screen,
                     "hello_app",
                     0,
                     4,
@@ -125,7 +130,7 @@ static esp_err_t info_app_show_main(void)
                     CYD_DISPLAY_ALIGN_CENTER,
                     2,
                     CYD_UI_COLOR_CYAN);
-    cyd_ui_add_text(&screen,
+    cyd_ui_add_text(screen,
                     "title: hello_app",
                     4,
                     12,
@@ -134,7 +139,7 @@ static esp_err_t info_app_show_main(void)
                     CYD_DISPLAY_ALIGN_LEFT,
                     1,
                     CYD_UI_COLOR_WHITE);
-    cyd_ui_add_text(&screen,
+    cyd_ui_add_text(screen,
                     "author: katsusand",
                     4,
                     15,
@@ -143,7 +148,7 @@ static esp_err_t info_app_show_main(void)
                     CYD_DISPLAY_ALIGN_LEFT,
                     1,
                     CYD_UI_COLOR_WHITE);
-    cyd_ui_add_button(&screen,
+    cyd_ui_add_button(screen,
                       "OK",
                       12,
                       27,
@@ -153,7 +158,7 @@ static esp_err_t info_app_show_main(void)
                       CYD_UI_COLOR_CYAN,
                       INFO_APP_ACTION_OK);
 
-    return cyd_ui_submit(&screen);
+    return cyd_ui_submit(screen);
 }
 
 static esp_err_t hello_app_enter(void *ctx, const app_shell_app_t *from_app)
@@ -172,7 +177,7 @@ static esp_err_t hello_app_step(void *ctx)
     cyd_input_event_t event = { 0 };
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(HELLO_APP_INPUT_POLL_MS)) == ESP_OK) {
         uint16_t action_id = 0;
-        if (hello_app_touch_confirmed_action(&event, &s_hello_action_tracker, &action_id) &&
+        if (hello_app_touch_confirmed_action(&s_hello_screen, &event, &s_hello_action_tracker, &action_id) &&
             action_id == HELLO_APP_ACTION_INFO) {
             ESP_LOGI(TAG, "switching to info_app");
             ESP_RETURN_ON_ERROR(app_shell_switch_to(info_app_get_app()), TAG, "switch to info_app failed");
@@ -210,7 +215,7 @@ static esp_err_t info_app_step(void *ctx)
     cyd_input_event_t event = { 0 };
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(HELLO_APP_INPUT_POLL_MS)) == ESP_OK) {
         uint16_t action_id = 0;
-        if (hello_app_touch_confirmed_action(&event, &s_info_action_tracker, &action_id) &&
+        if (hello_app_touch_confirmed_action(&s_info_screen, &event, &s_info_action_tracker, &action_id) &&
             action_id == INFO_APP_ACTION_OK) {
             ESP_LOGI(TAG, "returning to hello_app");
             ESP_RETURN_ON_ERROR(app_shell_switch_to(hello_app_get_app()), TAG, "switch to hello_app failed");

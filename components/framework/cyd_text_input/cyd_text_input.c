@@ -63,9 +63,10 @@ static bool text_input_confirmed_action(const cyd_input_event_t *event, uint16_t
     }
     switch (event->data.touch.action) {
     case CYD_INPUT_TOUCH_ACTION_PRESS:
-        s_session.touch.pending = cyd_display_hit_test_action(event->data.touch.x,
-                                                               event->data.touch.y,
-                                                               &s_session.touch.action_id);
+        s_session.touch.pending = cyd_display_screen_hit_test(&s_screen,
+                                                              event->data.touch.x,
+                                                              event->data.touch.y,
+                                                              &s_session.touch.action_id);
         s_session.touch.long_pressed = false;
         return false;
     case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
@@ -76,7 +77,10 @@ static bool text_input_confirmed_action(const cyd_input_event_t *event, uint16_t
         uint16_t released = 0;
         bool confirmed = s_session.touch.pending &&
                          !s_session.touch.long_pressed &&
-                         cyd_display_hit_test_action(event->data.touch.x, event->data.touch.y, &released) &&
+                         cyd_display_screen_hit_test(&s_screen,
+                                                     event->data.touch.x,
+                                                     event->data.touch.y,
+                                                     &released) &&
                          released == s_session.touch.action_id;
         s_session.touch = (text_input_touch_tracker_t){ 0 };
         if (confirmed && action_id != NULL) {

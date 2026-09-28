@@ -70,7 +70,8 @@ static bool cyd_clock_settings_touch_confirmed_action(const cyd_input_event_t *e
 
     switch (event->data.touch.action) {
     case CYD_INPUT_TOUCH_ACTION_PRESS:
-        tracker->pending = cyd_display_hit_test_action(event->data.touch.x,
+        tracker->pending = cyd_display_screen_hit_test(&s_clock_settings_screen,
+                                                       event->data.touch.x,
                                                        event->data.touch.y,
                                                        &tracker->action_id);
         tracker->long_pressed = false;
@@ -85,7 +86,8 @@ static bool cyd_clock_settings_touch_confirmed_action(const cyd_input_event_t *e
         uint16_t release_action_id = 0;
         bool confirmed = tracker->pending &&
                          !tracker->long_pressed &&
-                         cyd_display_hit_test_action(event->data.touch.x,
+                         cyd_display_screen_hit_test(&s_clock_settings_screen,
+                                                     event->data.touch.x,
                                                      event->data.touch.y,
                                                      &release_action_id) &&
                          release_action_id == tracker->action_id;
@@ -132,7 +134,10 @@ static bool cyd_clock_settings_touch_stepper_action(const cyd_input_event_t *eve
         return false;
     }
 
-    if (!cyd_display_hit_test_action(event->data.touch.x, event->data.touch.y, &pressed_action_id)) {
+    if (!cyd_display_screen_hit_test(&s_clock_settings_screen,
+                                     event->data.touch.x,
+                                     event->data.touch.y,
+                                     &pressed_action_id)) {
         return false;
     }
 

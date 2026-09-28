@@ -30,8 +30,12 @@ ESP_ERROR_CHECK(cyd_display_show_boot_screen());
 
 タイトルと本文だけの簡単な画面は `cyd_display_show_text()` で表示できます。
 
+`show_text()`、`show_lines()`、`show_mode_screen()` は、呼び出し側の `cyd_display_screen_t` に画面を組み立ててから送ります。app はその buffer でタッチを判定するので（[Hit Testing](#hit-testing)）、表示中の画面と判定に使う画面が常に一致します。app が持っている画面 buffer をそのまま渡してください。
+
 ```c
-ESP_ERROR_CHECK(cyd_display_show_text("CYD", "Hello World"));
+static cyd_display_screen_t s_screen;
+
+ESP_ERROR_CHECK(cyd_display_show_text(&s_screen, "CYD", "Hello World"));
 ```
 
 複数行のテキストを表示する場合は `cyd_display_show_lines()` を使います。
@@ -43,10 +47,10 @@ const char *lines[] = {
     "Touch: enabled",
 };
 
-ESP_ERROR_CHECK(cyd_display_show_lines("Status", lines, sizeof(lines) / sizeof(lines[0])));
+ESP_ERROR_CHECK(cyd_display_show_lines(&s_screen, "Status", lines, sizeof(lines) / sizeof(lines[0])));
 ```
 
-ボタン付きのモード画面を表示する場合は `cyd_display_show_mode_screen()` を使います。
+ボタン付きのモード画面を表示する場合は `cyd_display_show_mode_screen()` を使います。ボタンの `action_id` は先頭から `0`、`1`、`2` … です。
 
 ```c
 const char *lines[] = {
@@ -59,6 +63,7 @@ const char *buttons[] = {
 };
 
 ESP_ERROR_CHECK(cyd_display_show_mode_screen(
+    &s_screen,
     "Mode",
     lines,
     sizeof(lines) / sizeof(lines[0]),
@@ -238,7 +243,7 @@ LovyanGFX は**ポインタの型でソース形式を決めます**。[LGFXBase
 
 実例は `wifi_rssi_history` を参照してください。Wi-Fi 未接続時に `WIFI_RSSI_HISTORY_GAP_DBM` を記録しています。
 
-`CYD_DISPLAY_WIDGET_BUTTON` で `enabled=false` の場合、描画はされますが `cyd_display_hit_test_action()` とモードボタンマップの対象から外れます。無効状態の色は呼び出し側が指定します。
+`CYD_DISPLAY_WIDGET_BUTTON` で `enabled=false` の場合、描画はされますが `cyd_display_screen_hit_test()` の対象から外れます。無効状態の色は呼び出し側が指定します。
 
 English supplement: Widget order is significant for dirty-rect comparison. Keep stable widget ordering between frames when updating only text or colors.
 
@@ -307,18 +312,24 @@ if (cyd_display_touch_to_grid(x, y, &col, &row)) {
 }
 ```
 
-モード画面のボタン判定には以下を使えます。
+## Hit Testing
 
-- `cyd_display_hit_test_action()`
-- `cyd_display_hit_test_mode_button()`
-- `cyd_display_get_mode_button_grid_rect()`
-- `cyd_display_get_mode_button_bounds()`
+タッチの判定は、app が自分で持っている画面 buffer に対して `cyd_display_screen_hit_test()` で行います。タッチ座標にある有効な `CYD_DISPLAY_WIDGET_BUTTON` の `action_id` を返します。
 
-`cyd_display_hit_test_action()` は、現在画面の有効な `CYD_DISPLAY_WIDGET_BUTTON` を対象に、タッチ座標が含まれるボタンの `action_id` を返します。カスタム画面でボタンごとに独自 action id を割り当てた場合に使います。
+```c
+uint16_t action_id = 0;
+if (cyd_display_screen_hit_test(&s_screen, event.data.touch.x, event.data.touch.y, &action_id)) {
+    /* action_id のボタンが押された */
+}
+```
 
-`cyd_display_get_mode_button_grid_rect()` と `cyd_display_hit_test_mode_button()` は、最後に送信されたモード画面またはボタンウィジェットの内部マップを参照します。
+`cyd_display` はボタンの情報を持ちません。以前は最後に送られた画面からボタン表を作って保持し、各 app がそれを lock 付きで参照していました。現在は app が自分の組み立てた画面をそのまま判定に使うので、表示 task との共有も lock も不要で、表示の進み具合とずれることもありません。
 
-English supplement: Generic action hit testing reads button widgets from the current screen. Mode button hit testing uses the most recently rendered button map maintained by the display component.
+モード画面も同じ関数で判定します。ボタンの `action_id` がそのまま何番目のボタンかを表します。モード画面の配置を事前に知りたい場合は `cyd_display_get_mode_button_bounds()` で計算できます。
+
+別の component に描画を任せる間（例: `cyd_text_input` のキーボード）は、タッチの判定もその component に任せます。app が自分の隠れた画面で判定すると、見えていないボタンが反応します。ログ表示（`cyd_display_log_show()`）はボタンを持たず入力も受けないので、表示中にタップへ反応しないようにするのは呼び出し側の責任です。
+
+English contract: an app hit-tests the screen buffer it built and last submitted, on its own task; this component keeps no button state. Canned screens build into the caller's buffer so the buffer always matches the display. While another component draws, hand touch handling to it instead of testing your hidden screen.
 
 ## Calibration Drawing Helpers
 

@@ -161,6 +161,14 @@ LED タスクは 25 ms ごとに状態を更新し、必要がある場合だけ
 
 English supplement: Pattern updates are asynchronous. The LED task samples commands and renders output on a 25 ms update cadence.
 
+## Future Direction
+
+この component は発展途上です。イベントに応じて、点灯・消灯・点滅（速い / 遅い）・色で状態を表す仕組みを、今後整理する予定です（2026-09-28 に将来の課題としました）。
+
+その際に、GPIO 出力の `ESP_ERROR_CHECK`（レビュー #12 で残した部分）もあわせて見直します。
+
+English supplement: the event-to-pattern model (on, off, fast/slow blink, color) is due for a redesign. Revisit the ESP_ERROR_CHECK around gpio_set_level at the same time.
+
 ## Configuration
 
 主な設定項目は `idf.py menuconfig` の `CYD Status LED` から変更できます。

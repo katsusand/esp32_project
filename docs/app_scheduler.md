@@ -389,6 +389,10 @@ scheduler は `localtime_r()` で得られるローカル時刻を使います�
 
 English supplement: The scheduler intentionally ignores obviously invalid wall-clock time to avoid firing stale schedules during boot before time synchronization.
 
+`INSTANT` は、毎秒の判定で時刻がちょうど指定の秒に一致したときだけ発火します。NTP 補正などで時刻がその秒を飛び越えた場合は発火しません。現在の利用者（時計のアラーム）はこの挙動を受け入れています（[cyd_clock_alarm.md](cyd_clock_alarm.md#limitations)）。飛び越えを拾う必要が出たら、`time_tick` の `jumped` / `delta_sec` を使った判定を追加します。
+
+English supplement: an INSTANT schedule fires only when a tick lands on its exact second; a clock jump over that second skips it. Known and accepted for now.
+
 ## Clock Settings Page
 
 この時計プロジェクトでは、`Clock Settings` アプリに `SCHED` ページがあります。

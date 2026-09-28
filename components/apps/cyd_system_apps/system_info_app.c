@@ -472,7 +472,7 @@ static esp_err_t cyd_info_app_step(void *ctx)
     cyd_input_event_t event = { 0 };
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(CYD_SYSTEM_APPS_INPUT_POLL_MS)) == ESP_OK) {
         uint16_t action_id = 0;
-        if (cyd_system_apps_touch_confirmed_action(&event, &s_info_touch_tracker, &action_id)) {
+        if (cyd_system_apps_touch_confirmed_action(&s_info_screen, &event, &s_info_touch_tracker, &action_id)) {
             if (action_id == CYD_INFO_APP_ACTION_TOGGLE_PAGE) {
                 s_info_page = (cyd_info_page_t)(((int)s_info_page + 1) % (int)CYD_INFO_PAGE_COUNT);
                             return cyd_info_app_show();

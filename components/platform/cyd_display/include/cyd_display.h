@@ -150,9 +150,19 @@ esp_err_t cyd_display_claim_owner(void);
 esp_err_t cyd_display_release_owner(void);
 esp_err_t cyd_display_submit_screen(const cyd_display_screen_t *screen);
 esp_err_t cyd_display_show_boot_screen(void);
-esp_err_t cyd_display_show_text(const char *title, const char *message);
-esp_err_t cyd_display_show_lines(const char *title, const char *const *lines, size_t line_count);
-esp_err_t cyd_display_show_mode_screen(const char *title,
+/*
+ * Canned screens. Each is built into the caller's `screen` and then submitted,
+ * so that buffer always holds what is on the display and the caller can
+ * hit-test it (see cyd_display_screen_hit_test()). A text or lines screen has
+ * no buttons; mode screen buttons get action ids 0 .. button_count - 1.
+ */
+esp_err_t cyd_display_show_text(cyd_display_screen_t *screen, const char *title, const char *message);
+esp_err_t cyd_display_show_lines(cyd_display_screen_t *screen,
+                                 const char *title,
+                                 const char *const *lines,
+                                 size_t line_count);
+esp_err_t cyd_display_show_mode_screen(cyd_display_screen_t *screen,
+                                       const char *title,
                                        const char *const *lines,
                                        size_t line_count,
                                        const char *const *buttons,
@@ -169,9 +179,17 @@ esp_err_t cyd_display_invalidate(void);
 int32_t cyd_display_get_width(void);
 int32_t cyd_display_get_height(void);
 bool cyd_display_touch_to_grid(int16_t x, int16_t y, uint8_t *col, uint8_t *row);
-bool cyd_display_hit_test_action(int16_t x, int16_t y, uint16_t *action_id);
-bool cyd_display_get_mode_button_grid_rect(size_t index, cyd_display_grid_rect_t *rect);
-bool cyd_display_hit_test_mode_button(int16_t x, int16_t y, size_t *button_index);
+/*
+ * Finds the enabled button of `screen` under the touch point.
+ *
+ * English contract: an app hit-tests the screen buffer it built and last
+ * submitted, on its own task. This component keeps no copy of anyone's
+ * buttons, so what a tap means always matches what that app drew, with no
+ * lock and no dependence on how far the display task has got. An app that
+ * lets another component draw (a text input session, say) must hand touch
+ * handling over to it for that time rather than test its own hidden screen.
+ */
+bool cyd_display_screen_hit_test(const cyd_display_screen_t *screen, int16_t x, int16_t y, uint16_t *action_id);
 bool cyd_display_get_mode_button_bounds(size_t button_count,
                                         size_t index,
                                         int32_t *x,

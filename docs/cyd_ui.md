@@ -41,7 +41,7 @@ cyd_ui_add_button_enabled(&screen, "NEXT", 27, 26, 12, 3,
                           ACTION_NEXT, false);
 ```
 
-English supplement: Disabled buttons keep their `action_id` for screen state clarity, but `cyd_display` excludes them from action hit testing.
+English supplement: Disabled buttons keep their `action_id` for screen state clarity, but `cyd_display_screen_hit_test()` skips them.
 
 最後に `cyd_ui_submit()` で `cyd_display` へ渡します。
 

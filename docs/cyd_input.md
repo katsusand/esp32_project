@@ -75,17 +75,7 @@ ESP_ERROR_CHECK(cyd_input_discard_pending_events());
 
 English supplement: Use this only at intentional interaction boundaries, such as after a blocking scan, where queued touches would represent stale UI state.
 
-モード画面のボタンにタッチしているかを調べる場合は `cyd_input_get_mode_button_touch()` を使います。
-
-```c
-size_t button_index = 0;
-bool pressed = false;
-
-ESP_ERROR_CHECK(cyd_input_get_mode_button_touch(button_count, &button_index, &pressed));
-if (pressed) {
-    printf("mode button %u pressed\n", (unsigned)button_index);
-}
-```
+ボタンの判定は入力 component ではなく、画面を組み立てた app が `cyd_display_screen_hit_test()` で行います（[CYD Display の Hit Testing](cyd_display.md#hit-testing)）。以前あった `cyd_input_get_mode_button_touch()` は、`cyd_display` が保持していたボタン表を参照していたため削除しました。
 
 タッチ補正を手動で実行する場合は `cyd_input_run_touch_calibration()` を使います。
 
