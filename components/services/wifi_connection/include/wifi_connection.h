@@ -83,6 +83,12 @@ esp_err_t wifi_connection_release(wifi_connection_user_t user);
    (CONNECTING), without waiting for its result. ESP_OK with nothing to do when
    already CONNECTED; ESP_ERR_INVALID_STATE during setup or another attempt. */
 esp_err_t wifi_connection_retry_connection_without_setup_async(void);
+/*
+ * ESP_OK once connected, ESP_ERR_TIMEOUT otherwise. ESP_ERR_NOT_FINISHED while
+ * Wi-Fi setup has the STA: a pause, not a failure. When setup ends, a user
+ * that is still acquired is resumed: connected with the new or the saved
+ * profiles, or failed with the reason (no saved profile, AP not found, ...).
+ */
 esp_err_t wifi_connection_wait_connected(TickType_t wait_ticks);
 esp_err_t wifi_connection_get_state(wifi_connection_state_t *state);
 uint32_t wifi_connection_get_active_users(void);

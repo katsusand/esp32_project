@@ -14,6 +14,7 @@
 #include "nvs_schema.h"
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
+#include "error_log_store.h"
 #include "radio_manager.h"
 #include "time_sync.h"
 
@@ -28,6 +29,8 @@ static const nvs_key_descriptor_t NVS_KEY_TIME_SYNC_CONFIG = {
 #ifndef CONFIG_TIME_SYNC_ENABLED
 #define CONFIG_TIME_SYNC_ENABLED 1
 #endif
+/* How often a sync paused by Wi-Fi setup asks for the radio again. */
+#define TIME_SYNC_SETUP_PAUSE_POLL_SECONDS 5U
 #ifndef CONFIG_TIME_SYNC_TASK_STACK_SIZE
 #define CONFIG_TIME_SYNC_TASK_STACK_SIZE 4096
 #endif
@@ -477,8 +480,17 @@ static void time_sync_task(void *arg)
         esp_err_t radio_err = radio_manager_acquire(&radio_request,
                                                     &lease,
                                                     pdMS_TO_TICKS(CONFIG_TIME_SYNC_RADIO_WAIT_TIMEOUT_MS));
+        if (radio_err == ESP_ERR_NOT_FINISHED) {
+            /* Wi-Fi setup has the STA. Not a failure: keep the request and ask
+               again, until setup ends in a connection or a real failure. */
+            ESP_LOGI(TAG, "time sync paused for Wi-Fi setup; retry in %u seconds",
+                     (unsigned)TIME_SYNC_SETUP_PAUSE_POLL_SECONDS);
+            (void)time_sync_delay_seconds(TIME_SYNC_SETUP_PAUSE_POLL_SECONDS);
+            continue;
+        }
         if (radio_err != ESP_OK) {
             ESP_LOGW(TAG, "time sync radio acquire failed: %s", esp_err_to_name(radio_err));
+            (void)error_log_store_append_esp_err(TAG, "time sync failed: no Internet connection", radio_err);
             time_sync_record_attempt_status(radio_err);
             bool request_cleared = time_sync_clear_request_if_generation(request_generation);
             time_sync_set_state(request_cleared ? TIME_SYNC_STATE_IDLE : TIME_SYNC_STATE_WAITING_WIFI);
@@ -491,6 +503,8 @@ static void time_sync_task(void *arg)
             time_sync_clear_requests_after_success();
             request_cleared = true;
         } else {
+            /* One line per failed request, after its retries, not per attempt. */
+            (void)error_log_store_append_esp_err(TAG, "time sync failed: NTP", sync_err);
             request_cleared = time_sync_clear_request_if_generation(request_generation);
         }
         esp_err_t release_err = radio_manager_release(&lease);

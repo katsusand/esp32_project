@@ -100,6 +100,15 @@ English supplement: SNTP is initialized for each sync attempt and deinitialized 
 
 失敗時 retry は通常周期とは別に、`CONFIG_TIME_SYNC_RETRY_DELAY_SECONDS` ごとに `CONFIG_TIME_SYNC_RETRY_ATTEMPTS` 回実行します。retry 上限に達した場合は警告ログを出し、通常周期へ戻ります。
 
+同期に失敗すると、エラーログ（SD）に1行記録します。
+
+- 無線を確保できなかったとき: `time sync failed: no Internet connection`。接続できなかった理由（`AP not found` など）は、Wi-Fi 側が別の行に記録します
+- NTP が retry を使い切って失敗したとき: `time sync failed: NTP`。試行ごとではなく1回の要求につき1行です
+
+同期中に Wi-Fi setup を開くのは普通の操作なので、失敗にはしません。`radio_manager_acquire()` が `ESP_ERR_NOT_FINISHED`（一時停止）を返したら、エラーログには書かず、同期の要求も残したまま `TIME_SYNC_SETUP_PAUSE_POLL_SECONDS`（5秒）ごとに取り直します。setup の間は何分でも待ちます。setup が終わると接続できるか理由付きで失敗するので、同期はそこで成功するか、上の失敗として記録されます。
+
+English supplement: a failed sync request leaves one error log line with the stage that failed. A pause for Wi-Fi setup (ESP_ERR_NOT_FINISHED) is not a failure: the request is kept and retried every few seconds, without a time limit, until setup ends and the connection either succeeds or fails with a reason.
+
 English supplement: The jitter is symmetric around the base interval. If subtracting jitter would underflow, the delay is clamped to at least 1 second.
 
 ## Configuration

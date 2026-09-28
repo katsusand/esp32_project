@@ -619,6 +619,20 @@ static void wifi_connection_handle_complete_setup(const wifi_connection_cmd_t *c
     }
 
     ESP_LOGI(TAG, "Wi-Fi setup cancelled");
+    if (wifi_connection_has_active_users()) {
+        /* Setup only paused its users (wait_connected answered
+           ESP_ERR_NOT_FINISHED), so resume them with the saved profiles. With
+           none saved, or none in range, that ends as an ordinary failure with
+           its reason. */
+        esp_err_t err = wifi_connection_stop_sta();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Wi-Fi STA stop failed: %s", esp_err_to_name(err));
+        }
+        ESP_LOGI(TAG, "resuming Wi-Fi for its users");
+        wifi_connection_request_connect(WIFI_CONNECTION_STATE_CONNECTING);
+        wifi_connection_complete(cmd, ESP_OK);
+        return;
+    }
     wifi_connection_complete(cmd, wifi_connection_turn_off());
 }
 
@@ -946,12 +960,19 @@ esp_err_t wifi_connection_wait_connected(TickType_t wait_ticks)
                         TAG,
                         "Wi-Fi connection is off");
 
+    if (s_wifi_connection.state == WIFI_CONNECTION_STATE_SETUP_RUNNING) {
+        return ESP_ERR_NOT_FINISHED;
+    }
+
     EventBits_t bits = xEventGroupWaitBits(s_wifi_connection.event_group,
                                            WIFI_CONNECTION_CONNECTED_BIT,
                                            pdFALSE,
                                            pdFALSE,
                                            wait_ticks);
-    return (bits & WIFI_CONNECTION_CONNECTED_BIT) != 0 ? ESP_OK : ESP_ERR_TIMEOUT;
+    if ((bits & WIFI_CONNECTION_CONNECTED_BIT) != 0) {
+        return ESP_OK;
+    }
+    return s_wifi_connection.state == WIFI_CONNECTION_STATE_SETUP_RUNNING ? ESP_ERR_NOT_FINISHED : ESP_ERR_TIMEOUT;
 }
 
 esp_err_t wifi_connection_get_state(wifi_connection_state_t *state)
