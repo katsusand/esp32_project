@@ -116,7 +116,9 @@ radio_manager
 
 このため、新しい通信 service を追加する場合は、通常は `wifi_connection` を直接使わず `radio_manager` を経由する想定です。`wifi_connection` 直呼びは低レベル統合や切り分け用途に寄せます。
 
-English supplement: `wifi_connection` owns Wi-Fi state. `radio_manager` owns client-facing access sequencing.
+`wifi_connection_acquire()` は、`wifi_connection` の manager task が要求を受け付けるまで待ってから戻ります。戻った時点の状態は `CONNECTING` / `RECONNECTING` / `CONNECTED` / setup 系のどれかで、前回の試行の `FAILED` が残って見えることはありません。`radio_manager` はその後、`CONNECTED` になるか失敗するまで状態を見て待ちます。
+
+English supplement: `wifi_connection` owns Wi-Fi state. `radio_manager` owns client-facing access sequencing. After acquire returns, the Wi-Fi state already reflects the request, so a FAILED seen afterwards belongs to this attempt.
 
 ## Future Direction
 

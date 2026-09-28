@@ -14,6 +14,16 @@
 
 English supplement: This component owns the ESP-IDF Wi-Fi STA driver setup for the project. Higher-level UI/provisioning logic belongs to `cyd_wifi_setup` and `wifi_connection`.
 
+## Ownership
+
+STA を操作する関数（`esp32_wifi_sta_init()`、`esp32_wifi_sta_init_with_config()`、`esp32_wifi_sta_start()`、`esp32_wifi_sta_stop()`、`esp32_wifi_sta_enter_scan_mode()`）は、1つの task からしか呼べません。最初に呼んだ task が所有者になり、それ以外の task からの呼び出しは `ESP_ERR_INVALID_STATE` で拒否してログに残します。このプロジェクトでは所有者は `wifi_connection` の manager task です。
+
+ESP-IDF のイベント handler も STA を操作しません。以前は `WIFI_EVENT_STA_START` と切断時に handler 自身が `esp_wifi_connect()` を呼んでいたため、イベント task が別の task の停止と競合していました。現在の handler は状態を記録して、`esp32_wifi_sta_set_event_callback()` で登録された callback に `CONNECTED` / `DISCONNECTED` を通知するだけです。再接続するかどうかは所有者が決めます。
+
+getter（`esp32_wifi_sta_get_status()`、`esp32_wifi_sta_get_scan_records()` など）はどの task からでも呼べます。
+
+English contract: operating functions must come from a single owner task, enforced at runtime. The event handler never operates the driver; it records state and reports through the event callback, which runs on the ESP-IDF event task and must not block or call back into this component.
+
 ## Public API
 
 利用するファイルでは、次のヘッダーを include します。
@@ -37,7 +47,6 @@ if (err == ESP_OK) {
 esp32_wifi_sta_config_t config = {
     .ssid = "ssid",
     .password = "password",
-    .max_retry = 5,
     .authmode_threshold = WIFI_AUTH_WPA2_PSK,
     .sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
     .sae_h2e_identifier = "",
@@ -47,7 +56,9 @@ ESP_ERROR_CHECK(esp32_wifi_sta_init_with_config(&config));
 ESP_ERROR_CHECK(esp32_wifi_sta_start());
 ```
 
-接続完了待ちは `esp32_wifi_sta_wait_connected()` で行います。戻り値は、接続成功なら `ESP_OK`、リトライ上限到達なら `ESP_FAIL`、待ち時間切れなら `ESP_ERR_TIMEOUT` です。
+`esp32_wifi_sta_start()` は、必要なら driver を開始してから、呼び出した task 上で `esp_wifi_connect()` を1回だけ呼びます。自動の再試行はしません。
+
+接続完了待ちは `esp32_wifi_sta_wait_connected()` で行います。戻り値は、接続成功なら `ESP_OK`、その試行が失敗したら `ESP_FAIL`、待ち時間切れなら `ESP_ERR_TIMEOUT` です。`wifi_connection` はこの関数ではなく、event callback 経由の通知で待ちます。
 
 状態取得には `esp32_wifi_sta_get_status()` または `esp32_wifi_sta_is_connected()` を使います。
 
@@ -81,7 +92,7 @@ ESP_ERROR_CHECK(esp32_wifi_sta_get_scan_records(records, 8, &record_count));
 
 Credential の接続テストと保存は上位の `wifi_connection_connect_and_save()` を使います。保存済み credential は、`CONFIG_ESP32_WIFI_STA_SSID` が空のときだけ default configuration として読み込まれます。
 
-Wi-Fi を停止する場合は `esp32_wifi_sta_stop()` を使います。停止時は `started=false`、`retry_count=0`、IP 情報なし、状態 `STOPPED` に戻り、connected/fail bit をクリアします。
+Wi-Fi を停止する場合は `esp32_wifi_sta_stop()` を使います。停止時は `started=false`、IP 情報なし、状態 `STOPPED` に戻り、connected/fail bit をクリアします。自分で止めたことによる切断は失敗として通知しません。
 
 English supplement: Saved credentials are fallback defaults, not a replacement for explicit runtime configuration passed to `esp32_wifi_sta_init_with_config()`.
 
@@ -116,9 +127,9 @@ SSID / password はリポジトリにコミットしない運用を推奨しま�
 
 English intent: credentials are configuration/runtime inputs, not application source constants.
 
-managed connection flowでは、`ESP32_WIFI_STA_MAX_RETRY` は初回試行後に行うfresh retry回数です。各retryはSTAを停止して設定を再適用し、`ESP32_WIFI_STA_RETRY_DELAY_MS` 待ってから開始します。
+`ESP32_WIFI_STA_MAX_RETRY` は、`wifi_connection` が初回試行の後に行う fresh retry の回数です。この component 自身は再試行しません。各 retry は STA を停止して設定を再適用し、`ESP32_WIFI_STA_RETRY_DELAY_MS` 待ってから開始します。
 
-English supplement: Managed retries rebuild operational STA state instead of repeatedly calling `esp_wifi_connect()` from one failed state.
+English supplement: Retries rebuild operational STA state instead of repeatedly calling `esp_wifi_connect()` from one failed state, and they are the owner's decision, not the driver's.
 
 ## Build Switch
 
@@ -144,7 +155,7 @@ SSIDが未設定の場合、`esp32_wifi_sta_init()` は `ESP_ERR_NOT_FOUND` を�
 また、接続リトライに失敗した場合、`esp32_wifi_sta_wait_connected()` は `ESP_FAIL` を返します。
 上位コンポーネントはこれらを見て `esp32_wifi_sta_enter_scan_mode()` を呼び、近くのAPをスキャンできます。
 
-このプロジェクトでは、対話的な scan/password UI は `cyd_wifi_setup` の `wifi setup app` が担当します。`wifi_connection` は SSID 未設定や起動時 setup shortcut を `SETUP_REQUIRED` として表し、`clock app` や `settings app` が必要に応じて `wifi setup app` へ切り替えます。
+このプロジェクトでは、対話的な scan/password UI は `cyd_wifi_setup` の `wifi setup app` が担当します。`wifi_connection` は SSID 未設定や起動時 setup shortcut を `SETUP_REQUIRED` として表し、`clock app` や `settings app` が必要に応じて `wifi setup app` へ切り替えます。setup UI はこの component を直接呼ばず、`wifi_connection_setup_scan()` で manager task に scan を依頼します。
 
 scan mode画面は、画面下部の `SCAN` ボタンを押した時だけスキャン結果を更新します。
 SSID行をタッチするとパスワード入力画面へ進みます。
@@ -184,9 +195,9 @@ typedef enum {
 } esp32_wifi_sta_state_t;
 ```
 
-`WIFI_EVENT_STA_DISCONNECTED` を受けると、`max_retry` まで再接続します。リトライ上限に達すると `FAILED` になり、`esp32_wifi_sta_wait_connected()` が `ESP_FAIL` を返せるように fail bit を立てます。
+接続を試している間（`esp32_wifi_sta_start()` の後）に `WIFI_EVENT_STA_DISCONNECTED` を受けると、再接続はせずに `FAILED` にし、fail bit を立てて `DISCONNECTED` を通知します。確立済みの接続が切れた場合も同じです。
 
-`IP_EVENT_STA_GOT_IP` を受けると、`retry_count` を 0 に戻し、`has_ip=true` と IP 情報を保存し、状態を `CONNECTED` にします。
+`IP_EVENT_STA_GOT_IP` を受けると、`has_ip=true` と IP 情報を保存し、状態を `CONNECTED` にして `CONNECTED` を通知します。所有者がすでに止めた試行の分は無視します。
 
 English supplement: `CONNECTED` means the station got an IP address, not merely that 802.11 association completed.
 
@@ -219,6 +230,6 @@ if (wait_ret == ESP_OK) {
 `esp32_wifi_sta_wait_connected()` は `ESP_OK`、`ESP_FAIL`、`ESP_ERR_TIMEOUT` を返します。
 接続が必須でない処理では、タイムアウトしてもアプリケーション全体を停止しない設計にしてください。
 
-このプロジェクトの通常経路では、アプリケーションは `esp32_wifi_sta` を直接 ON/OFF せず、`wifi_connection_acquire()` / `wifi_connection_release()` を通じて Wi-Fi 利用期間を表します。`esp32_wifi_sta` は低レベル STA wrapper、`wifi_connection` は接続寿命の orchestration、`cyd_wifi_setup` はユーザー操作 UI という分担です。
+このプロジェクトでは、アプリケーションは `esp32_wifi_sta` を直接呼びません。`wifi_connection_acquire()` / `wifi_connection_release()` を通じて Wi-Fi 利用期間を表し、STA を操作するのは `wifi_connection` の manager task だけです（[Ownership](#ownership)）。`esp32_wifi_sta` は低レベル STA wrapper、`wifi_connection` は接続寿命の orchestration、`cyd_wifi_setup` はユーザー操作 UI という分担です。
 
 English intent: Wi-Fi availability is a runtime condition. Local UI tasks should usually remain alive even when network setup fails.

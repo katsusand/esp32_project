@@ -15,7 +15,6 @@
 #include "cyd_wifi_setup.h"
 #include "time_sync.h"
 #include "wifi_connection.h"
-#include "wifi_connection.h"
 
 #define WIFI_SCAN_STATUS_LINE_COUNT 10
 #define WIFI_SCAN_RECORD_CAPACITY CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE
@@ -312,15 +311,12 @@ static esp_err_t wifi_refresh_scan_session(wifi_scan_session_t *session)
                         "show searching failed");
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    esp_err_t scan_ret = esp32_wifi_sta_enter_scan_mode();
-    if (scan_ret == ESP_OK) {
-        esp_err_t records_ret = esp32_wifi_sta_get_scan_records(session->records,
-                                                                WIFI_SCAN_RECORD_CAPACITY,
-                                                                &session->record_count);
-        if (records_ret != ESP_OK) {
-            scan_ret = records_ret;
-            session->record_count = 0;
-        }
+    /* The manager task runs the scan; this UI never operates the STA. */
+    esp_err_t scan_ret = wifi_connection_setup_scan(session->records,
+                                                    WIFI_SCAN_RECORD_CAPACITY,
+                                                    &session->record_count);
+    if (scan_ret != ESP_OK) {
+        session->record_count = 0;
     }
     ESP_RETURN_ON_ERROR(wifi_show_scan_screen("Wi-Fi SSID list",
                                               scan_ret,

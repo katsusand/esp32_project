@@ -49,46 +49,25 @@ esp_err_t wifi_connection_release(wifi_connection_user_t user)
     return ESP_OK;
 }
 
-esp_err_t wifi_connection_enable(void)
-{
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-esp_err_t wifi_connection_disable(void)
-{
-    return ESP_OK;
-}
-
-esp_err_t wifi_connection_request_connection_without_setup_async(void)
-{
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
 esp_err_t wifi_connection_retry_connection_without_setup_async(void)
 {
     return ESP_ERR_NOT_SUPPORTED;
 }
 
-esp_err_t wifi_connection_retry_connection_without_setup(TickType_t wait_ticks)
-{
-    (void)wait_ticks;
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-esp_err_t wifi_connection_request_connection(TickType_t wait_ticks)
-{
-    (void)wait_ticks;
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-esp_err_t wifi_connection_request_connection_without_setup(TickType_t wait_ticks)
-{
-    (void)wait_ticks;
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
 esp_err_t wifi_connection_begin_setup(void)
 {
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t wifi_connection_setup_scan(esp32_wifi_sta_scan_record_t *records,
+                                     size_t record_capacity,
+                                     size_t *record_count)
+{
+    (void)records;
+    (void)record_capacity;
+    if (record_count != NULL) {
+        *record_count = 0;
+    }
     return ESP_ERR_NOT_SUPPORTED;
 }
 
@@ -161,16 +140,6 @@ bool wifi_connection_is_setup_active(void)
 bool wifi_connection_is_setup_requested_explicitly(void)
 {
     return false;
-}
-
-esp_err_t wifi_connection_connect_configured(TickType_t wait_ticks,
-                                             esp32_wifi_sta_failure_reason_t *failure_reason)
-{
-    (void)wait_ticks;
-    if (failure_reason != NULL) {
-        *failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-    }
-    return ESP_ERR_NOT_SUPPORTED;
 }
 
 esp_err_t wifi_connection_connect_and_save(const char *ssid,

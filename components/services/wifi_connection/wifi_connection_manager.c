@@ -2,6 +2,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/portmacro.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -38,21 +40,68 @@
 #define CONFIG_WIFI_CONNECTION_CONNECTED_WARNING_SECONDS 180
 #endif
 
-#define WIFI_CONNECTION_CONNECTED_BIT   BIT0
-#define WIFI_CONNECTION_STOPPED_BIT     BIT1
-#define WIFI_CONNECTION_ENABLE_REQ_BIT  BIT2
-#define WIFI_CONNECTION_DISABLE_REQ_BIT BIT3
-#define WIFI_CONNECTION_OFF_BIT         BIT4
-#define WIFI_CONNECTION_NO_SETUP_BIT    BIT5
+/* Mirrors state == CONNECTED; set and cleared only in wifi_connection_set_state(). */
+#define WIFI_CONNECTION_CONNECTED_BIT BIT0
 
-/* Covers one blocking scan plus the steps between abort checks. */
-#define WIFI_CONNECTION_SETUP_TAKEOVER_TIMEOUT_MS 10000U
-#define WIFI_CONNECTION_SETUP_TAKEOVER_POLL_MS    50U
+/* A few waiting callers plus STA events that arrive while an attempt is set up. */
+#define WIFI_CONNECTION_QUEUE_LENGTH 12
 
 #define TAG "wifi_connection"
 
+/*
+ * The manager task is the only place that operates the STA.
+ *
+ * English contract: requests from other tasks and STA events from the ESP-IDF
+ * event task all arrive through one queue, and this task handles them one at a
+ * time. Nothing else writes the state below. Earlier, the setup UI drove the
+ * STA from the app_shell task and the event task reconnected on its own, and
+ * flags kept the three apart; a missed case let a connect attempt restart the
+ * STA under the setup scan (review item #4). With one owner there is nothing
+ * left to keep apart.
+ */
+
+typedef enum {
+    WIFI_CONNECTION_CMD_ACQUIRE = 0,
+    WIFI_CONNECTION_CMD_RELEASE,
+    WIFI_CONNECTION_CMD_RETRY,
+    WIFI_CONNECTION_CMD_BEGIN_SETUP,
+    WIFI_CONNECTION_CMD_SETUP_SCAN,
+    WIFI_CONNECTION_CMD_SETUP_CONNECT,
+    WIFI_CONNECTION_CMD_COMPLETE_SETUP,
+    WIFI_CONNECTION_CMD_STA_EVENT,
+} wifi_connection_cmd_type_t;
+
+typedef struct {
+    SemaphoreHandle_t done;
+    esp_err_t result;
+} wifi_connection_completion_t;
+
+typedef struct {
+    wifi_connection_cmd_type_t type;
+    /* The waiting caller's, on its stack; NULL for STA events. */
+    wifi_connection_completion_t *completion;
+    union {
+        wifi_connection_user_t user;
+        bool setup_connected;
+        esp32_wifi_sta_event_t sta_event;
+        struct {
+            esp32_wifi_sta_scan_record_t *records;
+            size_t capacity;
+            size_t *count;
+        } scan;
+        struct {
+            const char *ssid;
+            const char *password;
+            wifi_auth_mode_t authmode;
+            TickType_t wait_ticks;
+            esp32_wifi_sta_failure_reason_t *failure_reason;
+        } connect;
+    } arg;
+} wifi_connection_cmd_t;
+
 typedef struct {
     TaskHandle_t task_handle;
+    QueueHandle_t queue;
     EventGroupHandle_t event_group;
     volatile wifi_connection_state_t state;
     volatile esp32_wifi_sta_failure_reason_t last_failure_reason;
@@ -61,21 +110,28 @@ typedef struct {
     volatile int64_t connected_since_us;
     volatile uint32_t connected_duration_high_water_seconds;
     volatile bool setup_requested_explicitly;
-    volatile bool setup_starting;
-    volatile bool connect_in_progress;
     volatile bool setup_requested_on_start;
     volatile bool ssid_configured;
     volatile bool last_connection_succeeded;
     volatile bool connection_result_initialized;
+    /* Manager task only. */
+    bool connect_wanted;
+    bool stop_when_unused;
+    bool has_deferred;
+    wifi_connection_cmd_t deferred;
     wifi_connection_connected_callback_t connected_callback;
     void *connected_callback_ctx;
     wifi_connection_connectivity_callback_t connectivity_callback;
     void *connectivity_callback_ctx;
 } wifi_connection_context_t;
 
+typedef enum {
+    WIFI_CONNECTION_WAIT_TIMEOUT = 0,
+    WIFI_CONNECTION_WAIT_STA_EVENT,
+    WIFI_CONNECTION_WAIT_ABORTED,
+} wifi_connection_wait_result_t;
+
 static wifi_connection_context_t s_wifi_connection = {
-    .task_handle = NULL,
-    .event_group = NULL,
     .state = WIFI_CONNECTION_STATE_STOPPED,
 };
 static portMUX_TYPE s_wifi_connection_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -112,6 +168,18 @@ static void wifi_connection_set_state(wifi_connection_state_t state)
         s_wifi_connection.connected_since_us = 0;
     }
     s_wifi_connection.state = state;
+
+    if (state == WIFI_CONNECTION_STATE_CONNECTED) {
+        xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT);
+    } else {
+        xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT);
+    }
+}
+
+static bool wifi_connection_state_is_setup(wifi_connection_state_t state)
+{
+    return state == WIFI_CONNECTION_STATE_SETUP_REQUIRED ||
+           state == WIFI_CONNECTION_STATE_SETUP_RUNNING;
 }
 
 static bool wifi_connection_has_active_users(void)
@@ -122,6 +190,12 @@ static bool wifi_connection_has_active_users(void)
     return has_active_users;
 }
 
+static bool wifi_connection_on_manager_task(void)
+{
+    return s_wifi_connection.task_handle != NULL &&
+           xTaskGetCurrentTaskHandle() == s_wifi_connection.task_handle;
+}
+
 static void wifi_connection_notify_connected(void)
 {
     wifi_connection_connected_callback_t callback = s_wifi_connection.connected_callback;
@@ -130,22 +204,6 @@ static void wifi_connection_notify_connected(void)
         callback(s_wifi_connection.connected_callback_ctx);
     }
 }
-
-static bool wifi_connection_state_can_disable(wifi_connection_state_t state)
-{
-    return state == WIFI_CONNECTION_STATE_CONNECTED ||
-           state == WIFI_CONNECTION_STATE_FAILED ||
-           state == WIFI_CONNECTION_STATE_OFF;
-}
-
-static bool wifi_connection_state_is_setup(wifi_connection_state_t state)
-{
-    return state == WIFI_CONNECTION_STATE_SETUP_REQUIRED ||
-           state == WIFI_CONNECTION_STATE_SETUP_RUNNING;
-}
-
-static esp_err_t wifi_connection_request_connection_internal(TickType_t wait_ticks, bool allow_setup);
-static esp_err_t wifi_connection_request_connection_async_internal(bool allow_setup);
 
 static void wifi_connection_notify_connectivity(void)
 {
@@ -179,7 +237,6 @@ static void wifi_connection_set_setup_required(bool explicit_request)
     s_wifi_connection.setup_requested_explicitly = explicit_request;
     s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
     wifi_connection_set_state(WIFI_CONNECTION_STATE_SETUP_REQUIRED);
-    xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT | WIFI_CONNECTION_OFF_BIT);
     ESP_LOGW(TAG, "Wi-Fi setup required");
 }
 
@@ -188,86 +245,220 @@ static void wifi_connection_log_stack_usage(void)
     APP_STACK_MONITOR_CHECK(TAG, "wifi_connection", CONFIG_WIFI_CONNECTION_STACK_LOG_INTERVAL_MS);
 }
 
-static bool wifi_connection_setup_takeover_requested(void)
+/* The main loop runs an attempt with the saved profiles next. */
+static void wifi_connection_request_connect(wifi_connection_state_t state)
 {
-    /* A setup state counts too: if begin_setup() gave up waiting it has already
-       moved on to SETUP_RUNNING, and the attempt must still not write over it. */
-    return s_wifi_connection.setup_starting ||
-           wifi_connection_state_is_setup(s_wifi_connection.state);
+    s_wifi_connection.connect_wanted = true;
+    wifi_connection_set_state(state);
 }
 
-static esp_err_t wifi_connection_try_connect_once(esp32_wifi_sta_failure_reason_t *failure_reason)
+static esp_err_t wifi_connection_stop_sta(void)
 {
-    esp32_wifi_sta_failure_reason_t local_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
+    esp32_wifi_sta_status_t status = { 0 };
+    esp_err_t err = esp32_wifi_sta_get_status(&status);
 
-    s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-    xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT | WIFI_CONNECTION_OFF_BIT);
-
-    esp_err_t err = wifi_connection_connect_configured_abortable(
-        pdMS_TO_TICKS(CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS),
-        &local_failure_reason,
-        wifi_connection_setup_takeover_requested
-    );
-    if (failure_reason != NULL) {
-        *failure_reason = local_failure_reason;
+    if (err == ESP_ERR_INVALID_STATE) {
+        return ESP_OK; /* never initialized, so nothing runs */
     }
+    ESP_RETURN_ON_ERROR(err, TAG, "Wi-Fi STA status failed");
+    return esp32_wifi_sta_stop();
+}
+
+/* OFF even when the stop fails: every attempt stops the STA first anyway. */
+static esp_err_t wifi_connection_turn_off(void)
+{
+    esp_err_t err = wifi_connection_stop_sta();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Wi-Fi STA stop failed: %s", esp_err_to_name(err));
+    }
+    s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
+    wifi_connection_set_state(WIFI_CONNECTION_STATE_OFF);
+    ESP_LOGI(TAG, "Wi-Fi connection off");
     return err;
 }
 
-/* Sleeps in short steps so a setup takeover is noticed within one step. */
-static bool wifi_connection_delay_unless_setup(uint32_t delay_ms)
+static void wifi_connection_complete(const wifi_connection_cmd_t *cmd, esp_err_t result)
 {
-    TickType_t remaining = pdMS_TO_TICKS(delay_ms);
-    const TickType_t step_max = pdMS_TO_TICKS(100) > 0 ? pdMS_TO_TICKS(100) : 1;
-
-    while (remaining > 0) {
-        if (wifi_connection_setup_takeover_requested()) {
-            return false;
-        }
-        TickType_t step = remaining > step_max ? step_max : remaining;
-        vTaskDelay(step);
-        remaining -= step;
+    if (cmd->completion != NULL) {
+        cmd->completion->result = result;
+        /* The caller may return as soon as this is given: nothing after it
+           may touch the completion. */
+        xSemaphoreGive(cmd->completion->done);
     }
-    return !wifi_connection_setup_takeover_requested();
 }
 
-static void wifi_connection_set_connect_in_progress(bool in_progress)
+/* Requests that operate the STA. One arriving while a procedure runs
+   interrupts it; see wifi_connection_wait_until(). */
+static bool wifi_connection_cmd_needs_sta(wifi_connection_cmd_type_t type)
 {
+    return type == WIFI_CONNECTION_CMD_BEGIN_SETUP ||
+           type == WIFI_CONNECTION_CMD_SETUP_SCAN ||
+           type == WIFI_CONNECTION_CMD_SETUP_CONNECT ||
+           type == WIFI_CONNECTION_CMD_COMPLETE_SETUP;
+}
+
+static void wifi_connection_handle_acquire(const wifi_connection_cmd_t *cmd)
+{
+    wifi_connection_user_t user = cmd->arg.user;
+
     portENTER_CRITICAL(&s_wifi_connection_lock);
-    s_wifi_connection.connect_in_progress = in_progress;
+    s_wifi_connection.last_user = user;
+    s_wifi_connection.active_users |= (uint32_t)user;
     portEXIT_CRITICAL(&s_wifi_connection_lock);
+    s_wifi_connection.stop_when_unused = false;
+
+    wifi_connection_state_t state = s_wifi_connection.state;
+    if (state == WIFI_CONNECTION_STATE_INIT ||
+        state == WIFI_CONNECTION_STATE_OFF ||
+        state == WIFI_CONNECTION_STATE_FAILED) {
+        wifi_connection_request_connect(WIFI_CONNECTION_STATE_CONNECTING);
+    }
+    wifi_connection_complete(cmd, ESP_OK);
+}
+
+static void wifi_connection_handle_release(const wifi_connection_cmd_t *cmd)
+{
+    wifi_connection_user_t user = cmd->arg.user;
+
+    portENTER_CRITICAL(&s_wifi_connection_lock);
+    if ((s_wifi_connection.active_users & (uint32_t)user) == 0) {
+        portEXIT_CRITICAL(&s_wifi_connection_lock);
+        ESP_LOGW(TAG, "Wi-Fi user release without acquire: 0x%02x", (unsigned)user);
+        wifi_connection_complete(cmd, ESP_ERR_INVALID_STATE);
+        return;
+    }
+    s_wifi_connection.active_users &= ~((uint32_t)user);
+    bool has_active_users = s_wifi_connection.active_users != 0;
+    portEXIT_CRITICAL(&s_wifi_connection_lock);
+
+    if (!has_active_users && !wifi_connection_state_is_setup(s_wifi_connection.state)) {
+        s_wifi_connection.stop_when_unused = true;
+    }
+    wifi_connection_complete(cmd, ESP_OK);
+}
+
+static void wifi_connection_handle_retry(const wifi_connection_cmd_t *cmd)
+{
+    wifi_connection_state_t state = s_wifi_connection.state;
+
+    if (state == WIFI_CONNECTION_STATE_CONNECTED) {
+        wifi_connection_complete(cmd, ESP_OK);
+        return;
+    }
+    if (state != WIFI_CONNECTION_STATE_INIT &&
+        state != WIFI_CONNECTION_STATE_OFF &&
+        state != WIFI_CONNECTION_STATE_FAILED) {
+        wifi_connection_complete(cmd, ESP_ERR_INVALID_STATE);
+        return;
+    }
+    wifi_connection_request_connect(WIFI_CONNECTION_STATE_CONNECTING);
+    wifi_connection_complete(cmd, ESP_OK);
+}
+
+/* Requests that never touch the STA; answered even while a procedure runs. */
+static void wifi_connection_handle_quick(const wifi_connection_cmd_t *cmd)
+{
+    switch (cmd->type) {
+    case WIFI_CONNECTION_CMD_ACQUIRE:
+        wifi_connection_handle_acquire(cmd);
+        break;
+    case WIFI_CONNECTION_CMD_RELEASE:
+        wifi_connection_handle_release(cmd);
+        break;
+    case WIFI_CONNECTION_CMD_RETRY:
+        wifi_connection_handle_retry(cmd);
+        break;
+    default:
+        wifi_connection_complete(cmd, ESP_ERR_INVALID_ARG);
+        break;
+    }
 }
 
 /*
- * Runs only on the manager task. wifi_connection_begin_setup() raises
- * setup_starting and waits for connect_in_progress to drop, so everything
- * between the entry check and the final clear is guaranteed not to overlap the
- * setup app driving the STA.
+ * Waits until `deadline`, answering requests meanwhile.
+ *
+ * English contract: runs only inside a procedure. acquire, release and retry
+ * are handled here, so their callers are not held up by a long attempt. A
+ * request that needs the STA is kept for the main loop and ends the wait as
+ * ABORTED. An STA event ends the wait when `event` is non-NULL; outside an
+ * attempt it belongs to one that already ended and is dropped.
  */
-static esp_err_t wifi_connection_try_connect(wifi_connection_state_t state)
+static wifi_connection_wait_result_t wifi_connection_wait_until(TickType_t deadline,
+                                                                esp32_wifi_sta_event_t *event)
+{
+    while (!s_wifi_connection.has_deferred) {
+        int32_t remaining = (int32_t)(deadline - xTaskGetTickCount());
+        wifi_connection_cmd_t cmd;
+
+        if (xQueueReceive(s_wifi_connection.queue, &cmd, remaining > 0 ? (TickType_t)remaining : 0) != pdTRUE) {
+            return WIFI_CONNECTION_WAIT_TIMEOUT;
+        }
+        if (cmd.type == WIFI_CONNECTION_CMD_STA_EVENT) {
+            if (event != NULL) {
+                *event = cmd.arg.sta_event;
+                return WIFI_CONNECTION_WAIT_STA_EVENT;
+            }
+            continue;
+        }
+        if (wifi_connection_cmd_needs_sta(cmd.type)) {
+            s_wifi_connection.deferred = cmd;
+            s_wifi_connection.has_deferred = true;
+            break;
+        }
+        wifi_connection_handle_quick(&cmd);
+    }
+    return WIFI_CONNECTION_WAIT_ABORTED;
+}
+
+bool wifi_connection_manager_aborted(void)
+{
+    return s_wifi_connection.has_deferred;
+}
+
+bool wifi_connection_manager_delay(TickType_t delay_ticks)
+{
+    return wifi_connection_wait_until(xTaskGetTickCount() + delay_ticks, NULL) != WIFI_CONNECTION_WAIT_ABORTED;
+}
+
+esp_err_t wifi_connection_manager_wait_attempt(TickType_t wait_ticks,
+                                               esp32_wifi_sta_failure_reason_t *failure_reason)
+{
+    esp32_wifi_sta_event_t event = { 0 };
+
+    switch (wifi_connection_wait_until(xTaskGetTickCount() + wait_ticks, &event)) {
+    case WIFI_CONNECTION_WAIT_STA_EVENT:
+        if (event.type == ESP32_WIFI_STA_EVENT_CONNECTED) {
+            return ESP_OK;
+        }
+        *failure_reason = event.failure_reason;
+        return ESP_FAIL;
+    case WIFI_CONNECTION_WAIT_ABORTED:
+        return ESP_ERR_INVALID_STATE;
+    case WIFI_CONNECTION_WAIT_TIMEOUT:
+    default:
+        /* The event is lost if the queue was full; the driver still knows. */
+        if (esp32_wifi_sta_is_connected()) {
+            return ESP_OK;
+        }
+        *failure_reason = ESP32_WIFI_STA_FAILURE_TIMEOUT;
+        return ESP_ERR_TIMEOUT;
+    }
+}
+
+/* Connects with the saved profiles, rescanning while none of them is in range.
+   The state is already CONNECTING or RECONNECTING. */
+static void wifi_connection_run_auto_connect(void)
 {
     esp32_wifi_sta_failure_reason_t failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
     esp_err_t err = ESP_FAIL;
 
-    portENTER_CRITICAL(&s_wifi_connection_lock);
-    bool allowed = !s_wifi_connection.setup_starting &&
-                   !wifi_connection_state_is_setup(s_wifi_connection.state);
-    if (allowed) {
-        s_wifi_connection.connect_in_progress = true;
-    }
-    portEXIT_CRITICAL(&s_wifi_connection_lock);
-    if (!allowed) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    wifi_connection_set_state(state);
-
+    s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
     for (uint32_t attempt = 1; attempt <= CONFIG_WIFI_CONNECTION_SCAN_RETRY_ATTEMPTS; ++attempt) {
-        err = wifi_connection_try_connect_once(&failure_reason);
-        if (err == ESP_OK || wifi_connection_setup_takeover_requested()) {
+        err = wifi_connection_run_saved_profiles(pdMS_TO_TICKS(CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS),
+                                                 &failure_reason);
+        if (err == ESP_OK || wifi_connection_manager_aborted()) {
             break;
         }
-
         if (failure_reason != ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE ||
             attempt >= CONFIG_WIFI_CONNECTION_SCAN_RETRY_ATTEMPTS) {
             break;
@@ -278,197 +469,281 @@ static esp_err_t wifi_connection_try_connect(wifi_connection_state_t state)
                  (unsigned)CONFIG_WIFI_CONNECTION_SCAN_RETRY_DELAY_MS,
                  (unsigned)attempt,
                  (unsigned)CONFIG_WIFI_CONNECTION_SCAN_RETRY_ATTEMPTS);
-        if (!wifi_connection_delay_unless_setup(CONFIG_WIFI_CONNECTION_SCAN_RETRY_DELAY_MS)) {
+        if (!wifi_connection_manager_delay(pdMS_TO_TICKS(CONFIG_WIFI_CONNECTION_SCAN_RETRY_DELAY_MS))) {
             break;
         }
     }
 
-    /* Setup owns the STA and the state from here; writing CONNECTED/FAILED
-       now would overwrite the SETUP_RUNNING it is about to set. */
-    if (wifi_connection_setup_takeover_requested()) {
-        ESP_LOGI(TAG, "Wi-Fi connect abandoned: setup is taking over");
-        wifi_connection_set_connect_in_progress(false);
-        return ESP_ERR_INVALID_STATE;
+    if (wifi_connection_manager_aborted()) {
+        /* The waiting request runs next and normally takes the STA (setup).
+           If it leaves the STA alone after all, the attempt starts over. */
+        ESP_LOGI(TAG, "Wi-Fi connect interrupted");
+        s_wifi_connection.connect_wanted = true;
+        return;
     }
 
     if (err == ESP_OK) {
         wifi_connection_set_connection_result(true, true);
         s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
         wifi_connection_set_state(WIFI_CONNECTION_STATE_CONNECTED);
-        xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT);
         ESP_LOGI(TAG, "Wi-Fi connection connected");
         wifi_connection_notify_connected();
-    } else {
-        s_wifi_connection.last_failure_reason = failure_reason;
-        wifi_connection_set_connection_result(esp32_wifi_sta_has_configured_ssid(), false);
-        wifi_connection_set_state(WIFI_CONNECTION_STATE_FAILED);
-        xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_OFF_BIT);
-        ESP_LOGW(TAG,
-                 "Wi-Fi connection connect failed: %s reason=%d",
-                 esp_err_to_name(err),
-                 (int)failure_reason);
-        (void)error_log_store_append_esp_err(TAG, "Wi-Fi connection connect failed", err);
+        return;
     }
-    wifi_connection_set_connect_in_progress(false);
-    return err;
+
+    s_wifi_connection.last_failure_reason = failure_reason;
+    wifi_connection_set_connection_result(esp32_wifi_sta_has_configured_ssid(), false);
+    wifi_connection_set_state(WIFI_CONNECTION_STATE_FAILED);
+    ESP_LOGW(TAG, "Wi-Fi connection connect failed: %s reason=%d", esp_err_to_name(err), (int)failure_reason);
+    (void)error_log_store_append_esp_err(TAG, "Wi-Fi connection connect failed", err);
 }
 
-static esp_err_t wifi_connection_disable_sta(void)
+static void wifi_connection_handle_begin_setup(const wifi_connection_cmd_t *cmd)
 {
-    esp32_wifi_sta_status_t status = { 0 };
-    esp_err_t status_err = esp32_wifi_sta_get_status(&status);
-
-    if (status_err == ESP_ERR_INVALID_STATE) {
-        xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT);
-        s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-        wifi_connection_set_state(WIFI_CONNECTION_STATE_OFF);
-        xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_OFF_BIT);
-        return ESP_OK;
-    }
-    ESP_RETURN_ON_ERROR(status_err, TAG, "Wi-Fi STA status failed");
-
-    if (status.state != ESP32_WIFI_STA_STATE_STOPPED) {
-        ESP_RETURN_ON_ERROR(esp32_wifi_sta_stop(), TAG, "Wi-Fi STA stop failed");
+    esp_err_t err = wifi_connection_stop_sta();
+    if (err != ESP_OK) {
+        /* Setup does not start; an interrupted attempt resumes. */
+        ESP_LOGE(TAG, "stop Wi-Fi before setup failed: %s", esp_err_to_name(err));
+        wifi_connection_complete(cmd, err);
+        return;
     }
 
-    xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT);
+    s_wifi_connection.connect_wanted = false;
+    s_wifi_connection.stop_when_unused = false;
+    s_wifi_connection.setup_requested_explicitly = false;
     s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-    wifi_connection_set_state(WIFI_CONNECTION_STATE_OFF);
-    xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_OFF_BIT);
-    ESP_LOGI(TAG, "Wi-Fi connection disabled");
-    return ESP_OK;
+    wifi_connection_set_state(WIFI_CONNECTION_STATE_SETUP_RUNNING);
+    ESP_LOGI(TAG, "Wi-Fi setup started");
+    wifi_connection_complete(cmd, ESP_OK);
 }
 
-static bool wifi_connection_get_sta_status(esp32_wifi_sta_status_t *status)
+static void wifi_connection_handle_setup_scan(const wifi_connection_cmd_t *cmd)
 {
-    if (esp32_wifi_sta_get_status(status) != ESP_OK) {
-        return false;
+    if (s_wifi_connection.state != WIFI_CONNECTION_STATE_SETUP_RUNNING) {
+        wifi_connection_complete(cmd, ESP_ERR_INVALID_STATE);
+        return;
     }
-    return true;
+
+    esp_err_t err = esp32_wifi_sta_enter_scan_mode();
+    if (err == ESP_OK) {
+        err = esp32_wifi_sta_get_scan_records(cmd->arg.scan.records, cmd->arg.scan.capacity, cmd->arg.scan.count);
+    }
+    if (err == ESP_OK && *cmd->arg.scan.count > cmd->arg.scan.capacity) {
+        *cmd->arg.scan.count = cmd->arg.scan.capacity; /* report what was copied */
+    }
+    wifi_connection_complete(cmd, err);
 }
 
-static bool wifi_connection_handle_connected_monitor(void)
+static void wifi_connection_handle_setup_connect(const wifi_connection_cmd_t *cmd)
 {
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_connection.event_group,
-                                           WIFI_CONNECTION_ENABLE_REQ_BIT |
-                                           WIFI_CONNECTION_DISABLE_REQ_BIT |
-                                           WIFI_CONNECTION_NO_SETUP_BIT,
-                                           pdTRUE,
-                                           pdFALSE,
-                                           pdMS_TO_TICKS(CONFIG_WIFI_CONNECTION_MONITOR_INTERVAL_MS));
-    if (s_wifi_connection.setup_starting || wifi_connection_state_is_setup(s_wifi_connection.state)) {
-        return false;
+    esp32_wifi_sta_failure_reason_t failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+
+    if (s_wifi_connection.state == WIFI_CONNECTION_STATE_SETUP_RUNNING) {
+        err = wifi_connection_run_connect_and_save(cmd->arg.connect.ssid,
+                                                   cmd->arg.connect.password,
+                                                   cmd->arg.connect.authmode,
+                                                   cmd->arg.connect.wait_ticks,
+                                                   &failure_reason);
     }
-    if ((bits & WIFI_CONNECTION_DISABLE_REQ_BIT) != 0) {
-        if (!wifi_connection_has_active_users()) {
-            (void)wifi_connection_disable_sta();
-            return false;
-        }
-        ESP_LOGD(TAG, "ignoring stale disable request while Wi-Fi users are active");
+    if (cmd->arg.connect.failure_reason != NULL) {
+        *cmd->arg.connect.failure_reason = failure_reason;
     }
-    if ((bits & WIFI_CONNECTION_ENABLE_REQ_BIT) != 0) {
-        xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT);
+    wifi_connection_complete(cmd, err);
+}
+
+static void wifi_connection_handle_complete_setup(const wifi_connection_cmd_t *cmd)
+{
+    if (s_wifi_connection.state != WIFI_CONNECTION_STATE_SETUP_RUNNING) {
+        wifi_connection_complete(cmd, ESP_ERR_INVALID_STATE);
+        return;
     }
 
-    esp32_wifi_sta_status_t status = { 0 };
-    if (wifi_connection_get_sta_status(&status) &&
-        status.state == ESP32_WIFI_STA_STATE_CONNECTED &&
-        status.has_ip) {
+    if (cmd->arg.setup_connected) {
+        /* connect_and_save left the tested profile connected. */
         wifi_connection_set_connection_result(true, true);
+        s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
         wifi_connection_set_state(WIFI_CONNECTION_STATE_CONNECTED);
-        return true;
+        ESP_LOGI(TAG, "Wi-Fi setup completed");
+        wifi_connection_notify_connected();
+        wifi_connection_complete(cmd, ESP_OK);
+        return;
     }
 
-    if (wifi_connection_get_sta_status(&status) &&
-        status.state == ESP32_WIFI_STA_STATE_CONNECTING) {
-        wifi_connection_set_state(WIFI_CONNECTION_STATE_RECONNECTING);
-        return true;
-    }
+    ESP_LOGI(TAG, "Wi-Fi setup cancelled");
+    wifi_connection_complete(cmd, wifi_connection_turn_off());
+}
 
+static void wifi_connection_handle_sta_event(const esp32_wifi_sta_event_t *event)
+{
+    if (event->type == ESP32_WIFI_STA_EVENT_DISCONNECTED &&
+        s_wifi_connection.state == WIFI_CONNECTION_STATE_CONNECTED) {
+        ESP_LOGW(TAG, "Wi-Fi link lost (reason=%d); reconnecting", (int)event->failure_reason);
+        wifi_connection_request_connect(WIFI_CONNECTION_STATE_RECONNECTING);
+    }
+    /* Anything else belongs to an attempt that has already ended. */
+}
+
+static void wifi_connection_handle(const wifi_connection_cmd_t *cmd)
+{
+    switch (cmd->type) {
+    case WIFI_CONNECTION_CMD_BEGIN_SETUP:
+        wifi_connection_handle_begin_setup(cmd);
+        break;
+    case WIFI_CONNECTION_CMD_SETUP_SCAN:
+        wifi_connection_handle_setup_scan(cmd);
+        break;
+    case WIFI_CONNECTION_CMD_SETUP_CONNECT:
+        wifi_connection_handle_setup_connect(cmd);
+        break;
+    case WIFI_CONNECTION_CMD_COMPLETE_SETUP:
+        wifi_connection_handle_complete_setup(cmd);
+        break;
+    case WIFI_CONNECTION_CMD_STA_EVENT:
+        wifi_connection_handle_sta_event(&cmd->arg.sta_event);
+        break;
+    default:
+        wifi_connection_handle_quick(cmd);
+        break;
+    }
+}
+
+/* Polled while connected, in case the disconnect event was lost. */
+static void wifi_connection_check_link(void)
+{
+    if (s_wifi_connection.state != WIFI_CONNECTION_STATE_CONNECTED) {
+        return;
+    }
+    if (esp32_wifi_sta_is_connected()) {
+        wifi_connection_set_connection_result(true, true);
+        return;
+    }
     ESP_LOGW(TAG, "Wi-Fi connection lost; reconnecting");
-    if (wifi_connection_try_connect(WIFI_CONNECTION_STATE_RECONNECTING) == ESP_OK) {
-        return true;
-    }
+    wifi_connection_request_connect(WIFI_CONNECTION_STATE_RECONNECTING);
+}
 
-    return false;
+/* Wi-Fi goes off once the last user has released it and any attempt that was
+   under way has finished. */
+static void wifi_connection_stop_if_unused(void)
+{
+    if (!s_wifi_connection.stop_when_unused ||
+        s_wifi_connection.connect_wanted ||
+        s_wifi_connection.has_deferred) {
+        return;
+    }
+    s_wifi_connection.stop_when_unused = false;
+
+    wifi_connection_state_t state = s_wifi_connection.state;
+    if (wifi_connection_has_active_users() ||
+        wifi_connection_state_is_setup(state) ||
+        state == WIFI_CONNECTION_STATE_OFF) {
+        return;
+    }
+    (void)wifi_connection_turn_off();
+}
+
+/* Runs on the ESP-IDF event task, so it only queues the event. */
+static void wifi_connection_on_sta_event(const esp32_wifi_sta_event_t *event, void *ctx)
+{
+    (void)ctx;
+
+    wifi_connection_cmd_t cmd = {
+        .type = WIFI_CONNECTION_CMD_STA_EVENT,
+        .completion = NULL,
+        .arg.sta_event = *event,
+    };
+    if (xQueueSend(s_wifi_connection.queue, &cmd, 0) != pdTRUE) {
+        /* Attempts fall back to the driver state on timeout, and the link
+           check polls while connected. */
+        ESP_LOGW(TAG, "STA event dropped: queue full");
+    }
 }
 
 static void wifi_connection_task(void *arg)
 {
     (void)arg;
 
+    esp32_wifi_sta_set_event_callback(wifi_connection_on_sta_event, NULL);
     wifi_connection_set_state(WIFI_CONNECTION_STATE_INIT);
     s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-    wifi_connection_set_connection_result(esp32_wifi_sta_has_configured_ssid(), false);
-    xEventGroupClearBits(s_wifi_connection.event_group,
-                         WIFI_CONNECTION_CONNECTED_BIT | WIFI_CONNECTION_STOPPED_BIT |
-                         WIFI_CONNECTION_ENABLE_REQ_BIT | WIFI_CONNECTION_DISABLE_REQ_BIT |
-                         WIFI_CONNECTION_OFF_BIT | WIFI_CONNECTION_NO_SETUP_BIT);
+    bool configured = esp32_wifi_sta_has_configured_ssid();
+    wifi_connection_set_connection_result(configured, false);
 
-    bool setup_requested = s_wifi_connection.setup_requested_on_start;
-    s_wifi_connection.setup_requested_on_start = false;
-    if (!setup_requested && !esp32_wifi_sta_has_configured_ssid()) {
+    if (s_wifi_connection.setup_requested_on_start) {
+        s_wifi_connection.setup_requested_on_start = false;
+        wifi_connection_set_setup_required(true);
+    } else if (!configured) {
         wifi_connection_set_setup_required(false);
-    } else if (!setup_requested) {
-        (void)wifi_connection_disable_sta();
-        if (wifi_connection_has_active_users()) {
-            xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_ENABLE_REQ_BIT);
-        }
+    } else {
+        (void)wifi_connection_turn_off();
     }
 
     while (true) {
         wifi_connection_log_stack_usage();
-        if (setup_requested) {
-            wifi_connection_set_setup_required(true);
-            setup_requested = false;
-        } else if (s_wifi_connection.state == WIFI_CONNECTION_STATE_CONNECTED) {
-            (void)wifi_connection_handle_connected_monitor();
-        } else if (wifi_connection_state_is_setup(s_wifi_connection.state)) {
-            xEventGroupClearBits(s_wifi_connection.event_group,
-                                 WIFI_CONNECTION_ENABLE_REQ_BIT | WIFI_CONNECTION_NO_SETUP_BIT);
-            vTaskDelay(pdMS_TO_TICKS(CONFIG_WIFI_CONNECTION_MONITOR_INTERVAL_MS));
+
+        if (s_wifi_connection.has_deferred) {
+            /* It arrived before anything still queued. */
+            wifi_connection_cmd_t cmd = s_wifi_connection.deferred;
+            s_wifi_connection.has_deferred = false;
+            wifi_connection_handle(&cmd);
+        } else if (s_wifi_connection.connect_wanted) {
+            s_wifi_connection.connect_wanted = false;
+            wifi_connection_run_auto_connect();
         } else {
-            EventBits_t bits = xEventGroupWaitBits(s_wifi_connection.event_group,
-                                                   WIFI_CONNECTION_ENABLE_REQ_BIT |
-                                                   WIFI_CONNECTION_DISABLE_REQ_BIT |
-                                                   WIFI_CONNECTION_NO_SETUP_BIT,
-                                                   pdTRUE,
-                                                   pdFALSE,
-                                                   portMAX_DELAY);
-            if (s_wifi_connection.state == WIFI_CONNECTION_STATE_CONNECTED ||
-                wifi_connection_state_is_setup(s_wifi_connection.state)) {
-                continue;
-            }
-            if ((bits & WIFI_CONNECTION_DISABLE_REQ_BIT) != 0) {
-                if (!wifi_connection_has_active_users()) {
-                    (void)wifi_connection_disable_sta();
-                } else {
-                    ESP_LOGD(TAG, "ignoring stale disable request while Wi-Fi users are active");
-                }
-            }
-            if ((bits & WIFI_CONNECTION_ENABLE_REQ_BIT) != 0 &&
-                wifi_connection_try_connect(WIFI_CONNECTION_STATE_CONNECTING) != ESP_OK) {
-                if ((bits & WIFI_CONNECTION_NO_SETUP_BIT) != 0) {
-                    ESP_LOGW(TAG, "Wi-Fi connect failed; waiting for explicit retry or setup");
-                }
+            wifi_connection_cmd_t cmd;
+            TickType_t wait_ticks = s_wifi_connection.state == WIFI_CONNECTION_STATE_CONNECTED ?
+                                    pdMS_TO_TICKS(CONFIG_WIFI_CONNECTION_MONITOR_INTERVAL_MS) :
+                                    portMAX_DELAY;
+            if (xQueueReceive(s_wifi_connection.queue, &cmd, wait_ticks) == pdTRUE) {
+                wifi_connection_handle(&cmd);
+            } else {
+                wifi_connection_check_link();
             }
         }
+        wifi_connection_stop_if_unused();
     }
+}
 
-    wifi_connection_set_state(WIFI_CONNECTION_STATE_STOPPED);
-    xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_STOPPED_BIT);
-    s_wifi_connection.task_handle = NULL;
-    vTaskDelete(NULL);
+/*
+ * Hands a request to the manager task and waits until it has been handled.
+ *
+ * English contract: no timeout. The manager answers every request exactly
+ * once, and `completion` lives in this stack frame, so giving up early would
+ * leave the manager writing into a dead frame. The wait is bounded by the
+ * work itself: one scan, or connect_and_save's attempts.
+ */
+static esp_err_t wifi_connection_call(wifi_connection_cmd_t *cmd)
+{
+    ESP_RETURN_ON_FALSE(s_wifi_connection.queue != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
+    ESP_RETURN_ON_FALSE(!wifi_connection_on_manager_task(),
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "request from the manager task would wait on itself");
+
+    StaticSemaphore_t done_storage;
+    wifi_connection_completion_t completion = {
+        .done = xSemaphoreCreateBinaryStatic(&done_storage),
+        .result = ESP_FAIL,
+    };
+    cmd->completion = &completion;
+    (void)xQueueSend(s_wifi_connection.queue, cmd, portMAX_DELAY);
+    (void)xSemaphoreTake(completion.done, portMAX_DELAY);
+    vSemaphoreDelete(completion.done);
+    return completion.result;
 }
 
 esp_err_t wifi_connection_start(void)
 {
+    if (s_wifi_connection.task_handle != NULL) {
+        return ESP_OK;
+    }
     if (s_wifi_connection.event_group == NULL) {
         s_wifi_connection.event_group = xEventGroupCreate();
         ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_NO_MEM, TAG, "event group alloc failed");
     }
-    if (s_wifi_connection.task_handle != NULL) {
-        return ESP_OK;
+    if (s_wifi_connection.queue == NULL) {
+        s_wifi_connection.queue = xQueueCreate(WIFI_CONNECTION_QUEUE_LENGTH, sizeof(wifi_connection_cmd_t));
+        ESP_RETURN_ON_FALSE(s_wifi_connection.queue != NULL, ESP_ERR_NO_MEM, TAG, "queue alloc failed");
     }
 
     BaseType_t task_ok = xTaskCreate(wifi_connection_task,
@@ -477,7 +752,14 @@ esp_err_t wifi_connection_start(void)
                                      NULL,
                                      CONFIG_WIFI_CONNECTION_TASK_PRIORITY,
                                      &s_wifi_connection.task_handle);
-    ESP_RETURN_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, TAG, "task create failed");
+    if (task_ok != pdPASS) {
+        /* Without the task nobody would answer, and requests wait forever. */
+        vQueueDelete(s_wifi_connection.queue);
+        s_wifi_connection.queue = NULL;
+        s_wifi_connection.task_handle = NULL;
+        ESP_LOGE(TAG, "task create failed");
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 
@@ -512,236 +794,100 @@ esp_err_t wifi_connection_get_connectivity_status(wifi_connection_connectivity_s
 
 esp_err_t wifi_connection_acquire(wifi_connection_user_t user)
 {
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
     ESP_RETURN_ON_FALSE(user != 0, ESP_ERR_INVALID_ARG, TAG, "user is zero");
 
-    portENTER_CRITICAL(&s_wifi_connection_lock);
-    s_wifi_connection.last_user = user;
-    s_wifi_connection.active_users |= (uint32_t)user;
-    wifi_connection_state_t state = s_wifi_connection.state;
-    portEXIT_CRITICAL(&s_wifi_connection_lock);
-
-    if (!wifi_connection_state_is_setup(state) &&
-        state != WIFI_CONNECTION_STATE_CONNECTED) {
-        xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_OFF_BIT);
-        xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_ENABLE_REQ_BIT);
-    }
-
-    return ESP_OK;
+    wifi_connection_cmd_t cmd = {
+        .type = WIFI_CONNECTION_CMD_ACQUIRE,
+        .arg.user = user,
+    };
+    return wifi_connection_call(&cmd);
 }
 
 esp_err_t wifi_connection_release(wifi_connection_user_t user)
 {
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
     ESP_RETURN_ON_FALSE(user != 0, ESP_ERR_INVALID_ARG, TAG, "user is zero");
 
-    portENTER_CRITICAL(&s_wifi_connection_lock);
-    if ((s_wifi_connection.active_users & (uint32_t)user) == 0) {
-        portEXIT_CRITICAL(&s_wifi_connection_lock);
-        ESP_LOGW(TAG, "Wi-Fi user release without acquire: 0x%02x", (unsigned)user);
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    s_wifi_connection.active_users &= ~((uint32_t)user);
-    bool has_active_users = s_wifi_connection.active_users != 0;
-    wifi_connection_state_t state = s_wifi_connection.state;
-    portEXIT_CRITICAL(&s_wifi_connection_lock);
-
-    if (!has_active_users &&
-        !wifi_connection_state_is_setup(state)) {
-        xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_DISABLE_REQ_BIT);
-    }
-
-    return ESP_OK;
-}
-
-esp_err_t wifi_connection_enable(void)
-{
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-
-    wifi_connection_state_t state = s_wifi_connection.state;
-    if (state == WIFI_CONNECTION_STATE_CONNECTED) {
-        xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_CONNECTED_BIT);
-        return ESP_OK;
-    }
-    if (state != WIFI_CONNECTION_STATE_OFF &&
-        state != WIFI_CONNECTION_STATE_INIT &&
-        state != WIFI_CONNECTION_STATE_FAILED) {
-        return ESP_OK;
-    }
-
-    xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_OFF_BIT);
-    xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_ENABLE_REQ_BIT);
-    return ESP_OK;
-}
-
-esp_err_t wifi_connection_disable(void)
-{
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-
-    wifi_connection_state_t state = s_wifi_connection.state;
-    ESP_RETURN_ON_FALSE(wifi_connection_state_can_disable(state),
-                        ESP_ERR_INVALID_STATE,
-                        TAG,
-                        "Wi-Fi connection is busy");
-
-    if (state == WIFI_CONNECTION_STATE_OFF) {
-        return ESP_OK;
-    }
-
-    xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_OFF_BIT);
-    xEventGroupSetBits(s_wifi_connection.event_group, WIFI_CONNECTION_DISABLE_REQ_BIT);
-
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_connection.event_group,
-                                           WIFI_CONNECTION_OFF_BIT | WIFI_CONNECTION_STOPPED_BIT,
-                                           pdFALSE,
-                                           pdFALSE,
-                                           pdMS_TO_TICKS(CONFIG_WIFI_CONNECTION_MONITOR_INTERVAL_MS + 5000));
-    if ((bits & WIFI_CONNECTION_OFF_BIT) != 0) {
-        return ESP_OK;
-    }
-    if ((bits & WIFI_CONNECTION_STOPPED_BIT) != 0) {
-        return ESP_FAIL;
-    }
-    return ESP_ERR_TIMEOUT;
-}
-
-esp_err_t wifi_connection_request_connection(TickType_t wait_ticks)
-{
-    return wifi_connection_request_connection_internal(wait_ticks, true);
-}
-
-esp_err_t wifi_connection_request_connection_without_setup(TickType_t wait_ticks)
-{
-    return wifi_connection_request_connection_internal(wait_ticks, false);
-}
-
-esp_err_t wifi_connection_request_connection_without_setup_async(void)
-{
-    return wifi_connection_request_connection_async_internal(false);
+    wifi_connection_cmd_t cmd = {
+        .type = WIFI_CONNECTION_CMD_RELEASE,
+        .arg.user = user,
+    };
+    return wifi_connection_call(&cmd);
 }
 
 /*
- * Waits until the manager task has left wifi_connection_try_connect().
- *
- * English contract: setup drives the STA from the app_shell task, so it may
- * only start once the manager task has stopped touching it. An in-flight
- * attempt used to carry on, restart the STA under the setup scan, and finally
- * overwrite SETUP_RUNNING with CONNECTED or FAILED. setup_starting makes that
- * loop bail out at its next step; cancelling the STA wait makes "next step"
- * come now instead of after the connect timeout.
+ * Retries go straight to a connection request, with no disable first. The old
+ * disable waited up to 7 s on the caller's task for an OFF that never came
+ * while radio_manager still held Wi-Fi, so RETRY and SYNC NOW froze the UI and
+ * then failed.
  */
-static void wifi_connection_wait_for_connect_to_stop(void)
+esp_err_t wifi_connection_retry_connection_without_setup_async(void)
 {
-    TickType_t started_at = xTaskGetTickCount();
-
-    while (s_wifi_connection.connect_in_progress) {
-        esp32_wifi_sta_cancel_wait();
-        if (xTaskGetTickCount() - started_at >= pdMS_TO_TICKS(WIFI_CONNECTION_SETUP_TAKEOVER_TIMEOUT_MS)) {
-            ESP_LOGW(TAG,
-                     "connect attempt still running after %u ms; starting setup anyway",
-                     (unsigned)WIFI_CONNECTION_SETUP_TAKEOVER_TIMEOUT_MS);
-            return;
-        }
-        vTaskDelay(pdMS_TO_TICKS(WIFI_CONNECTION_SETUP_TAKEOVER_POLL_MS));
-    }
+    wifi_connection_cmd_t cmd = {
+        .type = WIFI_CONNECTION_CMD_RETRY,
+    };
+    return wifi_connection_call(&cmd);
 }
 
 esp_err_t wifi_connection_begin_setup(void)
 {
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
+    wifi_connection_cmd_t cmd = {
+        .type = WIFI_CONNECTION_CMD_BEGIN_SETUP,
+    };
+    return wifi_connection_call(&cmd);
+}
 
-    xEventGroupClearBits(s_wifi_connection.event_group,
-                         WIFI_CONNECTION_CONNECTED_BIT |
-                         WIFI_CONNECTION_ENABLE_REQ_BIT |
-                         WIFI_CONNECTION_DISABLE_REQ_BIT |
-                         WIFI_CONNECTION_OFF_BIT |
-                         WIFI_CONNECTION_NO_SETUP_BIT);
+esp_err_t wifi_connection_setup_scan(esp32_wifi_sta_scan_record_t *records,
+                                     size_t record_capacity,
+                                     size_t *record_count)
+{
+    ESP_RETURN_ON_FALSE(record_count != NULL, ESP_ERR_INVALID_ARG, TAG, "record_count is null");
+    ESP_RETURN_ON_FALSE(records != NULL || record_capacity == 0, ESP_ERR_INVALID_ARG, TAG, "records is null");
+    *record_count = 0;
 
-    /* Gate the monitor before stopping STA so an in-flight monitor pass cannot reconnect it. */
-    portENTER_CRITICAL(&s_wifi_connection_lock);
-    s_wifi_connection.setup_starting = true;
-    portEXIT_CRITICAL(&s_wifi_connection_lock);
-    wifi_connection_wait_for_connect_to_stop();
-    esp_err_t err = wifi_connection_disable_sta();
-    if (err != ESP_OK) {
-        s_wifi_connection.setup_starting = false;
-        ESP_LOGE(TAG, "stop Wi-Fi before setup failed: %s", esp_err_to_name(err));
-        return err;
+    wifi_connection_cmd_t cmd = {
+        .type = WIFI_CONNECTION_CMD_SETUP_SCAN,
+        .arg.scan = {
+            .records = records,
+            .capacity = record_capacity,
+            .count = record_count,
+        },
+    };
+    return wifi_connection_call(&cmd);
+}
+
+esp_err_t wifi_connection_connect_and_save(const char *ssid,
+                                           const char *password,
+                                           wifi_auth_mode_t authmode,
+                                           TickType_t wait_ticks,
+                                           esp32_wifi_sta_failure_reason_t *failure_reason)
+{
+    ESP_RETURN_ON_FALSE(ssid != NULL && ssid[0] != '\0', ESP_ERR_INVALID_ARG, TAG, "Wi-Fi SSID is empty");
+    /* The profile is saved only after a connection is seen, which needs a wait. */
+    ESP_RETURN_ON_FALSE(wait_ticks > 0, ESP_ERR_INVALID_ARG, TAG, "wait_ticks must be positive");
+    if (failure_reason != NULL) {
+        *failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
     }
 
-    wifi_connection_set_state(WIFI_CONNECTION_STATE_SETUP_RUNNING);
-    s_wifi_connection.setup_requested_explicitly = false;
-    s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-    s_wifi_connection.setup_starting = false;
-    xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_OFF_BIT);
-    ESP_LOGI(TAG, "Wi-Fi setup started");
-    return ESP_OK;
+    wifi_connection_cmd_t cmd = {
+        .type = WIFI_CONNECTION_CMD_SETUP_CONNECT,
+        .arg.connect = {
+            .ssid = ssid,
+            .password = password,
+            .authmode = authmode,
+            .wait_ticks = wait_ticks,
+            .failure_reason = failure_reason,
+        },
+    };
+    return wifi_connection_call(&cmd);
 }
 
 esp_err_t wifi_connection_complete_setup(bool connected)
 {
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-
-    if (connected) {
-        wifi_connection_set_connection_result(true, true);
-        s_wifi_connection.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-        wifi_connection_set_state(WIFI_CONNECTION_STATE_CONNECTED);
-        xEventGroupClearBits(s_wifi_connection.event_group, WIFI_CONNECTION_OFF_BIT);
-        xEventGroupSetBits(s_wifi_connection.event_group,
-                           WIFI_CONNECTION_CONNECTED_BIT | WIFI_CONNECTION_ENABLE_REQ_BIT);
-        ESP_LOGI(TAG, "Wi-Fi setup completed");
-        wifi_connection_notify_connected();
-        return ESP_OK;
-    }
-
-    ESP_LOGI(TAG, "Wi-Fi setup cancelled");
-    return wifi_connection_disable_sta();
-}
-
-static esp_err_t wifi_connection_request_connection_internal(TickType_t wait_ticks, bool allow_setup)
-{
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-
-    wifi_connection_state_t state = s_wifi_connection.state;
-    if (state == WIFI_CONNECTION_STATE_CONNECTED) {
-        return ESP_OK;
-    }
-    if (!wifi_connection_can_request_connection()) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    ESP_RETURN_ON_ERROR(wifi_connection_request_connection_async_internal(allow_setup),
-                        TAG,
-                        "Wi-Fi request failed");
-
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_connection.event_group,
-                                           WIFI_CONNECTION_CONNECTED_BIT | WIFI_CONNECTION_OFF_BIT | WIFI_CONNECTION_STOPPED_BIT,
-                                           pdFALSE,
-                                           pdFALSE,
-                                           wait_ticks);
-    if ((bits & WIFI_CONNECTION_CONNECTED_BIT) != 0) {
-        return ESP_OK;
-    }
-    if ((bits & WIFI_CONNECTION_STOPPED_BIT) != 0) {
-        return ESP_FAIL;
-    }
-    if ((bits & WIFI_CONNECTION_OFF_BIT) != 0) {
-        return ESP_FAIL;
-    }
-    return ESP_ERR_TIMEOUT;
-}
-
-static esp_err_t wifi_connection_request_connection_async_internal(bool allow_setup)
-{
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-    ESP_RETURN_ON_FALSE(wifi_connection_can_request_connection(), ESP_ERR_INVALID_STATE, TAG, "Wi-Fi cannot connect now");
-
-    xEventGroupClearBits(s_wifi_connection.event_group,
-                         WIFI_CONNECTION_CONNECTED_BIT | WIFI_CONNECTION_OFF_BIT | WIFI_CONNECTION_NO_SETUP_BIT);
-    xEventGroupSetBits(s_wifi_connection.event_group,
-                       WIFI_CONNECTION_ENABLE_REQ_BIT | (allow_setup ? 0 : WIFI_CONNECTION_NO_SETUP_BIT));
-    return ESP_OK;
+    wifi_connection_cmd_t cmd = {
+        .type = WIFI_CONNECTION_CMD_COMPLETE_SETUP,
+        .arg.setup_connected = connected,
+    };
+    return wifi_connection_call(&cmd);
 }
 
 esp_err_t wifi_connection_wait_connected(TickType_t wait_ticks)
@@ -753,17 +899,11 @@ esp_err_t wifi_connection_wait_connected(TickType_t wait_ticks)
                         "Wi-Fi connection is off");
 
     EventBits_t bits = xEventGroupWaitBits(s_wifi_connection.event_group,
-                                           WIFI_CONNECTION_CONNECTED_BIT | WIFI_CONNECTION_STOPPED_BIT,
+                                           WIFI_CONNECTION_CONNECTED_BIT,
                                            pdFALSE,
                                            pdFALSE,
                                            wait_ticks);
-    if ((bits & WIFI_CONNECTION_CONNECTED_BIT) != 0) {
-        return ESP_OK;
-    }
-    if ((bits & WIFI_CONNECTION_STOPPED_BIT) != 0) {
-        return ESP_FAIL;
-    }
-    return ESP_ERR_TIMEOUT;
+    return (bits & WIFI_CONNECTION_CONNECTED_BIT) != 0 ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 esp_err_t wifi_connection_get_state(wifi_connection_state_t *state)
@@ -810,7 +950,6 @@ uint32_t wifi_connection_get_connected_duration_high_water_seconds(void)
 wifi_connection_warning_t wifi_connection_get_warning(void)
 {
     if (s_wifi_connection.state == WIFI_CONNECTION_STATE_CONNECTED &&
-        !wifi_connection_state_is_setup(s_wifi_connection.state) &&
         wifi_connection_get_connected_duration_seconds() >= CONFIG_WIFI_CONNECTION_CONNECTED_WARNING_SECONDS) {
         return WIFI_CONNECTION_WARNING_CONNECTED_TOO_LONG;
     }
@@ -820,22 +959,16 @@ wifi_connection_warning_t wifi_connection_get_warning(void)
 
 bool wifi_connection_is_enabled(void)
 {
-    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
+    wifi_connection_state_t state = s_wifi_connection.state;
 
-    if (wifi_connection_get_state(&state) != ESP_OK) {
-        return false;
-    }
     return state != WIFI_CONNECTION_STATE_STOPPED &&
            state != WIFI_CONNECTION_STATE_OFF;
 }
 
 bool wifi_connection_can_request_connection(void)
 {
-    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
+    wifi_connection_state_t state = s_wifi_connection.state;
 
-    if (wifi_connection_get_state(&state) != ESP_OK) {
-        return false;
-    }
     return state == WIFI_CONNECTION_STATE_INIT ||
            state == WIFI_CONNECTION_STATE_OFF ||
            state == WIFI_CONNECTION_STATE_CONNECTED ||
@@ -844,46 +977,16 @@ bool wifi_connection_can_request_connection(void)
 
 bool wifi_connection_is_setup_active(void)
 {
-    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
-
-    if (wifi_connection_get_state(&state) != ESP_OK) {
-        return false;
-    }
-    return state == WIFI_CONNECTION_STATE_SETUP_RUNNING;
+    return s_wifi_connection.state == WIFI_CONNECTION_STATE_SETUP_RUNNING;
 }
 
 bool wifi_connection_is_setup_requested_explicitly(void)
 {
-    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
-
-    if (wifi_connection_get_state(&state) != ESP_OK) {
-        return false;
-    }
-    return state == WIFI_CONNECTION_STATE_SETUP_REQUIRED &&
+    return s_wifi_connection.state == WIFI_CONNECTION_STATE_SETUP_REQUIRED &&
            s_wifi_connection.setup_requested_explicitly;
 }
 
 esp32_wifi_sta_failure_reason_t wifi_connection_get_last_failure_reason(void)
 {
     return s_wifi_connection.last_failure_reason;
-}
-
-/*
- * Retries go straight to a connection request, with no wifi_connection_disable()
- * first. FAILED already accepts a request (wifi_connection_can_request_connection),
- * the request clears the stale OFF bit, and every attempt begins by stopping the
- * STA. The disable waited up to 7 s on the caller's task for an OFF that never
- * came while radio_manager still held Wi-Fi, so RETRY and SYNC NOW froze the UI
- * and then failed.
- */
-esp_err_t wifi_connection_retry_connection_without_setup(TickType_t wait_ticks)
-{
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-    return wifi_connection_request_connection_without_setup(wait_ticks);
-}
-
-esp_err_t wifi_connection_retry_connection_without_setup_async(void)
-{
-    ESP_RETURN_ON_FALSE(s_wifi_connection.event_group != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-    return wifi_connection_request_connection_without_setup_async();
 }

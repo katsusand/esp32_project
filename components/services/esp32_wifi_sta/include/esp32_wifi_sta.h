@@ -70,7 +70,6 @@ typedef enum {
 typedef struct {
     const char *ssid;
     const char *password;
-    uint8_t max_retry;
     wifi_auth_mode_t authmode_threshold;
     wifi_sae_pwe_method_t sae_pwe_h2e;
     const char *sae_h2e_identifier;
@@ -78,7 +77,6 @@ typedef struct {
 
 typedef struct {
     esp32_wifi_sta_state_t state;
-    uint8_t retry_count;
     bool has_ip;
     esp_netif_ip_info_t ip_info;
 } esp32_wifi_sta_status_t;
@@ -99,17 +97,43 @@ typedef enum {
     ESP32_WIFI_STA_FAILURE_CONNECT,
 } esp32_wifi_sta_failure_reason_t;
 
+typedef enum {
+    ESP32_WIFI_STA_EVENT_CONNECTED = 0, /* got an IP address */
+    ESP32_WIFI_STA_EVENT_DISCONNECTED,  /* an attempt failed or an established link dropped */
+} esp32_wifi_sta_event_type_t;
+
+typedef struct {
+    esp32_wifi_sta_event_type_t type;
+    esp32_wifi_sta_failure_reason_t failure_reason; /* DISCONNECTED only */
+} esp32_wifi_sta_event_t;
+
+typedef void (*esp32_wifi_sta_event_callback_t)(const esp32_wifi_sta_event_t *event, void *ctx);
+
+/*
+ * One task owns the STA.
+ *
+ * English contract: init / init_with_config / start / stop / enter_scan_mode
+ * operate the driver and must all come from one task. The first of them
+ * claims that task; later calls from any other task are refused with
+ * ESP_ERR_INVALID_STATE. In this project the owner is the wifi_connection
+ * manager task, and nothing else calls these. The event handler never
+ * operates the driver either: it only records state and reports through the
+ * event callback, so a reconnect is always the owner's decision. Getters may
+ * be called from any task.
+ */
 esp_err_t esp32_wifi_sta_init(void);
 esp_err_t esp32_wifi_sta_init_with_config(const esp32_wifi_sta_config_t *config);
+/* Starts the driver if needed and makes one connection attempt. No automatic
+   retries: after a failure the owner decides whether to try again. */
 esp_err_t esp32_wifi_sta_start(void);
 esp_err_t esp32_wifi_sta_stop(void);
 esp_err_t esp32_wifi_sta_wait_connected(TickType_t wait_ticks);
 /*
- * Makes a pending (or the next) esp32_wifi_sta_wait_connected() return
- * ESP_ERR_INVALID_STATE right away. esp32_wifi_sta_start() clears the request,
- * so it only ever cuts short the attempt that was already under way.
+ * Registers the receiver of connection events. The callback runs on the
+ * ESP-IDF event task: it must not block and must not call back into this
+ * component. Set it once, before the first start.
  */
-void esp32_wifi_sta_cancel_wait(void);
+void esp32_wifi_sta_set_event_callback(esp32_wifi_sta_event_callback_t callback, void *ctx);
 esp_err_t esp32_wifi_sta_get_status(esp32_wifi_sta_status_t *status);
 esp_err_t esp32_wifi_sta_get_configured_ssid(char *ssid, size_t ssid_size);
 bool esp32_wifi_sta_has_configured_ssid(void);
