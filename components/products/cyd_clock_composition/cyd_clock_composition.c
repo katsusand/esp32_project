@@ -12,6 +12,7 @@
 #include "cyd_system_apps.h"
 #include "error_log_store.h"
 #include "sd_card_storage.h"
+#include "sd_card_writer.h"
 #include "system_boot.h"
 #include "time_tick.h"
 
@@ -120,7 +121,14 @@ esp_err_t cyd_clock_composition_start(void)
         (void)error_log_store_append_esp_err(TAG, "system boot failed", err);
         ESP_RETURN_ON_ERROR(err, TAG, "system boot failed");
     }
-    cyd_clock_composition_start_optional("sd card init failed", sd_card_storage_init());
+    esp_err_t sd_err = sd_card_storage_init();
+    cyd_clock_composition_start_optional("sd card init failed", sd_err);
+    if (sd_err == ESP_OK) {
+        /* One task does all writing to the card; the error log is its first
+           stream. Without a card both stay off and errors go to serial only. */
+        cyd_clock_composition_start_optional("sd card writer start failed", sd_card_writer_start());
+        cyd_clock_composition_start_optional("error log start failed", error_log_store_start());
+    }
     err = time_tick_start();
     if (err != ESP_OK) {
         (void)error_log_store_append_esp_err(TAG, "time tick start failed", err);

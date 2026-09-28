@@ -81,6 +81,7 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `components/services/wifi_connection/`: Wi-Fi 接続状態と接続要求の orchestration
 - `components/services/time_sync/`: SNTP/NTP 時刻同期
 - `components/services/app_scheduler/`: アプリ共通の時刻スケジューラー
+- `components/services/sd_card_writer/`: SD カードへの継続的な書き込みを1つの task にまとめる service（ログ用）
 - `components/apps/cyd_clock_app/`: clock app
 - `components/apps/cyd_clock_alarm/`: clock app の alarm (時計の一部。`cyd_clock_app_register()` がインストールする)
 - `components/apps/cyd_clock_settings_app/`: clock-specific settings app
@@ -446,6 +447,10 @@ source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py
 - [Sampling Service Pattern](docs/sampling_service.md)
 - [Time Tick](docs/time_tick.md)
 - [Time Sync](docs/time_sync.md)
+- [SD Card Storage](docs/sd_card_storage.md)
+- [SD Card Writer](docs/sd_card_writer.md)
+- [SD Card Files](docs/sd_card_files.md)
+- [Error Log Store](docs/error_log_store.md)
 - [CYD Clock App](docs/cyd_clock_app.md)
 - [CYD Clock Alarm](docs/cyd_clock_alarm.md)
 - [CYD Clock Composition](docs/cyd_clock_composition.md)

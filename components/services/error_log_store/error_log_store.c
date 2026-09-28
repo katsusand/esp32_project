@@ -5,15 +5,12 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "error_log_store.h"
 #include "sd_card_storage.h"
-#include "sd_card_files.h"
+#include "sd_card_writer.h"
 
 static const char *ERROR_LOG_TAG = "error_log_store";
 static const size_t ERROR_LOG_LINE_MAX = 256;
-#define ERROR_LOG_PATH_MAX 32
 /*
  * 8.3 on purpose. The project builds FATFS with CONFIG_FATFS_LFN_NONE (the
  * ESP-IDF default), where FatFs rejects a longer name with FR_INVALID_NAME; the
@@ -23,15 +20,22 @@ static const size_t ERROR_LOG_LINE_MAX = 256;
  */
 #define ERROR_LOG_FILE_FORMAT "ERR_%04u.LOG"
 #define ERROR_LOG_FILE_SCAN_FORMAT "ERR_%4u.LOG"
-#define ERROR_LOG_MAX_LINES_PER_FILE 5000U
 #define ERROR_LOG_MAX_INDEX 9999U
+/* Roughly 4000 lines. A line is never split, so a file ends on a whole line. */
+#define ERROR_LOG_MAX_FILE_SIZE (256U * 1024U)
+/* Error lines are rare; this only has to ride out a slow card. */
+#define ERROR_LOG_BUFFER_SIZE 4096U
+
+/*
+ * Lines go to the SD card writer, which owns the file.
+ *
+ * English contract: logging never blocks the caller on the card. The line is
+ * queued and the writer writes and syncs it right away (flush interval 0).
+ * Before error_log_store_start(), or without a card, lines are dropped and
+ * only the serial log has them.
+ */
+static sd_card_writer_stream_t *volatile s_stream;
 static bool s_sink_warning_emitted = false;
-static SemaphoreHandle_t s_log_mutex = NULL;
-static char s_error_log_path[ERROR_LOG_PATH_MAX];
-static bool s_error_log_path_ready = false;
-static uint16_t s_error_log_index = 0;
-static uint32_t s_error_log_line_count = 0;
-static bool s_error_log_exhausted = false;
 
 static void error_log_store_warn_sink_failure_once(esp_err_t err, const char *detail)
 {
@@ -41,19 +45,9 @@ static void error_log_store_warn_sink_failure_once(esp_err_t err, const char *de
 
     s_sink_warning_emitted = true;
     ESP_LOGW(ERROR_LOG_TAG,
-             "SD error log sink unavailable; ignoring future log-store failures: %s (%s)",
+             "SD error log unavailable; further failures are not reported: %s (%s)",
              detail != NULL ? detail : "unknown",
              esp_err_to_name(err));
-}
-
-static esp_err_t error_log_store_build_relative_path(uint16_t file_index, char *path, size_t path_size)
-{
-    int written = snprintf(path, path_size, ERROR_LOG_FILE_FORMAT, (unsigned)file_index);
-    ESP_RETURN_ON_FALSE(written > 0 && (size_t)written < path_size,
-                        ESP_ERR_INVALID_SIZE,
-                        ERROR_LOG_TAG,
-                        "error log path is too long");
-    return ESP_OK;
 }
 
 static esp_err_t error_log_store_find_next_index(uint16_t *out_next_index)
@@ -100,84 +94,57 @@ static esp_err_t error_log_store_find_next_index(uint16_t *out_next_index)
     return ESP_OK;
 }
 
-static esp_err_t error_log_store_open_next_file_locked(void)
+/* Runs on the writer task whenever the stream needs a new file. */
+static esp_err_t error_log_store_pick_path(char *path, size_t path_size, void *ctx)
 {
+    (void)ctx;
     uint16_t next_index = 0;
 
     ESP_RETURN_ON_ERROR(error_log_store_find_next_index(&next_index),
                         ERROR_LOG_TAG,
                         "find next error log index failed");
-    ESP_RETURN_ON_FALSE(next_index <= ERROR_LOG_MAX_INDEX,
-                        ESP_ERR_INVALID_STATE,
+    int written = snprintf(path, path_size, ERROR_LOG_FILE_FORMAT, (unsigned)next_index);
+    ESP_RETURN_ON_FALSE(written > 0 && (size_t)written < path_size,
+                        ESP_ERR_INVALID_SIZE,
                         ERROR_LOG_TAG,
-                        "next error log index exhausted");
-    ESP_RETURN_ON_ERROR(error_log_store_build_relative_path(next_index, s_error_log_path, sizeof(s_error_log_path)),
-                        ERROR_LOG_TAG,
-                        "build error log path failed");
-    s_error_log_index = next_index;
-    s_error_log_line_count = 0;
-    s_error_log_path_ready = true;
-    ESP_LOGI(ERROR_LOG_TAG, "SD error logging to %s", s_error_log_path);
+                        "error log path is too long");
     return ESP_OK;
 }
 
-static esp_err_t error_log_store_ensure_path_locked(void)
+esp_err_t error_log_store_start(void)
 {
-    if (s_error_log_exhausted) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (s_error_log_path_ready && s_error_log_line_count < ERROR_LOG_MAX_LINES_PER_FILE) {
+    if (s_stream != NULL) {
         return ESP_OK;
     }
 
-    if (s_error_log_path_ready && s_error_log_line_count >= ERROR_LOG_MAX_LINES_PER_FILE) {
-        ESP_RETURN_ON_FALSE(s_error_log_index < ERROR_LOG_MAX_INDEX,
-                            ESP_ERR_INVALID_STATE,
-                            ERROR_LOG_TAG,
-                            "error log index exhausted");
-        s_error_log_path_ready = false;
-    }
-
-    return error_log_store_open_next_file_locked();
+    const sd_card_writer_stream_config_t config = {
+        .name = "error_log",
+        .path_fn = error_log_store_pick_path,
+        .buffer_size = ERROR_LOG_BUFFER_SIZE,
+        .flush_interval_ms = 0,
+        .max_file_size = ERROR_LOG_MAX_FILE_SIZE,
+    };
+    sd_card_writer_stream_t *stream = NULL;
+    ESP_RETURN_ON_ERROR(sd_card_writer_open_stream(&config, &stream), ERROR_LOG_TAG, "error log stream failed");
+    s_stream = stream;
+    return ESP_OK;
 }
 
 esp_err_t error_log_store_write_error_log(const char *line)
 {
-    esp_err_t err = ESP_OK;
-
     ESP_RETURN_ON_FALSE(line != NULL, ESP_ERR_INVALID_ARG, ERROR_LOG_TAG, "line is null");
 
-    if (s_log_mutex == NULL) {
-        s_log_mutex = xSemaphoreCreateMutex();
-        ESP_RETURN_ON_FALSE(s_log_mutex != NULL, ESP_ERR_NO_MEM, ERROR_LOG_TAG, "error log mutex create failed");
-    }
-
-    if (xSemaphoreTake(s_log_mutex, portMAX_DELAY) != pdTRUE) {
-        return ESP_FAIL;
-    }
-
-    err = error_log_store_ensure_path_locked();
-    if (err == ESP_OK) {
-        err = sd_card_files_append_existing_text(s_error_log_path, line);
-        if (err == ESP_ERR_NOT_FOUND) {
-            err = sd_card_files_write_new_text(s_error_log_path, line);
-        }
-        if (err == ESP_OK) {
-            s_error_log_line_count++;
-        }
-    }
-
-    xSemaphoreGive(s_log_mutex);
-
-    if (err != ESP_OK) {
-        if (err == ESP_ERR_INVALID_STATE) {
-            s_error_log_exhausted = true;
-        }
-        error_log_store_warn_sink_failure_once(err, "write_error_log failed");
+    sd_card_writer_stream_t *stream = s_stream;
+    if (stream == NULL) {
+        /* Not started (early boot, or no card): the caller's own serial log
+           line is all there is. */
         return ESP_OK;
     }
-
+    esp_err_t err = sd_card_writer_write(stream, line, strlen(line), 0);
+    if (err != ESP_OK) {
+        error_log_store_warn_sink_failure_once(err, "error log line dropped");
+    }
+    /* Logging an error must never fail the caller. */
     return ESP_OK;
 }
 
