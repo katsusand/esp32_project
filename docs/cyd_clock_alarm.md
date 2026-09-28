@@ -96,6 +96,18 @@ English contract: call after `app_scheduler_init()`. A failure leaves the clock 
 
 English supplement: App scope is what makes the alarm's data follow the app. Clear App Data resets it, and after an app swap it counts as leftover app data instead of feature data that survives every reset.
 
+## Limitations
+
+時計はこの基盤の動作確認用サンプルなので、アラームも最小限の実装にとどめています。次の制限は把握したうえで受け入れています（2026-09-26 のレビューの指摘を受け、2026-09-28 に判断）。
+
+- 判定は `app_scheduler` の `INSTANT` で、時刻がちょうどその秒に一致したときだけ鳴る。NTP 補正などで時刻がその秒を飛び越えると鳴らない（`time_tick` の `jumped` / `delta_sec` は使っていない）
+- 音は約1秒で1回鳴るだけ
+- 停止やスヌーズの UI はない
+
+本格的なアラームが必要な app を作る場合は、飛び越えを考慮した判定と、鳴動・停止の UI をその app 側で用意してください。
+
+English supplement: known and accepted limitations of a sample feature. Do not harden them in the clock unless asked; a product that needs a real alarm should build it in its own app.
+
 ## Dependencies
 
 - `app_scheduler` (public)
