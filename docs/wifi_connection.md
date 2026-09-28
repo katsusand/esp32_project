@@ -79,6 +79,10 @@ English supplement: Credential persistence is gated by a successful live connect
 
 保存済み SSID が scan で見つからない場合は、`CONFIG_WIFI_CONNECTION_SCAN_RETRY_DELAY_MS` を空けて最大 `CONFIG_WIFI_CONNECTION_SCAN_RETRY_ATTEMPTS` 回まで scan し直します。
 
+接続に失敗すると、エラーログ（SD）に1行記録します。自動接続は一連の試行がすべて失敗したとき、setup は接続テストが失敗したときで、試行1回ごとには書きません。行には理由を付けます（`auth failed` はたいていパスワード違い、`AP not found` は圏外など）。SSID は設置場所を推測できる情報なので書きません。
+
+English supplement: one error log line per failed connection sequence (automatic connect, or the setup connection test), with the failure reason and without the SSID. Attempts are not logged one by one.
+
 ## Setup
 
 setup UI は `wifi_connection_begin_setup()` で通常の接続処理を止めて `SETUP_RUNNING` にし、完了時に `wifi_connection_complete_setup()` を呼びます。接続テストが成功した後なら `CONNECTED`、キャンセルなら STA を止めて `OFF` です。

@@ -10,6 +10,9 @@
 #include "wifi_connection_internal.h"
 #include "wifi_profile_store.h"
 
+#ifndef CONFIG_WIFI_CONNECTION_SETUP_AUTH_FAILURE_LIMIT
+#define CONFIG_WIFI_CONNECTION_SETUP_AUTH_FAILURE_LIMIT 2
+#endif
 #ifndef CONFIG_ESP32_WIFI_STA_MAX_RETRY
 #define CONFIG_ESP32_WIFI_STA_MAX_RETRY 5
 #endif
@@ -66,11 +69,19 @@ static void wifi_connection_stop_sta_if_initialized(void)
     }
 }
 
+/*
+ * Up to CONFIG_ESP32_WIFI_STA_MAX_RETRY + 1 fresh attempts. With a nonzero
+ * `auth_failure_limit` it gives up once that many attempts failed
+ * authentication: a wrong password does not get better by trying again, and
+ * each attempt costs a few seconds of handshake timeout.
+ */
 static esp_err_t wifi_connection_connect_fresh(const esp32_wifi_sta_config_t *config,
                                                 TickType_t wait_ticks,
+                                                uint32_t auth_failure_limit,
                                                 esp32_wifi_sta_failure_reason_t *failure_reason)
 {
     const uint32_t attempt_count = (uint32_t)CONFIG_ESP32_WIFI_STA_MAX_RETRY + 1U;
+    uint32_t auth_failures = 0;
     esp_err_t last_err = ESP_FAIL;
 
     *failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
@@ -119,6 +130,13 @@ static esp_err_t wifi_connection_connect_fresh(const esp32_wifi_sta_config_t *co
                  (unsigned)attempt_count,
                  esp_err_to_name(last_err),
                  (int)reason);
+
+        if (reason == ESP32_WIFI_STA_FAILURE_AUTH &&
+            auth_failure_limit > 0 &&
+            ++auth_failures >= auth_failure_limit) {
+            ESP_LOGW(TAG, "giving up after %u authentication failures", (unsigned)auth_failures);
+            break;
+        }
     }
 
     wifi_connection_stop_sta_if_initialized();
@@ -140,7 +158,11 @@ esp_err_t wifi_connection_run_connect_and_save(const char *ssid,
     };
 
     wifi_connection_set_progress(WIFI_CONNECTION_PROGRESS_CONNECTING, ssid);
-    esp_err_t err = wifi_connection_connect_fresh(&config, wait_ticks, failure_reason);
+    /* A password typed on the setup screen: stop soon when it is wrong. */
+    esp_err_t err = wifi_connection_connect_fresh(&config,
+                                                  wait_ticks,
+                                                  CONFIG_WIFI_CONNECTION_SETUP_AUTH_FAILURE_LIMIT,
+                                                  failure_reason);
     if (err == ESP_OK) {
         err = wifi_profile_store_record_success(ssid, password, authmode);
     }
@@ -237,7 +259,9 @@ static esp_err_t wifi_connection_connect_candidate(const wifi_connection_candida
 
     wifi_connection_set_progress(WIFI_CONNECTION_PROGRESS_CONNECTING,
                                  candidate->profile.ssid);
-    esp_err_t err = wifi_connection_connect_fresh(&config, wait_ticks, failure_reason);
+    /* Saved profiles keep every attempt: an auth failure here can also be a
+       handshake timeout on a weak signal. */
+    esp_err_t err = wifi_connection_connect_fresh(&config, wait_ticks, 0, failure_reason);
     if (err == ESP_OK) {
         err = wifi_profile_store_record_success(candidate->profile.ssid,
                                                 candidate->profile.password,

@@ -24,7 +24,7 @@ English supplement: logging never blocks the caller on the card. The line is que
 ## Format
 
 ```text
-[12345 ms] wifi_connection: Wi-Fi connection connect failed: ESP_FAIL
+[12345 ms] wifi_connection: Wi-Fi setup connection test failed: ESP_FAIL (auth failed)
 ```
 
 - 時刻は boot からの経過ミリ秒

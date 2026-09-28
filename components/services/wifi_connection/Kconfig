@@ -57,4 +57,19 @@ menu "Wi-Fi Connection"
             再スキャンまでの待ち時間です。
             English supplement: This delay is inserted between scan attempts for transient radio conditions.
 
+    config WIFI_CONNECTION_SETUP_AUTH_FAILURE_LIMIT
+        int "Setup connection test: give up after auth failures"
+        default 2
+        range 1 20
+        depends on ESP32_WIFI_STA_ENABLED
+        help
+            Wi-Fi 設定画面の接続テストで、認証失敗（たいていパスワード違い）が
+            この回数に達したら、残りの再試行をやめて失敗を返します。認証失敗
+            以外の失敗は ESP32_WIFI_STA_MAX_RETRY まで再試行します。保存済み
+            profile での自動接続には適用しません。
+            English: the setup connection test stops once this many attempts
+            failed authentication (usually a wrong password). Other failures
+            still retry up to ESP32_WIFI_STA_MAX_RETRY. Automatic connection
+            with saved profiles is not affected.
+
 endmenu
