@@ -38,7 +38,8 @@ static bool app_launcher_touch_confirmed_action(const cyd_input_event_t *event,
 
     switch (event->data.touch.action) {
     case CYD_INPUT_TOUCH_ACTION_PRESS:
-        tracker->pending = cyd_display_hit_test_action(event->data.touch.x,
+        tracker->pending = cyd_display_screen_hit_test(&s_launcher_screen,
+                                                       event->data.touch.x,
                                                        event->data.touch.y,
                                                        &tracker->action_id);
         return false;
@@ -49,7 +50,10 @@ static bool app_launcher_touch_confirmed_action(const cyd_input_event_t *event,
         tracker->pending = false;
 
         uint16_t released_action = 0;
-        if (!cyd_display_hit_test_action(event->data.touch.x, event->data.touch.y, &released_action) ||
+        if (!cyd_display_screen_hit_test(&s_launcher_screen,
+                                         event->data.touch.x,
+                                         event->data.touch.y,
+                                         &released_action) ||
             released_action != tracker->action_id) {
             return false;
         }

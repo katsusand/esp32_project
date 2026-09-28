@@ -9,6 +9,7 @@
 #define TAG "cyd_wifi_setup"
 
 static const app_shell_app_t *s_wifi_setup_return_app;
+static cyd_display_screen_t s_wifi_setup_disabled_screen;
 
 static esp_err_t cyd_wifi_setup_disabled_enter(void *ctx, const app_shell_app_t *from_app)
 {
@@ -18,7 +19,7 @@ static esp_err_t cyd_wifi_setup_disabled_enter(void *ctx, const app_shell_app_t 
         "Wi-Fi is disabled",
         "Tap to go back",
     };
-    return cyd_display_show_lines("Wi-Fi Setup", lines, 2);
+    return cyd_display_show_lines(&s_wifi_setup_disabled_screen, "Wi-Fi Setup", lines, 2);
 }
 
 static esp_err_t cyd_wifi_setup_disabled_step(void *ctx)

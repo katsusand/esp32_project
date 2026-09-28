@@ -1452,36 +1452,6 @@ esp_err_t cyd_input_get_touch_irq_level(int *level)
     return ESP_OK;
 }
 
-esp_err_t cyd_input_get_mode_button_touch(size_t button_count, size_t *button_index, bool *pressed)
-{
-    (void)button_count;
-    cyd_input_touch_state_t touch_state = { 0 };
-    ESP_RETURN_ON_ERROR(cyd_input_get_touch_state(&touch_state), TAG, "touch unavailable");
-
-    if (button_index != NULL) {
-        *button_index = 0;
-    }
-    if (pressed != NULL) {
-        *pressed = false;
-    }
-
-    if (!touch_state.pressed) {
-        return ESP_OK;
-    }
-
-    size_t hit_index = 0;
-    if (cyd_display_hit_test_mode_button(touch_state.x, touch_state.y, &hit_index)) {
-        if (button_index != NULL) {
-            *button_index = hit_index;
-        }
-        if (pressed != NULL) {
-            *pressed = true;
-        }
-    }
-
-    return ESP_OK;
-}
-
 esp_err_t cyd_input_read_event(cyd_input_event_t *event, TickType_t wait_ticks)
 {
     ESP_RETURN_ON_ERROR(cyd_input_check_ready(), TAG, "input unavailable");

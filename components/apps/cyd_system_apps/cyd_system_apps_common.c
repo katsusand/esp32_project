@@ -5,7 +5,8 @@
 #include "cyd_system_apps_internal.h"
 #include "wifi_connection.h"
 
-bool cyd_system_apps_touch_confirmed_action(const cyd_input_event_t *event,
+bool cyd_system_apps_touch_confirmed_action(const cyd_display_screen_t *screen,
+                                            const cyd_input_event_t *event,
                                             cyd_system_apps_touch_tracker_t *tracker,
                                             uint16_t *action_id)
 {
@@ -15,7 +16,8 @@ bool cyd_system_apps_touch_confirmed_action(const cyd_input_event_t *event,
 
     switch (event->data.touch.action) {
     case CYD_INPUT_TOUCH_ACTION_PRESS:
-        tracker->pending = cyd_display_hit_test_action(event->data.touch.x,
+        tracker->pending = cyd_display_screen_hit_test(screen,
+                                                       event->data.touch.x,
                                                        event->data.touch.y,
                                                        &tracker->action_id);
         tracker->long_pressed = false;
@@ -30,7 +32,8 @@ bool cyd_system_apps_touch_confirmed_action(const cyd_input_event_t *event,
         uint16_t release_action_id = 0;
         bool confirmed = tracker->pending &&
                          !tracker->long_pressed &&
-                         cyd_display_hit_test_action(event->data.touch.x,
+                         cyd_display_screen_hit_test(screen,
+                                                     event->data.touch.x,
                                                      event->data.touch.y,
                                                      &release_action_id) &&
                          release_action_id == tracker->action_id;

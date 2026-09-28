@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cyd_display.h"
 #include "cyd_input.h"
 #include "time_sync.h"
 
@@ -22,7 +23,9 @@ typedef struct {
     uint16_t action_id;
 } cyd_system_apps_touch_tracker_t;
 
-bool cyd_system_apps_touch_confirmed_action(const cyd_input_event_t *event,
+/* Hit-tests `screen`, the calling app's own screen (see cyd_display_screen_hit_test). */
+bool cyd_system_apps_touch_confirmed_action(const cyd_display_screen_t *screen,
+                                            const cyd_input_event_t *event,
                                             cyd_system_apps_touch_tracker_t *tracker,
                                             uint16_t *action_id);
 

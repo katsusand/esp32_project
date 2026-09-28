@@ -319,7 +319,10 @@ static bool cyd_settings_touch_stepper_action(const cyd_input_event_t *event, ui
         return false;
     }
 
-    if (!cyd_display_hit_test_action(event->data.touch.x, event->data.touch.y, &pressed_action_id)) {
+    if (!cyd_display_screen_hit_test(&s_settings_screen,
+                                     event->data.touch.x,
+                                     event->data.touch.y,
+                                     &pressed_action_id)) {
         return false;
     }
 
@@ -2139,7 +2142,7 @@ static esp_err_t cyd_settings_app_step(void *ctx)
         return cyd_settings_handle_active_screen_action(action_id, &handled);
     }
 
-    if (!cyd_system_apps_touch_confirmed_action(&event, &s_settings_touch_tracker, &action_id)) {
+    if (!cyd_system_apps_touch_confirmed_action(&s_settings_screen, &event, &s_settings_touch_tracker, &action_id)) {
         return ESP_OK;
     }
 

@@ -50,12 +50,6 @@ typedef struct {
 } wifi_touch_action_tracker_t;
 
 typedef struct {
-    bool pending;
-    bool long_pressed;
-    size_t button_index;
-} wifi_touch_mode_button_tracker_t;
-
-typedef struct {
     bool initialized;
     uint32_t scan_round;
     size_t page_index;
@@ -97,7 +91,8 @@ static bool wifi_touch_event_confirmed_action(const cyd_input_event_t *event,
 
     switch (event->data.touch.action) {
         case CYD_INPUT_TOUCH_ACTION_PRESS:
-            tracker->pending = cyd_display_hit_test_action(event->data.touch.x,
+            tracker->pending = cyd_display_screen_hit_test(&s_wifi_setup_screen,
+                                                           event->data.touch.x,
                                                            event->data.touch.y,
                                                            &tracker->action_id);
             tracker->long_pressed = false;
@@ -112,7 +107,8 @@ static bool wifi_touch_event_confirmed_action(const cyd_input_event_t *event,
             uint16_t release_action_id = 0;
             bool confirmed = tracker->pending &&
                              !tracker->long_pressed &&
-                             cyd_display_hit_test_action(event->data.touch.x,
+                             cyd_display_screen_hit_test(&s_wifi_setup_screen,
+                                                         event->data.touch.x,
                                                          event->data.touch.y,
                                                          &release_action_id) &&
                              release_action_id == tracker->action_id;
@@ -122,48 +118,6 @@ static bool wifi_touch_event_confirmed_action(const cyd_input_event_t *event,
             tracker->pending = false;
             tracker->long_pressed = false;
             tracker->action_id = 0;
-            return confirmed;
-        }
-        default:
-            return false;
-    }
-}
-
-static bool wifi_touch_event_confirmed_mode_button(const cyd_input_event_t *event,
-                                                   wifi_touch_mode_button_tracker_t *tracker,
-                                                   size_t *button_index)
-{
-    if (event == NULL || tracker == NULL || event->type != CYD_INPUT_EVENT_TOUCH) {
-        return false;
-    }
-
-    switch (event->data.touch.action) {
-        case CYD_INPUT_TOUCH_ACTION_PRESS:
-            tracker->pending = cyd_display_hit_test_mode_button(event->data.touch.x,
-                                                                event->data.touch.y,
-                                                                &tracker->button_index);
-            tracker->long_pressed = false;
-            return false;
-        case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
-        case CYD_INPUT_TOUCH_ACTION_REPEAT:
-            if (tracker->pending) {
-                tracker->long_pressed = true;
-            }
-            return false;
-        case CYD_INPUT_TOUCH_ACTION_RELEASE: {
-            size_t release_button_index = 0;
-            bool confirmed = tracker->pending &&
-                             !tracker->long_pressed &&
-                             cyd_display_hit_test_mode_button(event->data.touch.x,
-                                                              event->data.touch.y,
-                                                              &release_button_index) &&
-                             release_button_index == tracker->button_index;
-            if (confirmed && button_index != NULL) {
-                *button_index = release_button_index;
-            }
-            tracker->pending = false;
-            tracker->long_pressed = false;
-            tracker->button_index = 0;
             return confirmed;
         }
         default:
@@ -341,7 +295,9 @@ static esp_err_t wifi_test_connect_and_save(const char *ssid,
                                             const char *password,
                                             wifi_auth_mode_t authmode)
 {
-    ESP_RETURN_ON_ERROR(cyd_display_show_text("Wi-Fi", "Connecting..."), TAG, "show connecting failed");
+    ESP_RETURN_ON_ERROR(cyd_display_show_text(&s_wifi_setup_screen, "Wi-Fi", "Connecting..."),
+                        TAG,
+                        "show connecting failed");
     ESP_RETURN_ON_ERROR(wifi_connection_connect_and_save(
                             ssid,
                             password,
@@ -350,16 +306,18 @@ static esp_err_t wifi_test_connect_and_save(const char *ssid,
                             NULL),
                         TAG,
                         "Wi-Fi connect test failed");
-    return cyd_display_show_text("Wi-Fi", "Saved");
+    return cyd_display_show_text(&s_wifi_setup_screen, "Wi-Fi", "Saved");
 }
 
 static void wifi_wait_ok_dialog(const char *title, const char *message)
 {
     const char *lines[] = { message };
     const char *buttons[] = { "OK" };
-    wifi_touch_mode_button_tracker_t touch_tracker = { 0 };
+    wifi_touch_action_tracker_t touch_tracker = { 0 };
 
-    esp_err_t err = cyd_display_show_mode_screen(title, lines, 1, buttons, 1, 0);
+    /* Built into s_wifi_setup_screen, so taps are tested against the dialog.
+       The scan screen is rebuilt there when the scan session restarts. */
+    esp_err_t err = cyd_display_show_mode_screen(&s_wifi_setup_screen, title, lines, 1, buttons, 1, 0);
     if (err != ESP_OK) {
         /* Not ESP_ERROR_CHECK: a failed draw must not reboot the device. With no
            OK button on screen there is nothing to wait for, so skip the dialog. */
@@ -375,9 +333,9 @@ static void wifi_wait_ok_dialog(const char *title, const char *message)
             continue;
         }
 
-        size_t button_index = 0;
-        if (wifi_touch_event_confirmed_mode_button(&event, &touch_tracker, &button_index)) {
-            return;
+        uint16_t action_id = 0;
+        if (wifi_touch_event_confirmed_action(&event, &touch_tracker, &action_id)) {
+            return; /* the only button is OK */
         }
     }
 }

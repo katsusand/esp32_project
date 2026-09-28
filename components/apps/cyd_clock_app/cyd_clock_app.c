@@ -173,48 +173,6 @@ esp_err_t cyd_clock_app_register(void)
     return ESP_OK;
 }
 
-static bool cyd_clock_app_touch_confirmed_mode_button(const cyd_input_event_t *event,
-                                                      cyd_clock_mode_button_tracker_t *tracker,
-                                                      size_t *button_index)
-{
-    if (event == NULL || tracker == NULL || event->type != CYD_INPUT_EVENT_TOUCH) {
-        return false;
-    }
-
-    switch (event->data.touch.action) {
-    case CYD_INPUT_TOUCH_ACTION_PRESS:
-        tracker->pending = cyd_display_hit_test_mode_button(event->data.touch.x,
-                                                            event->data.touch.y,
-                                                            &tracker->button_index);
-        tracker->long_pressed = false;
-        return false;
-    case CYD_INPUT_TOUCH_ACTION_LONG_PRESS:
-    case CYD_INPUT_TOUCH_ACTION_REPEAT:
-        if (tracker->pending) {
-            tracker->long_pressed = true;
-        }
-        return false;
-    case CYD_INPUT_TOUCH_ACTION_RELEASE: {
-        size_t release_button_index = 0;
-        bool confirmed = tracker->pending &&
-                         !tracker->long_pressed &&
-                         cyd_display_hit_test_mode_button(event->data.touch.x,
-                                                          event->data.touch.y,
-                                                          &release_button_index) &&
-                         release_button_index == tracker->button_index;
-        if (confirmed && button_index != NULL) {
-            *button_index = release_button_index;
-        }
-        tracker->pending = false;
-        tracker->long_pressed = false;
-        tracker->button_index = 0;
-        return confirmed;
-    }
-    default:
-        return false;
-    }
-}
-
 static bool cyd_clock_app_touch_confirmed_action(const cyd_input_event_t *event,
                                                  cyd_clock_mode_button_tracker_t *tracker,
                                                  uint16_t *action_id)
@@ -227,7 +185,8 @@ static bool cyd_clock_app_touch_confirmed_action(const cyd_input_event_t *event,
     case CYD_INPUT_TOUCH_ACTION_PRESS:
         {
             uint16_t pressed_action_id = 0;
-            tracker->pending = cyd_display_hit_test_action(event->data.touch.x,
+            tracker->pending = cyd_display_screen_hit_test(&s_clock_screen,
+                                                           event->data.touch.x,
                                                            event->data.touch.y,
                                                            &pressed_action_id);
             tracker->button_index = pressed_action_id;
@@ -244,7 +203,8 @@ static bool cyd_clock_app_touch_confirmed_action(const cyd_input_event_t *event,
         uint16_t release_action_id = 0;
         bool confirmed = tracker->pending &&
                          !tracker->long_pressed &&
-                         cyd_display_hit_test_action(event->data.touch.x,
+                         cyd_display_screen_hit_test(&s_clock_screen,
+                                                     event->data.touch.x,
                                                      event->data.touch.y,
                                                      &release_action_id) &&
                          release_action_id == (uint16_t)tracker->button_index;
@@ -640,7 +600,7 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
     const char *buttons[] = { "RETRY", "SETUP" };
     cyd_clock_mode_button_tracker_t tracker = { 0 };
 
-    cyd_clock_app_log_on_error(cyd_display_show_mode_screen("Wi-Fi failed", lines, 2, buttons, 2, 0),
+    cyd_clock_app_log_on_error(cyd_display_show_mode_screen(&s_clock_screen, "Wi-Fi failed", lines, 2, buttons, 2, 0),
                                "show Wi-Fi failed screen");
 
     while (true) {
@@ -651,8 +611,10 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
             }
             continue;
         }
-        size_t button_index = 0;
-        if (cyd_clock_app_touch_confirmed_mode_button(&event, &tracker, &button_index)) {
+        /* The dialog is a mode screen in s_clock_screen; its buttons carry
+           their index as the action id. */
+        uint16_t button_index = 0;
+        if (cyd_clock_app_touch_confirmed_action(&event, &tracker, &button_index)) {
             if (button_index == 0) {
                 ESP_LOGI(TAG, "retrying saved Wi-Fi profiles");
                 if (wifi_connection_retry_connection_without_setup_async() != ESP_OK) {
@@ -698,7 +660,8 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
                 lines[0] = "Connecting Wi-Fi";
             }
 
-            cyd_clock_app_log_on_error(cyd_display_show_lines("Wi-Fi", lines, 2), "show Wi-Fi retry screen");
+            cyd_clock_app_log_on_error(cyd_display_show_lines(&s_clock_screen, "Wi-Fi", lines, 2),
+                                       "show Wi-Fi retry screen");
             last_progress = progress;
         }
 
