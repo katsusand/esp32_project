@@ -1,0 +1,80 @@
+menu "SD Card Writer"
+
+    config SD_CARD_WRITER_TASK_STACK_SIZE
+        int "Writer task stack size"
+        default 4096
+        range 3072 16384
+
+    config SD_CARD_WRITER_TASK_PRIORITY
+        int "Writer task priority"
+        default 5
+        range 1 24
+        help
+            SD カードへの書き込みはすべてこの task が行います。書き込み中の
+            待ちでほかの処理を止めないよう、UI や Wi-Fi の task より低くしています。
+            English: every write to the card runs on this task. Keep it below
+            the UI and Wi-Fi tasks so card latency never holds them up.
+
+    config SD_CARD_WRITER_MAX_STREAMS
+        int "Maximum open streams"
+        default 4
+        range 1 16
+        help
+            同時に開いておける stream の数です。stream ごとに file を1つ開いた
+            ままにするので、SD_CARD_STORAGE_MOUNT_MAX_FILES より少なくしてください。
+            English: each stream keeps one file open. Keep this below
+            SD_CARD_STORAGE_MOUNT_MAX_FILES so ad-hoc file access still has a slot.
+
+    config SD_CARD_WRITER_CHUNK_SIZE
+        int "Write chunk size (bytes)"
+        default 8192
+        range 512 32768
+        help
+            1回の write() で渡す最大量です。512 の倍数にしてください。大きいほど
+            1回の転送でまとめて書けますが、同じ大きさの DMA 用 RAM を使います。
+            English: largest single write handed to FATFS, in whole 512-byte
+            sectors. Also the size of the writer's DMA-capable staging buffer.
+
+    config SD_CARD_WRITER_TICK_MS
+        int "Writer wake interval (ms)"
+        default 100
+        range 10 1000
+        help
+            producer からの通知がなくても、この間隔で起きて sync の期限を確認します。
+            English: the writer also wakes this often to run interval syncs of
+            streams that went quiet.
+
+    config SD_CARD_WRITER_BENCHMARK
+        bool "Run a write throughput benchmark at start"
+        default n
+        help
+            writer の起動直後に BENCH.BIN へ一定レートで書き込み、実際に SD へ
+            書けた量と取りこぼしをログに出します。確認用で、通常は無効です。
+            English: at writer start, writes BENCH.BIN at a fixed rate and logs
+            what reached the card and what was dropped. For measurement only.
+
+    config SD_CARD_WRITER_BENCHMARK_RATE_KBPS
+        int "Benchmark rate (KB/s)"
+        default 100
+        range 1 4096
+        depends on SD_CARD_WRITER_BENCHMARK
+
+    config SD_CARD_WRITER_BENCHMARK_SECONDS
+        int "Benchmark duration (s)"
+        default 30
+        range 1 3600
+        depends on SD_CARD_WRITER_BENCHMARK
+
+    config SD_CARD_WRITER_BENCHMARK_BUFFER_KB
+        int "Benchmark stream buffer (KB)"
+        default 32
+        range 4 128
+        depends on SD_CARD_WRITER_BENCHMARK
+
+    config SD_CARD_WRITER_BENCHMARK_BLOCK_BYTES
+        int "Benchmark record size (bytes)"
+        default 1024
+        range 16 16384
+        depends on SD_CARD_WRITER_BENCHMARK
+
+endmenu

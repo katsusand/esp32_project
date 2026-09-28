@@ -5,6 +5,10 @@
 
 English supplement: `sd_card_files` is intentionally small. It hides mount-point handling and explicit create/append/overwrite checks, but it does not own buffering, file rotation, or record schemas.
 
+呼び出し元の task で、1回ごとに open から close まで同期実行します。設定の保存のような、まれな単発の書き込み向けです。ログのように継続して書くデータは [SD Card Writer](sd_card_writer.md) を使ってください。
+
+English supplement: every call opens, writes, flushes and closes on the caller's task. Use it for rare one-off writes; continuous data belongs in sd_card_writer.
+
 ## Public API
 
 - `sd_card_files_write_new_text(relative_path, text)`

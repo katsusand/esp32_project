@@ -10,6 +10,7 @@ set(CYD_CLOCK_COMPOSITION_REQUIRES
     nvs_health
     nvs_schema
     sd_card_storage
+    sd_card_writer
     system_boot
     time_tick)
 

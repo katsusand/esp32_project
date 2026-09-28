@@ -40,6 +40,8 @@ if (fp != NULL) {
 
 `sd_card_storage_is_mounted()` で mount 状態を確認できます。
 
+ログのように継続して書くデータは、直接 `fopen()` せず [SD Card Writer](sd_card_writer.md) の stream を使ってください。書き込みを1つの task にまとめ、呼び出し元が SD を待たないようにしています。
+
 ## Notes
 
 - FAT format を前提とし、mount 失敗時の自動 format は行いません
