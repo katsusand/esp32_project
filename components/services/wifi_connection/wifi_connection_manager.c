@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/portmacro.h"
@@ -243,6 +244,45 @@ static void wifi_connection_set_setup_required(bool explicit_request)
 static void wifi_connection_log_stack_usage(void)
 {
     APP_STACK_MONITOR_CHECK(TAG, "wifi_connection", CONFIG_WIFI_CONNECTION_STACK_LOG_INTERVAL_MS);
+}
+
+static const char *wifi_connection_failure_reason_text(esp32_wifi_sta_failure_reason_t reason)
+{
+    switch (reason) {
+    case ESP32_WIFI_STA_FAILURE_NO_SAVED_PROFILE:
+        return "no saved profile";
+    case ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE:
+        return "AP not found";
+    case ESP32_WIFI_STA_FAILURE_AUTH:
+        return "auth failed";
+    case ESP32_WIFI_STA_FAILURE_TIMEOUT:
+        return "timeout";
+    case ESP32_WIFI_STA_FAILURE_CONNECT:
+        return "connect failed";
+    case ESP32_WIFI_STA_FAILURE_NONE:
+    default:
+        return "unknown";
+    }
+}
+
+/*
+ * One error log line per failed connection sequence, never per attempt, with
+ * the reason ("auth failed" usually means a wrong password). No SSID: it can
+ * tell where the device is installed.
+ */
+static void wifi_connection_record_failure(const char *what,
+                                           esp_err_t err,
+                                           esp32_wifi_sta_failure_reason_t reason)
+{
+    char message[96];
+
+    snprintf(message,
+             sizeof(message),
+             "%s: %s (%s)",
+             what,
+             esp_err_to_name(err),
+             wifi_connection_failure_reason_text(reason));
+    (void)error_log_store_append_message(TAG, message);
 }
 
 /* The main loop runs an attempt with the saved profiles next. */
@@ -495,7 +535,7 @@ static void wifi_connection_run_auto_connect(void)
     wifi_connection_set_connection_result(esp32_wifi_sta_has_configured_ssid(), false);
     wifi_connection_set_state(WIFI_CONNECTION_STATE_FAILED);
     ESP_LOGW(TAG, "Wi-Fi connection connect failed: %s reason=%d", esp_err_to_name(err), (int)failure_reason);
-    (void)error_log_store_append_esp_err(TAG, "Wi-Fi connection connect failed", err);
+    wifi_connection_record_failure("Wi-Fi connection connect failed", err, failure_reason);
 }
 
 static void wifi_connection_handle_begin_setup(const wifi_connection_cmd_t *cmd)
@@ -545,6 +585,14 @@ static void wifi_connection_handle_setup_connect(const wifi_connection_cmd_t *cm
                                                    cmd->arg.connect.authmode,
                                                    cmd->arg.connect.wait_ticks,
                                                    &failure_reason);
+        /* An interrupted test is not a failed one: another request took the STA. */
+        if (err != ESP_OK && !wifi_connection_manager_aborted()) {
+            ESP_LOGW(TAG,
+                     "Wi-Fi setup connection test failed: %s reason=%d",
+                     esp_err_to_name(err),
+                     (int)failure_reason);
+            wifi_connection_record_failure("Wi-Fi setup connection test failed", err, failure_reason);
+        }
     }
     if (cmd->arg.connect.failure_reason != NULL) {
         *cmd->arg.connect.failure_reason = failure_reason;

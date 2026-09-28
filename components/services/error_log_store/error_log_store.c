@@ -111,6 +111,13 @@ static esp_err_t error_log_store_pick_path(char *path, size_t path_size, void *c
     return ESP_OK;
 }
 
+/* SD writer trouble (dropped records, failed streams) goes into this log. */
+static void error_log_store_on_sd_report(const char *line, void *ctx)
+{
+    (void)ctx;
+    (void)error_log_store_append_message("sd_card_writer", line);
+}
+
 esp_err_t error_log_store_start(void)
 {
     if (s_stream != NULL) {
@@ -123,10 +130,13 @@ esp_err_t error_log_store_start(void)
         .buffer_size = ERROR_LOG_BUFFER_SIZE,
         .flush_interval_ms = 0,
         .max_file_size = ERROR_LOG_MAX_FILE_SIZE,
+        /* It carries the reports, so it must not report about itself. */
+        .silent = true,
     };
     sd_card_writer_stream_t *stream = NULL;
     ESP_RETURN_ON_ERROR(sd_card_writer_open_stream(&config, &stream), ERROR_LOG_TAG, "error log stream failed");
     s_stream = stream;
+    sd_card_writer_set_report_fn(error_log_store_on_sd_report, NULL);
     return ESP_OK;
 }
 

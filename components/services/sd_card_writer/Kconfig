@@ -44,6 +44,18 @@ menu "SD Card Writer"
             English: the writer also wakes this often to run interval syncs of
             streams that went quiet.
 
+    config SD_CARD_WRITER_DROP_REPORT_INTERVAL_MS
+        int "Drop report interval (ms)"
+        default 10000
+        range 1000 600000
+        help
+            バッファ不足で捨てたレコードを、ストリームごとにこの間隔で最大1行に
+            まとめて報告します（報告先はエラーログ）。捨てるのは SD が遅れている
+            ときなので、1件ずつ書いてさらに遅らせることはしません。
+            English: records dropped for lack of room are summed into at most
+            one report line per stream per interval (the error log receives
+            them), so reporting never adds card writes while the card is behind.
+
     config SD_CARD_WRITER_BENCHMARK
         bool "Run a write throughput benchmark at start"
         default n

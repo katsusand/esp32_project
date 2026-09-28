@@ -17,6 +17,8 @@ English supplement: logging never blocks the caller on the card. The line is que
 
 `error_log_store_start()` は SD の mount と `sd_card_writer_start()` の後に一度呼びます。この製品では composition が呼びます。それより前の行と、SD が無いときの行は捨てます（呼び出し元の serial log には残ります）。
 
+`error_log_store_start()` は `sd_card_writer` の報告先にもなります。ほかのストリームの取りこぼし（まとめて最大10秒に1行）とストリームの失敗が、tag `sd_card_writer` の行として記録されます（[SD Card Writer](sd_card_writer.md#reports)）。エラーログ自身のストリームは報告の対象外です。
+
 `error_log_store_write_error_log(line)` は raw 1 行を current error log file へ追記します。
 
 `append_*` API は formatted line を組み立てて同じ file へ追記します。起動後の最初の行を書くときに `ERR_0000.LOG` のような未使用 filename を採番して新規作成し、その起動中は同じ file へ追記します。エラーが無かった起動では file を作りません。
@@ -24,7 +26,7 @@ English supplement: logging never blocks the caller on the card. The line is que
 ## Format
 
 ```text
-[12345 ms] wifi_connection: Wi-Fi connection connect failed: ESP_FAIL
+[12345 ms] wifi_connection: Wi-Fi setup connection test failed: ESP_FAIL (auth failed)
 ```
 
 - 時刻は boot からの経過ミリ秒

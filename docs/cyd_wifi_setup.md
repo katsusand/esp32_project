@@ -85,6 +85,10 @@ password 入力画面は汎用frameworkコンポーネント `cyd_text_input` �
 
 接続失敗時は同じSTA状態で `esp_wifi_connect()` を即時反復せず、STA停止、設定再適用、待機、STA開始を1回のfresh retryとして実行します。最大再試行回数は `CONFIG_ESP32_WIFI_STA_MAX_RETRY`、試行間隔は `CONFIG_ESP32_WIFI_STA_RETRY_DELAY_MS` です。この経路はpassword保存時と保存済みSSIDへの通常接続で共通です。
 
+ただし password 保存時の接続テストは、認証失敗（たいていパスワード違い）が `CONFIG_WIFI_CONNECTION_SETUP_AUTH_FAILURE_LIMIT`（既定 2）回に達した時点で打ち切ります。1回の試行は handshake のタイムアウトで約4秒かかるため、以前はパスワードを間違えると6回分、約25秒待ってから失敗画面が出ていました。保存済み profile での自動接続は、弱い電波での handshake タイムアウトも同じ理由に分類されるため、打ち切らずに全回数試します。
+
+English supplement: the setup connection test gives up after a few authentication failures because a wrong password never recovers. Automatic connection with saved profiles keeps every attempt, since a weak signal can produce the same failure reason.
+
 English supplement: A retry is a fresh stop/reconfigure/start cycle run by the wifi_connection manager task. The disconnect event handler never reconnects on its own.
 
 English supplement: SAVE is gated by a live connection test. Failed credentials are not persisted.

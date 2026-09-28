@@ -55,6 +55,10 @@ typedef struct {
     /* With path_fn: start a new file before one would grow past this. 0 never
        rotates. A record is never split, so a file can exceed it by one record. */
     uint32_t max_file_size;
+    /* Leaves this stream out of trouble reports (sd_card_writer_set_report_fn).
+       Set it on the stream that carries the reports, so it never reports
+       about itself. */
+    bool silent;
 } sd_card_writer_stream_config_t;
 
 typedef struct {
@@ -68,9 +72,19 @@ typedef struct {
     bool failed;
 } sd_card_writer_stats_t;
 
+/*
+ * Receives one line about a stream in trouble: records dropped for lack of
+ * room (at most one line per stream every
+ * CONFIG_SD_CARD_WRITER_DROP_REPORT_INTERVAL_MS, summing the drops in between),
+ * or the failure that stopped a stream. Runs on the writer task, so it must
+ * not block. error_log_store_start() points it at the error log.
+ */
+typedef void (*sd_card_writer_report_fn_t)(const char *line, void *ctx);
+
 /* Starts the writer task. The card must be mounted (sd_card_storage). */
 esp_err_t sd_card_writer_start(void);
 bool sd_card_writer_is_running(void);
+void sd_card_writer_set_report_fn(sd_card_writer_report_fn_t fn, void *ctx);
 
 /*
  * Registers a stream. Its buffer is allocated here; the file itself is opened
