@@ -106,6 +106,22 @@ English supplement: data written since the last sync can be lost on power failur
 
 `path_fn` は writer task 上で呼ばれ、まだ存在しない file の名前を返します。既存の file を返すと、上書きを避けるために open が失敗します。
 
+## Reports
+
+取りこぼしとストリームの失敗は、`sd_card_writer_set_report_fn()` で登録した関数へ1行ずつ報告します。この製品では `error_log_store_start()` が自分を登録するので、SD のエラーログに残ります。
+
+```text
+[45120 ms] sd_card_writer: bench: dropped 20 records (20480 bytes); buffer peaked at 32768 of 32768 bytes
+```
+
+- **取りこぼし:** 取りこぼしは SD が止まっている間にまとめて起きるので、1件ずつではなく、ストリームごとに `CONFIG_SD_CARD_WRITER_DROP_REPORT_INTERVAL_MS`（既定10秒）に最大1行でまとめます。ストリームを閉じるときは、残りをすぐ報告します。
+- **失敗:** ストリームが止まったときに1行報告します。
+- **対象外にする:** `silent` を指定したストリームは報告しません。報告を運ぶストリーム（エラーログ）が、自分について報告し続けないようにするためです。
+
+`sd_card_writer` は報告先の関数を受け取るだけで、`error_log_store` には依存しません。
+
+English supplement: trouble is reported as lines through a callback, summed per stream per interval so reporting never adds card writes while the card is behind. The stream that carries the reports is marked silent.
+
 ## Failures
 
 open、write、sync のどれかが失敗すると、その stream は failed になり、以後のデータは捨てます（`sd_card_writer_write()` は `ESP_ERR_INVALID_STATE`）。カードの抜き差しを検出する手段がないので、再試行はしません。失敗はログに1回だけ出します。

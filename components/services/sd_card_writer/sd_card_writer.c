@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -33,6 +34,9 @@
 #ifndef CONFIG_SD_CARD_WRITER_TICK_MS
 #define CONFIG_SD_CARD_WRITER_TICK_MS 100
 #endif
+#ifndef CONFIG_SD_CARD_WRITER_DROP_REPORT_INTERVAL_MS
+#define CONFIG_SD_CARD_WRITER_DROP_REPORT_INTERVAL_MS 10000
+#endif
 
 #define TAG "sd_card_writer"
 /* SD cards address 512-byte sectors, whatever FATFS is configured for. */
@@ -43,6 +47,7 @@
 #define SD_CARD_WRITER_ROTATION_SLOTS 4U
 #define SD_CARD_WRITER_CMD_QUEUE_LENGTH 8
 #define SD_CARD_WRITER_STACK_LOG_INTERVAL_MS 30000
+#define SD_CARD_WRITER_REPORT_LINE_MAX 160
 
 _Static_assert(CONFIG_SD_CARD_WRITER_CHUNK_SIZE % SD_CARD_WRITER_SECTOR_SIZE == 0,
                "SD_CARD_WRITER_CHUNK_SIZE must be whole sectors");
@@ -57,6 +62,7 @@ struct sd_card_writer_stream {
     size_t buffer_size;
     uint32_t flush_interval_ms;
     uint32_t max_file_size;
+    bool silent;
     StreamBufferHandle_t buffer;
     /* Serializes producers, so the stream buffer sees one writer at a time. */
     SemaphoreHandle_t producer_mutex;
@@ -82,6 +88,11 @@ struct sd_card_writer_stream {
     uint64_t file_pos;
     bool dirty;
     TickType_t last_sync_tick;
+    /* Drops already reported, and when the last drop report went out. */
+    uint32_t reported_records;
+    uint64_t reported_bytes;
+    TickType_t last_drop_report_tick;
+    bool drop_reported;
 };
 
 typedef enum {
@@ -109,6 +120,8 @@ static QueueHandle_t s_cmd_queue;
 static uint8_t *s_chunk;
 static sd_card_writer_stream_t *s_streams[CONFIG_SD_CARD_WRITER_MAX_STREAMS];
 static size_t s_stream_count;
+static volatile sd_card_writer_report_fn_t s_report_fn;
+static void *volatile s_report_ctx;
 
 static bool sd_card_writer_on_writer_task(void)
 {
@@ -161,6 +174,66 @@ static void sd_card_writer_pop_rotation(sd_card_writer_stream_t *stream)
     portEXIT_CRITICAL(&stream->lock);
 }
 
+/* Hands one line about `stream` to the report function. Writer task only. */
+static void sd_card_writer_report(const sd_card_writer_stream_t *stream, const char *format, ...)
+{
+    sd_card_writer_report_fn_t fn = s_report_fn;
+    char line[SD_CARD_WRITER_REPORT_LINE_MAX];
+    va_list args;
+
+    if (fn == NULL || stream->silent) {
+        return;
+    }
+    va_start(args, format);
+    (void)vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    fn(line, s_report_ctx);
+}
+
+/*
+ * Reports records dropped for lack of room since the last report.
+ *
+ * English contract: drops come in bursts while the card stalls, so they are
+ * summed into at most one line per interval per stream; writing a line per
+ * record would add card writes exactly when the card is behind. `force`
+ * reports right away, for a stream about to close. A failed stream reports its
+ * failure instead and drops everything after it.
+ */
+static void sd_card_writer_report_drops(sd_card_writer_stream_t *stream, bool force)
+{
+    if (stream->silent || stream->failed) {
+        return;
+    }
+
+    portENTER_CRITICAL(&stream->lock);
+    uint32_t records = stream->stats.records_dropped;
+    uint64_t bytes = stream->stats.bytes_dropped;
+    size_t high_water = stream->stats.buffer_high_water;
+    portEXIT_CRITICAL(&stream->lock);
+
+    if (records == stream->reported_records) {
+        return;
+    }
+    TickType_t now = xTaskGetTickCount();
+    if (!force &&
+        stream->drop_reported &&
+        now - stream->last_drop_report_tick < pdMS_TO_TICKS(CONFIG_SD_CARD_WRITER_DROP_REPORT_INTERVAL_MS)) {
+        return;
+    }
+
+    sd_card_writer_report(stream,
+                          "%s: dropped %u records (%u bytes); buffer peaked at %u of %u bytes",
+                          stream->name,
+                          (unsigned)(records - stream->reported_records),
+                          (unsigned)(bytes - stream->reported_bytes),
+                          (unsigned)high_water,
+                          (unsigned)stream->buffer_size);
+    stream->reported_records = records;
+    stream->reported_bytes = bytes;
+    stream->last_drop_report_tick = now;
+    stream->drop_reported = true;
+}
+
 /* Drops whatever is buffered: used once a stream can no longer write. */
 static void sd_card_writer_discard(sd_card_writer_stream_t *stream)
 {
@@ -185,6 +258,7 @@ static void sd_card_writer_fail(sd_card_writer_stream_t *stream, const char *wha
 {
     if (!stream->failed) {
         ESP_LOGE(TAG, "%s: %s failed (errno %d); dropping its data from now on", stream->name, what, err_no);
+        sd_card_writer_report(stream, "%s: %s failed (errno %d); dropping its data from now on", stream->name, what, err_no);
     }
     stream->failed = true;
     portENTER_CRITICAL(&stream->lock);
@@ -402,6 +476,7 @@ static void sd_card_writer_service(sd_card_writer_stream_t *stream, bool force_s
         }
     }
     sd_card_writer_release_space(stream);
+    sd_card_writer_report_drops(stream, false);
 }
 
 static void sd_card_writer_complete(const sd_card_writer_cmd_t *cmd, esp_err_t result)
@@ -433,6 +508,7 @@ static void sd_card_writer_handle_cmd(const sd_card_writer_cmd_t *cmd)
         return;
     case SD_CARD_WRITER_CMD_CLOSE:
         sd_card_writer_service(stream, true);
+        sd_card_writer_report_drops(stream, true);
         sd_card_writer_close_file(stream);
         for (size_t i = 0; i < s_stream_count; ++i) {
             if (s_streams[i] == stream) {
@@ -555,6 +631,12 @@ bool sd_card_writer_is_running(void)
     return s_writer_task != NULL;
 }
 
+void sd_card_writer_set_report_fn(sd_card_writer_report_fn_t fn, void *ctx)
+{
+    s_report_ctx = ctx;
+    s_report_fn = fn;
+}
+
 esp_err_t sd_card_writer_open_stream(const sd_card_writer_stream_config_t *config,
                                      sd_card_writer_stream_t **out_stream)
 {
@@ -593,6 +675,7 @@ esp_err_t sd_card_writer_open_stream(const sd_card_writer_stream_config_t *confi
     stream->buffer_size = config->buffer_size;
     stream->flush_interval_ms = config->flush_interval_ms;
     stream->max_file_size = config->max_file_size;
+    stream->silent = config->silent;
     portMUX_INITIALIZE(&stream->lock);
     stream->fd = -1;
     stream->buffer = xStreamBufferCreate(config->buffer_size, 1);
