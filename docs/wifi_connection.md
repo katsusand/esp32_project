@@ -85,7 +85,11 @@ English supplement: one error log line per failed connection sequence (automatic
 
 ## Setup
 
-setup UI は `wifi_connection_begin_setup()` で通常の接続処理を止めて `SETUP_RUNNING` にし、完了時に `wifi_connection_complete_setup()` を呼びます。接続テストが成功した後なら `CONNECTED`、キャンセルなら STA を止めて `OFF` です。
+setup UI は `wifi_connection_begin_setup()` で通常の接続処理を止めて `SETUP_RUNNING` にし、完了時に `wifi_connection_complete_setup()` を呼びます。接続テストが成功した後なら `CONNECTED` です。キャンセルの場合、active user がいなければ STA を止めて `OFF`、いれば保存済み profile で接続し直します（`CONNECTING`）。
+
+setup 中の `wifi_connection_wait_connected()` は `ESP_ERR_NOT_FINISHED` を返します。setup が STA を使っているための一時停止で、失敗ではありません。setup が終わった後、user が残っていれば接続し直すので、結果は「接続できた」か「理由付きの失敗」のどちらかに必ず決まります。保存済み profile が無ければすぐに `no saved profile`、どれも圏外なら scan の再試行の後に `AP not found` で失敗し、エラーログに記録されます。
+
+English contract: while setup runs, wait_connected returns ESP_ERR_NOT_FINISHED (paused, not failed). When setup is cancelled and users remain, the manager reconnects with the saved profiles, so a paused user always ends up connected or failed with a logged reason.
 
 `wifi_connection_begin_setup()` は、接続試行が途中ならそれを中断させます。試行は次のステップ（接続待ち、再試行の待ち時間、scan の直後）で manager の queue に setup の要求を見つけて抜けるので、長くても scan 1回分（数秒）で setup に入れます。以前のように、別 task から試行の終了を最大 10 秒待つ処理はありません。
 

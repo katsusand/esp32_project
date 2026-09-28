@@ -30,6 +30,11 @@ typedef struct {
 } radio_manager_lease_t;
 
 esp_err_t radio_manager_start(void);
+/*
+ * ESP_OK with a lease once the capability is ready. ESP_ERR_NOT_FINISHED when
+ * Wi-Fi setup has paused the connection: not a failure, try again after
+ * setup. Other errors are real failures (no connection, timeout).
+ */
 esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
                                 radio_manager_lease_t *lease,
                                 TickType_t wait_ticks);

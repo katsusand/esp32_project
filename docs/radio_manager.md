@@ -25,6 +25,10 @@ English supplement: Think of `radio_manager` as a small future-oriented boundary
 
 radio準備に失敗した要求は要求元へ即時reject通知します。要求元をtimeoutまで待たせないことで、setup完了後の新しい通信要求と古い失敗要求が重なるのを防ぎます。
 
+reject には理由のエラーコードを付け、`radio_manager_acquire()` はそれをそのまま返します。Wi-Fi setup が STA を使っている間は `ESP_ERR_NOT_FINISHED`（一時停止）です。これは失敗ではないので、要求元はエラーとして記録せず、少し待ってから acquire し直してください。setup が終わると、Wi-Fi は接続するか、理由付きの失敗（`ESP_FAIL` など）になります。
+
+English contract: `radio_manager_acquire()` returns the reason a request was rejected. `ESP_ERR_NOT_FINISHED` means Wi-Fi setup has paused the connection; callers should retry later and must not report it as a failure.
+
 English supplement: Preparation failure completes the pending acquire immediately with rejection; it is not left waiting for its caller-side timeout.
 
 grant / reject の応答は client ごとの応答 queue で返し、呼び出し元 task の task notification は使いません。以前は task notification で返していたため、`time_sync` が自分の task を起こす `xTaskNotifyGive()` が acquire 中に届くと reject と誤認し、誰も release しない lease が `max_hold_ticks` まで残っていました。応答には request id が付いており、timeout で諦めた要求への遅れた応答は読み捨てます。

@@ -55,7 +55,7 @@ typedef struct {
 
 typedef struct {
     uint32_t request_id;
-    bool granted;
+    esp_err_t result; /* ESP_OK when granted */
 } radio_manager_response_t;
 
 typedef enum {
@@ -213,11 +213,11 @@ static QueueHandle_t radio_manager_response_queue(radio_manager_client_t client)
     return s_response_queues[client];
 }
 
-static void radio_manager_respond(const radio_manager_pending_request_t *pending, bool granted)
+static void radio_manager_respond(const radio_manager_pending_request_t *pending, esp_err_t result)
 {
     radio_manager_response_t response = {
         .request_id = pending->request_id,
-        .granted = granted,
+        .result = result,
     };
     QueueHandle_t queue = radio_manager_response_queue(pending->request.client);
 
@@ -245,11 +245,14 @@ static esp_err_t radio_manager_prepare_internet(bool *wifi_acquired)
         }
         if (state == WIFI_CONNECTION_STATE_FAILED ||
             state == WIFI_CONNECTION_STATE_SETUP_REQUIRED ||
-            state == WIFI_CONNECTION_STATE_SETUP_RUNNING ||
             state == WIFI_CONNECTION_STATE_STOPPED) {
             return ESP_FAIL;
         }
-        if (wifi_connection_wait_connected(pdMS_TO_TICKS(RADIO_MANAGER_WIFI_WAIT_MS)) == ESP_ERR_INVALID_STATE) {
+        esp_err_t err = wifi_connection_wait_connected(pdMS_TO_TICKS(RADIO_MANAGER_WIFI_WAIT_MS));
+        if (err == ESP_ERR_NOT_FINISHED) {
+            return err; /* paused for Wi-Fi setup; the client retries later */
+        }
+        if (err == ESP_ERR_INVALID_STATE) {
             vTaskDelay(pdMS_TO_TICKS(RADIO_MANAGER_WIFI_WAIT_MS));
         }
     }
@@ -285,16 +288,16 @@ static void radio_manager_grant_owner(radio_manager_owner_t *owner,
     owner->granted_at = xTaskGetTickCount();
     owner->active = true;
 
-    radio_manager_respond(pending, true);
+    radio_manager_respond(pending, ESP_OK);
 }
 
-static void radio_manager_reject_request(const radio_manager_pending_request_t *pending)
+static void radio_manager_reject_request(const radio_manager_pending_request_t *pending, esp_err_t reason)
 {
     if (pending == NULL) {
         return;
     }
 
-    radio_manager_respond(pending, false);
+    radio_manager_respond(pending, reason);
 }
 
 static bool radio_manager_control_matches_owner(const radio_manager_owner_t *owner,
@@ -374,13 +377,17 @@ static void radio_manager_task(void *arg)
 
         esp_err_t err = radio_manager_prepare_for_request(&pending, &wifi_acquired);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG,
-                     "radio request prepare failed: client=%d id=%u err=%s",
-                     (int)pending.request.client,
-                     (unsigned)pending.request_id,
-                     esp_err_to_name(err));
+            /* ESP_LOG_LEVEL does not parenthesize its level argument. */
+            const esp_log_level_t level = err == ESP_ERR_NOT_FINISHED ? ESP_LOG_INFO : ESP_LOG_WARN;
+            ESP_LOG_LEVEL(level,
+                          TAG,
+                          "radio request %s: client=%d id=%u err=%s",
+                          err == ESP_ERR_NOT_FINISHED ? "paused for Wi-Fi setup" : "prepare failed",
+                          (int)pending.request.client,
+                          (unsigned)pending.request_id,
+                          esp_err_to_name(err));
             if (!radio_manager_request_expired(&pending)) {
-                radio_manager_reject_request(&pending);
+                radio_manager_reject_request(&pending, err);
             }
             radio_manager_release_wifi_if_idle(&wifi_acquired);
             continue;
@@ -512,8 +519,8 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
         /* Late reply to a request this client already timed out on. */
     }
 
-    if (!response.granted) {
-        return ESP_FAIL;
+    if (response.result != ESP_OK) {
+        return response.result;
     }
 
     lease->client = request->client;
