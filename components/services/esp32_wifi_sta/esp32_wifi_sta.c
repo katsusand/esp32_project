@@ -2,12 +2,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "error_log_store.h"
 #include "sdkconfig.h"
 #include "esp32_wifi_sta.h"
 #include "wifi_profile_store.h"
@@ -18,10 +18,6 @@
 
 #ifndef CONFIG_ESP32_WIFI_STA_PASSWORD
 #define CONFIG_ESP32_WIFI_STA_PASSWORD ""
-#endif
-
-#ifndef CONFIG_ESP32_WIFI_STA_MAX_RETRY
-#define CONFIG_ESP32_WIFI_STA_MAX_RETRY 5
 #endif
 
 #ifndef CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE
@@ -60,7 +56,6 @@
 
 #define ESP32_WIFI_STA_CONNECTED_BIT BIT0
 #define ESP32_WIFI_STA_FAIL_BIT      BIT1
-#define ESP32_WIFI_STA_CANCEL_BIT    BIT2
 
 static const char *TAG = "esp32_wifi_sta";
 
@@ -68,9 +63,11 @@ typedef struct {
     bool initialized;
     bool started;
     bool configured;
-    bool connect_on_start;
+    /* True from esp_wifi_connect() until that attempt or link ends. A
+       disconnect while false is one we caused (stop, scan) and is not
+       reported. Written by the owner task, read by the event task. */
+    volatile bool connect_requested;
     bool has_ip;
-    uint8_t retry_count;
     size_t scan_record_count;
     esp32_wifi_sta_state_t state;
     esp32_wifi_sta_failure_reason_t last_failure_reason;
@@ -85,6 +82,9 @@ typedef struct {
     esp_netif_t *netif;
     EventGroupHandle_t event_group;
     SemaphoreHandle_t mutex;
+    TaskHandle_t owner_task;
+    esp32_wifi_sta_event_callback_t event_callback;
+    void *event_callback_ctx;
 } esp32_wifi_sta_ctx_t;
 
 static esp32_wifi_sta_ctx_t s_wifi_sta;
@@ -139,11 +139,29 @@ static esp32_wifi_sta_config_t esp32_wifi_sta_default_config(void)
     return (esp32_wifi_sta_config_t) {
         .ssid = ssid,
         .password = password,
-        .max_retry = CONFIG_ESP32_WIFI_STA_MAX_RETRY,
         .authmode_threshold = ESP32_WIFI_STA_AUTH_MODE_THRESHOLD,
         .sae_pwe_h2e = ESP32_WIFI_STA_SAE_MODE,
         .sae_h2e_identifier = CONFIG_ESP32_WIFI_STA_SAE_H2E_IDENTIFIER,
     };
+}
+
+/* See the ownership contract in esp32_wifi_sta.h. */
+static esp_err_t esp32_wifi_sta_claim_owner(void)
+{
+    TaskHandle_t current = xTaskGetCurrentTaskHandle();
+
+    if (s_wifi_sta.owner_task == NULL) {
+        s_wifi_sta.owner_task = current;
+        return ESP_OK;
+    }
+    if (s_wifi_sta.owner_task != current) {
+        ESP_LOGE(TAG,
+                 "STA operated from task \"%s\" but owned by \"%s\"",
+                 pcTaskGetName(current),
+                 pcTaskGetName(s_wifi_sta.owner_task));
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_OK;
 }
 
 static void esp32_wifi_sta_set_state(esp32_wifi_sta_state_t state)
@@ -192,7 +210,6 @@ static esp_err_t esp32_wifi_sta_ensure_driver(void)
     ESP_RETURN_ON_ERROR(esp32_wifi_sta_register_handlers(), TAG, "event handler register failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set Wi-Fi mode failed");
 
-    s_wifi_sta.retry_count = 0;
     s_wifi_sta.has_ip = false;
     s_wifi_sta.state = ESP32_WIFI_STA_STATE_STOPPED;
     s_wifi_sta.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
@@ -280,66 +297,54 @@ static void esp32_wifi_sta_store_config(const esp32_wifi_sta_config_t *config)
     xSemaphoreGive(s_wifi_sta.mutex);
 }
 
-/*
- * esp_wifi_connect() here runs on the event task and can race a stop issued by
- * another task, which makes it return ESP_ERR_WIFI_NOT_STARTED. As an
- * ESP_ERROR_CHECK that race rebooted the device; now the attempt just ends as
- * failed, which also releases esp32_wifi_sta_wait_connected() promptly.
- */
-static void esp32_wifi_sta_connect_from_event(void)
+static void esp32_wifi_sta_report(esp32_wifi_sta_event_type_t type, esp32_wifi_sta_failure_reason_t reason)
 {
-    esp_err_t err = esp_wifi_connect();
-    if (err == ESP_OK) {
-        return;
-    }
+    esp32_wifi_sta_event_callback_t callback = s_wifi_sta.event_callback;
 
-    ESP_LOGW(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(err));
-    esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_FAILED);
-    s_wifi_sta.last_failure_reason = ESP32_WIFI_STA_FAILURE_CONNECT;
-    xEventGroupSetBits(s_wifi_sta.event_group, ESP32_WIFI_STA_FAIL_BIT);
+    if (callback != NULL) {
+        const esp32_wifi_sta_event_t event = {
+            .type = type,
+            .failure_reason = reason,
+        };
+        callback(&event, s_wifi_sta.event_callback_ctx);
+    }
 }
 
+/*
+ * Records the disconnect and reports it; never reconnects.
+ *
+ * English contract: this runs on the ESP-IDF event task. It used to call
+ * esp_wifi_connect() on WIFI_EVENT_STA_START and for driver-level retries,
+ * which made the event task a third party operating the STA and let it race a
+ * stop from another task. Connecting is now done only by the owner task in
+ * esp32_wifi_sta_start(), and whether to try again is the owner's decision.
+ */
 static void esp32_wifi_sta_on_wifi_event(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     (void)arg;
     (void)event_base;
-    (void)event_data;
 
-    if (event_id == WIFI_EVENT_STA_START && s_wifi_sta.connect_on_start) {
-        esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_CONNECTING);
-        esp32_wifi_sta_connect_from_event();
+    if (event_id != WIFI_EVENT_STA_DISCONNECTED) {
         return;
     }
 
-    if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        wifi_event_sta_disconnected_t *event = (wifi_event_sta_disconnected_t *)event_data;
-        esp32_wifi_sta_clear_ip();
-        s_wifi_sta.last_disconnect_reason = event != NULL ? event->reason : WIFI_REASON_UNSPECIFIED;
+    wifi_event_sta_disconnected_t *event = (wifi_event_sta_disconnected_t *)event_data;
+    esp32_wifi_sta_clear_ip();
+    s_wifi_sta.last_disconnect_reason = event != NULL ? event->reason : WIFI_REASON_UNSPECIFIED;
 
-        if (!s_wifi_sta.connect_on_start) {
-            return;
-        }
-
-        if (s_wifi_sta.retry_count < s_wifi_sta.config.max_retry) {
-            s_wifi_sta.retry_count++;
-            esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_CONNECTING);
-            ESP_LOGW(TAG,
-                     "Wi-Fi disconnected; retrying %u/%u",
-                     (unsigned)s_wifi_sta.retry_count,
-                     (unsigned)s_wifi_sta.config.max_retry);
-            esp32_wifi_sta_connect_from_event();
-            return;
-        }
-
-        esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_FAILED);
-        s_wifi_sta.last_failure_reason = esp32_wifi_sta_map_disconnect_reason(s_wifi_sta.last_disconnect_reason);
-        xEventGroupSetBits(s_wifi_sta.event_group, ESP32_WIFI_STA_FAIL_BIT);
-        ESP_LOGE(TAG,
-                 "Wi-Fi connect failed: reason=%d mapped=%d",
-                 (int)s_wifi_sta.last_disconnect_reason,
-                 (int)s_wifi_sta.last_failure_reason);
-        (void)error_log_store_append_message(TAG, "Wi-Fi connect failed after retry limit");
+    if (!s_wifi_sta.connect_requested) {
+        return;
     }
+    s_wifi_sta.connect_requested = false;
+
+    s_wifi_sta.last_failure_reason = esp32_wifi_sta_map_disconnect_reason(s_wifi_sta.last_disconnect_reason);
+    esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_FAILED);
+    xEventGroupSetBits(s_wifi_sta.event_group, ESP32_WIFI_STA_FAIL_BIT);
+    ESP_LOGW(TAG,
+             "Wi-Fi disconnected: reason=%d mapped=%d",
+             (int)s_wifi_sta.last_disconnect_reason,
+             (int)s_wifi_sta.last_failure_reason);
+    esp32_wifi_sta_report(ESP32_WIFI_STA_EVENT_DISCONNECTED, s_wifi_sta.last_failure_reason);
 }
 
 static void esp32_wifi_sta_on_ip_event(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
@@ -350,11 +355,14 @@ static void esp32_wifi_sta_on_ip_event(void *arg, esp_event_base_t event_base, i
     if (event_id != IP_EVENT_STA_GOT_IP) {
         return;
     }
+    /* An address arriving after the owner stopped that attempt is stale. */
+    if (!s_wifi_sta.connect_requested) {
+        return;
+    }
 
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
 
     if (xSemaphoreTake(s_wifi_sta.mutex, portMAX_DELAY) == pdTRUE) {
-        s_wifi_sta.retry_count = 0;
         s_wifi_sta.has_ip = true;
         s_wifi_sta.ip_info = event->ip_info;
         s_wifi_sta.state = ESP32_WIFI_STA_STATE_CONNECTED;
@@ -364,6 +372,7 @@ static void esp32_wifi_sta_on_ip_event(void *arg, esp_event_base_t event_base, i
 
     ESP_LOGI(TAG, "Wi-Fi connected: " IPSTR, IP2STR(&event->ip_info.ip));
     xEventGroupSetBits(s_wifi_sta.event_group, ESP32_WIFI_STA_CONNECTED_BIT);
+    esp32_wifi_sta_report(ESP32_WIFI_STA_EVENT_CONNECTED, ESP32_WIFI_STA_FAILURE_NONE);
 }
 
 static esp_err_t esp32_wifi_sta_copy_config(const esp32_wifi_sta_config_t *config, wifi_config_t *wifi_config)
@@ -441,10 +450,12 @@ esp_err_t esp32_wifi_sta_init_with_config(const esp32_wifi_sta_config_t *config)
     wifi_config_t wifi_config;
 
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "config is null");
+    ESP_RETURN_ON_ERROR(esp32_wifi_sta_claim_owner(), TAG, "init refused");
 
     ESP_RETURN_ON_ERROR(esp32_wifi_sta_ensure_driver(), TAG, "Wi-Fi driver init failed");
 
     if (s_wifi_sta.started) {
+        s_wifi_sta.connect_requested = false;
         esp_err_t disconnect_err = esp_wifi_disconnect();
         if (disconnect_err != ESP_OK && disconnect_err != ESP_ERR_WIFI_NOT_CONNECT) {
             ESP_LOGW(TAG, "Wi-Fi disconnect before reconfigure returned %s", esp_err_to_name(disconnect_err));
@@ -473,27 +484,36 @@ esp_err_t esp32_wifi_sta_start(void)
 {
     ESP_RETURN_ON_FALSE(s_wifi_sta.initialized, ESP_ERR_INVALID_STATE, TAG, "Wi-Fi STA not initialized");
     ESP_RETURN_ON_FALSE(s_wifi_sta.configured, ESP_ERR_INVALID_STATE, TAG, "Wi-Fi STA has no configured SSID");
+    ESP_RETURN_ON_ERROR(esp32_wifi_sta_claim_owner(), TAG, "start refused");
 
     if (s_wifi_sta.started && s_wifi_sta.state == ESP32_WIFI_STA_STATE_CONNECTED) {
         return ESP_OK;
     }
 
-    xEventGroupClearBits(s_wifi_sta.event_group,
-                         ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT | ESP32_WIFI_STA_CANCEL_BIT);
-    s_wifi_sta.retry_count = 0;
-    s_wifi_sta.connect_on_start = true;
+    xEventGroupClearBits(s_wifi_sta.event_group, ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT);
+    s_wifi_sta.last_failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
     esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_CONNECTING);
 
-    if (s_wifi_sta.started) {
-        return esp_wifi_connect();
+    if (!s_wifi_sta.started) {
+        esp_err_t err = esp_wifi_start();
+        if (err != ESP_OK) {
+            esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_STOPPED);
+            return err;
+        }
+        s_wifi_sta.started = true;
     }
 
-    esp_err_t err = esp_wifi_start();
-    if (err == ESP_OK) {
-        s_wifi_sta.started = true;
-    } else {
-        s_wifi_sta.connect_on_start = false;
-        esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_STOPPED);
+    /* Connect here, on the owner task, rather than from WIFI_EVENT_STA_START.
+       esp_wifi_start() has finished starting the station when it returns, so
+       connecting right away is valid; ESP-IDF's protocol_examples_common does
+       the same. Flag first, so a fast failure is reported as this attempt's. */
+    s_wifi_sta.connect_requested = true;
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        s_wifi_sta.connect_requested = false;
+        s_wifi_sta.last_failure_reason = ESP32_WIFI_STA_FAILURE_CONNECT;
+        esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_FAILED);
+        ESP_LOGW(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(err));
     }
     return err;
 }
@@ -504,10 +524,11 @@ esp_err_t esp32_wifi_sta_enter_scan_mode(void)
     uint16_t ap_count = 0;
     wifi_ap_record_t ap_records[CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE];
 
+    ESP_RETURN_ON_ERROR(esp32_wifi_sta_claim_owner(), TAG, "scan refused");
     ESP_RETURN_ON_ERROR(esp32_wifi_sta_ensure_driver(), TAG, "Wi-Fi driver init failed");
 
     memset(ap_records, 0, sizeof(ap_records));
-    s_wifi_sta.connect_on_start = false;
+    s_wifi_sta.connect_requested = false;
     esp32_wifi_sta_clear_ip();
     esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_SCAN_MODE);
 
@@ -585,19 +606,19 @@ bool esp32_wifi_sta_has_configured_ssid(void)
 esp_err_t esp32_wifi_sta_stop(void)
 {
     ESP_RETURN_ON_FALSE(s_wifi_sta.initialized, ESP_ERR_INVALID_STATE, TAG, "Wi-Fi STA not initialized");
+    ESP_RETURN_ON_ERROR(esp32_wifi_sta_claim_owner(), TAG, "stop refused");
 
     if (!s_wifi_sta.started) {
         return ESP_OK;
     }
 
-    s_wifi_sta.connect_on_start = false;
+    s_wifi_sta.connect_requested = false;
     esp_err_t disconnect_err = esp_wifi_disconnect();
     if (disconnect_err != ESP_OK && disconnect_err != ESP_ERR_WIFI_NOT_CONNECT) {
         ESP_LOGW(TAG, "Wi-Fi disconnect before stop returned %s", esp_err_to_name(disconnect_err));
     }
     ESP_RETURN_ON_ERROR(esp_wifi_stop(), TAG, "Wi-Fi stop failed");
     s_wifi_sta.started = false;
-    s_wifi_sta.retry_count = 0;
     esp32_wifi_sta_clear_ip();
     esp32_wifi_sta_set_state(ESP32_WIFI_STA_STATE_STOPPED);
     xEventGroupClearBits(s_wifi_sta.event_group, ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT);
@@ -611,7 +632,7 @@ esp_err_t esp32_wifi_sta_wait_connected(TickType_t wait_ticks)
     ESP_RETURN_ON_FALSE(s_wifi_sta.initialized, ESP_ERR_INVALID_STATE, TAG, "Wi-Fi STA not initialized");
 
     bits = xEventGroupWaitBits(s_wifi_sta.event_group,
-                               ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT | ESP32_WIFI_STA_CANCEL_BIT,
+                               ESP32_WIFI_STA_CONNECTED_BIT | ESP32_WIFI_STA_FAIL_BIT,
                                pdFALSE,
                                pdFALSE,
                                wait_ticks);
@@ -619,21 +640,16 @@ esp_err_t esp32_wifi_sta_wait_connected(TickType_t wait_ticks)
     if ((bits & ESP32_WIFI_STA_CONNECTED_BIT) != 0) {
         return ESP_OK;
     }
-    if ((bits & ESP32_WIFI_STA_CANCEL_BIT) != 0) {
-        xEventGroupClearBits(s_wifi_sta.event_group, ESP32_WIFI_STA_CANCEL_BIT);
-        return ESP_ERR_INVALID_STATE;
-    }
     if ((bits & ESP32_WIFI_STA_FAIL_BIT) != 0) {
         return ESP_FAIL;
     }
     return ESP_ERR_TIMEOUT;
 }
 
-void esp32_wifi_sta_cancel_wait(void)
+void esp32_wifi_sta_set_event_callback(esp32_wifi_sta_event_callback_t callback, void *ctx)
 {
-    if (s_wifi_sta.initialized && s_wifi_sta.event_group != NULL) {
-        xEventGroupSetBits(s_wifi_sta.event_group, ESP32_WIFI_STA_CANCEL_BIT);
-    }
+    s_wifi_sta.event_callback_ctx = ctx;
+    s_wifi_sta.event_callback = callback;
 }
 
 esp_err_t esp32_wifi_sta_get_status(esp32_wifi_sta_status_t *status)
@@ -643,7 +659,6 @@ esp_err_t esp32_wifi_sta_get_status(esp32_wifi_sta_status_t *status)
 
     if (xSemaphoreTake(s_wifi_sta.mutex, portMAX_DELAY) == pdTRUE) {
         status->state = s_wifi_sta.state;
-        status->retry_count = s_wifi_sta.retry_count;
         status->has_ip = s_wifi_sta.has_ip;
         status->ip_info = s_wifi_sta.ip_info;
         xSemaphoreGive(s_wifi_sta.mutex);

@@ -26,7 +26,9 @@ ESP_ERROR_CHECK(app_shell_switch_to(cyd_wifi_setup_get_app()));
 
 互換用に `cyd_wifi_setup_set_return_app()` も残しています。特殊な戻り先を明示したい場合のみ使います。
 
-設定済み credential での通常接続は `wifi_connection_connect_configured()` を使用します。`cyd_wifi_setup` は通常接続helperを公開せず、foreground UI に限定します。
+設定済み credential での通常接続は `wifi_connection` の manager task が行います。`cyd_wifi_setup` は通常接続helperを公開せず、foreground UI に限定します。
+
+この UI は STA を直接操作しません。setup の開始と終了、scan、接続テストはすべて `wifi_connection` への要求で、実際の処理は manager task 上で行われます。UI はその完了を待ちます。
 
 English supplement: Saved-profile connection selection belongs to `wifi_connection`, not to the setup UI.
 
@@ -45,7 +47,7 @@ scan mode の画面遷移は以下です。
 
 1. `wifi setup app` が scan session を開始する
 2. `Scanning...` を表示する
-3. `esp32_wifi_sta_enter_scan_mode()` で同期スキャンする
+3. `wifi_connection_setup_scan()` で manager task にスキャンを依頼し、完了を待つ
 4. `Wi-Fi SSID list` に AP を最大 `10` 件ずつページ表示する
 5. `SCAN` が押されたら手動で再スキャンする
 6. `<` / `>` が押されたらページを切り替える
@@ -54,7 +56,7 @@ scan mode の画面遷移は以下です。
 
 スキャン中は `SCAN` / `<` / `>` を無効表示にします。`<` / `>` は移動先ページが存在しない場合も無効表示になります。
 
-一覧に表示する情報は SSID、RSSI、channel です。内部では `esp32_wifi_sta_get_scan_records()` から `esp32_wifi_sta_scan_record_t` を読み出します。
+一覧に表示する情報は SSID、RSSI、channel です。`wifi_connection_setup_scan()` が `esp32_wifi_sta_scan_record_t` の配列に結果をコピーします。
 
 English supplement: The scan list is transient RAM state. Credentials are not persisted by selecting an SSID. Results stay stable until the user presses SCAN. The scan screen top-left `<<` action returns to the app captured from `enter(from_app)`.
 
@@ -83,7 +85,7 @@ password 入力画面は汎用frameworkコンポーネント `cyd_text_input` �
 
 接続失敗時は同じSTA状態で `esp_wifi_connect()` を即時反復せず、STA停止、設定再適用、待機、STA開始を1回のfresh retryとして実行します。最大再試行回数は `CONFIG_ESP32_WIFI_STA_MAX_RETRY`、試行間隔は `CONFIG_ESP32_WIFI_STA_RETRY_DELAY_MS` です。この経路はpassword保存時と保存済みSSIDへの通常接続で共通です。
 
-English supplement: A retry is a fresh stop/reconfigure/start cycle. Immediate reconnects from the disconnect event handler are disabled for these managed connection flows.
+English supplement: A retry is a fresh stop/reconfigure/start cycle run by the wifi_connection manager task. The disconnect event handler never reconnects on its own.
 
 English supplement: SAVE is gated by a live connection test. Failed credentials are not persisted.
 

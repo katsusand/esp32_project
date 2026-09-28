@@ -2,7 +2,6 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
-#include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -25,6 +24,12 @@
 #endif
 
 #define TAG "wifi_connection"
+
+/*
+ * Connection procedures. They run on the manager task only, called from
+ * wifi_connection_manager.c; see wifi_connection_internal.h for how they
+ * wait and when they must stop.
+ */
 
 typedef struct {
     wifi_profile_store_entry_t profile;
@@ -61,64 +66,53 @@ static void wifi_connection_stop_sta_if_initialized(void)
     }
 }
 
-static bool wifi_connection_should_abort(wifi_connection_abort_fn_t should_abort)
-{
-    return should_abort != NULL && should_abort();
-}
-
 static esp_err_t wifi_connection_connect_fresh(const esp32_wifi_sta_config_t *config,
                                                 TickType_t wait_ticks,
-                                                esp32_wifi_sta_failure_reason_t *failure_reason,
-                                                wifi_connection_abort_fn_t should_abort)
+                                                esp32_wifi_sta_failure_reason_t *failure_reason)
 {
-    ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "Wi-Fi config is null");
-
-    esp32_wifi_sta_config_t single_attempt_config = *config;
-    const uint32_t attempt_count = wait_ticks > 0 ? (uint32_t)config->max_retry + 1U : 1U;
+    const uint32_t attempt_count = (uint32_t)CONFIG_ESP32_WIFI_STA_MAX_RETRY + 1U;
     esp_err_t last_err = ESP_FAIL;
 
-    single_attempt_config.max_retry = 0;
-    if (failure_reason != NULL) {
-        *failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
-    }
+    *failure_reason = ESP32_WIFI_STA_FAILURE_NONE;
 
     for (uint32_t attempt = 0; attempt < attempt_count; ++attempt) {
-        /* Checked before touching the STA: once the flag is up, the STA belongs
-           to whoever raised it, so no further stop/init/start may happen here. */
-        if (wifi_connection_should_abort(should_abort)) {
+        /* Checked before touching the STA: once aborted, the STA belongs to
+           the request that is waiting. */
+        if (wifi_connection_manager_aborted()) {
             return ESP_ERR_INVALID_STATE;
         }
         wifi_connection_stop_sta_if_initialized();
-        if (attempt > 0 && CONFIG_ESP32_WIFI_STA_RETRY_DELAY_MS > 0) {
-            vTaskDelay(pdMS_TO_TICKS(CONFIG_ESP32_WIFI_STA_RETRY_DELAY_MS));
-            if (wifi_connection_should_abort(should_abort)) {
-                return ESP_ERR_INVALID_STATE;
-            }
+        /* A zero delay still drains the queue, dropping any STA event left
+           over from the previous attempt so it cannot end this one. */
+        TickType_t delay = attempt > 0 ? pdMS_TO_TICKS(CONFIG_ESP32_WIFI_STA_RETRY_DELAY_MS) : 0;
+        if (!wifi_connection_manager_delay(delay)) {
+            return ESP_ERR_INVALID_STATE;
         }
 
-        last_err = esp32_wifi_sta_init_with_config(&single_attempt_config);
+        esp32_wifi_sta_failure_reason_t reason = ESP32_WIFI_STA_FAILURE_NONE;
+        last_err = esp32_wifi_sta_init_with_config(config);
         if (last_err == ESP_OK) {
             last_err = esp32_wifi_sta_start();
         }
-        if (last_err == ESP_OK && wait_ticks > 0) {
-            last_err = esp32_wifi_sta_wait_connected(wait_ticks);
+        if (last_err == ESP_OK) {
+            last_err = wifi_connection_manager_wait_attempt(wait_ticks, &reason);
         }
         if (last_err == ESP_OK) {
             return ESP_OK;
         }
-        if (wifi_connection_should_abort(should_abort)) {
+        if (wifi_connection_manager_aborted()) {
             return ESP_ERR_INVALID_STATE;
         }
 
-        esp32_wifi_sta_failure_reason_t reason = esp32_wifi_sta_get_last_failure_reason();
+        if (reason == ESP32_WIFI_STA_FAILURE_NONE) {
+            reason = esp32_wifi_sta_get_last_failure_reason();
+        }
         if (reason == ESP32_WIFI_STA_FAILURE_NONE) {
             reason = last_err == ESP_ERR_TIMEOUT ?
                      ESP32_WIFI_STA_FAILURE_TIMEOUT :
                      ESP32_WIFI_STA_FAILURE_CONNECT;
         }
-        if (failure_reason != NULL) {
-            *failure_reason = reason;
-        }
+        *failure_reason = reason;
         ESP_LOGW(TAG,
                  "fresh connection attempt failed: attempt=%u/%u err=%s reason=%d",
                  (unsigned)(attempt + 1U),
@@ -131,28 +125,22 @@ static esp_err_t wifi_connection_connect_fresh(const esp32_wifi_sta_config_t *co
     return last_err;
 }
 
-esp_err_t wifi_connection_connect_and_save(const char *ssid,
-                                           const char *password,
-                                           wifi_auth_mode_t authmode,
-                                           TickType_t wait_ticks,
-                                           esp32_wifi_sta_failure_reason_t *failure_reason)
+esp_err_t wifi_connection_run_connect_and_save(const char *ssid,
+                                               const char *password,
+                                               wifi_auth_mode_t authmode,
+                                               TickType_t wait_ticks,
+                                               esp32_wifi_sta_failure_reason_t *failure_reason)
 {
-    ESP_RETURN_ON_FALSE(ssid != NULL && ssid[0] != '\0',
-                        ESP_ERR_INVALID_ARG,
-                        TAG,
-                        "Wi-Fi SSID is empty");
-
     esp32_wifi_sta_config_t config = {
         .ssid = ssid,
         .password = password,
-        .max_retry = CONFIG_ESP32_WIFI_STA_MAX_RETRY,
         .authmode_threshold = WIFI_AUTH_OPEN,
         .sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
         .sae_h2e_identifier = CONFIG_ESP32_WIFI_STA_SAE_H2E_IDENTIFIER,
     };
 
     wifi_connection_set_progress(WIFI_CONNECTION_PROGRESS_CONNECTING, ssid);
-    esp_err_t err = wifi_connection_connect_fresh(&config, wait_ticks, failure_reason, NULL);
+    esp_err_t err = wifi_connection_connect_fresh(&config, wait_ticks, failure_reason);
     if (err == ESP_OK) {
         err = wifi_profile_store_record_success(ssid, password, authmode);
     }
@@ -188,8 +176,7 @@ static void wifi_connection_sort_candidates(wifi_connection_candidate_t *candida
 
 static size_t wifi_connection_collect_candidates(wifi_connection_candidate_t *candidates,
                                                  size_t capacity,
-                                                 esp32_wifi_sta_failure_reason_t *failure_reason,
-                                                 wifi_connection_abort_fn_t should_abort)
+                                                 esp32_wifi_sta_failure_reason_t *failure_reason)
 {
     wifi_profile_store_entry_t profiles[WIFI_PROFILE_STORE_MAX_ENTRIES] = { 0 };
     esp32_wifi_sta_scan_record_t records[CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE] = { 0 };
@@ -205,7 +192,7 @@ static size_t wifi_connection_collect_candidates(wifi_connection_candidate_t *ca
         return 0;
     }
     /* The scan below restarts the STA, so it must not run once aborted. */
-    if (wifi_connection_should_abort(should_abort)) {
+    if (wifi_connection_manager_aborted()) {
         return 0;
     }
 
@@ -238,13 +225,11 @@ static size_t wifi_connection_collect_candidates(wifi_connection_candidate_t *ca
 
 static esp_err_t wifi_connection_connect_candidate(const wifi_connection_candidate_t *candidate,
                                                    TickType_t wait_ticks,
-                                                   esp32_wifi_sta_failure_reason_t *failure_reason,
-                                                   wifi_connection_abort_fn_t should_abort)
+                                                   esp32_wifi_sta_failure_reason_t *failure_reason)
 {
     esp32_wifi_sta_config_t config = {
         .ssid = candidate->profile.ssid,
         .password = candidate->profile.password,
-        .max_retry = CONFIG_ESP32_WIFI_STA_MAX_RETRY,
         .authmode_threshold = WIFI_AUTH_OPEN,
         .sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
         .sae_h2e_identifier = CONFIG_ESP32_WIFI_STA_SAE_H2E_IDENTIFIER,
@@ -252,7 +237,7 @@ static esp_err_t wifi_connection_connect_candidate(const wifi_connection_candida
 
     wifi_connection_set_progress(WIFI_CONNECTION_PROGRESS_CONNECTING,
                                  candidate->profile.ssid);
-    esp_err_t err = wifi_connection_connect_fresh(&config, wait_ticks, failure_reason, should_abort);
+    esp_err_t err = wifi_connection_connect_fresh(&config, wait_ticks, failure_reason);
     if (err == ESP_OK) {
         err = wifi_profile_store_record_success(candidate->profile.ssid,
                                                 candidate->profile.password,
@@ -261,21 +246,17 @@ static esp_err_t wifi_connection_connect_candidate(const wifi_connection_candida
     return err;
 }
 
-esp_err_t wifi_connection_connect_configured_abortable(TickType_t wait_ticks,
-                                                       esp32_wifi_sta_failure_reason_t *failure_reason,
-                                                       wifi_connection_abort_fn_t should_abort)
+esp_err_t wifi_connection_run_saved_profiles(TickType_t wait_ticks,
+                                             esp32_wifi_sta_failure_reason_t *failure_reason)
 {
     wifi_connection_candidate_t candidates[WIFI_PROFILE_STORE_MAX_ENTRIES] = { 0 };
     esp32_wifi_sta_failure_reason_t reason = ESP32_WIFI_STA_FAILURE_NONE;
     size_t count = wifi_connection_collect_candidates(candidates,
                                                       WIFI_PROFILE_STORE_MAX_ENTRIES,
-                                                      &reason,
-                                                      should_abort);
+                                                      &reason);
 
-    if (failure_reason != NULL) {
-        *failure_reason = reason;
-    }
-    if (wifi_connection_should_abort(should_abort)) {
+    *failure_reason = reason;
+    if (wifi_connection_manager_aborted()) {
         wifi_connection_set_progress(WIFI_CONNECTION_PROGRESS_IDLE, NULL);
         return ESP_ERR_INVALID_STATE;
     }
@@ -285,15 +266,13 @@ esp_err_t wifi_connection_connect_configured_abortable(TickType_t wait_ticks,
     }
 
     for (size_t i = 0; i < count; ++i) {
-        esp_err_t err = wifi_connection_connect_candidate(&candidates[i], wait_ticks, &reason, should_abort);
-        if (failure_reason != NULL) {
-            *failure_reason = reason;
-        }
+        esp_err_t err = wifi_connection_connect_candidate(&candidates[i], wait_ticks, &reason);
+        *failure_reason = reason;
         if (err == ESP_OK) {
             wifi_connection_set_progress(WIFI_CONNECTION_PROGRESS_IDLE, NULL);
             return ESP_OK;
         }
-        if (wifi_connection_should_abort(should_abort)) {
+        if (wifi_connection_manager_aborted()) {
             wifi_connection_set_progress(WIFI_CONNECTION_PROGRESS_IDLE, NULL);
             return ESP_ERR_INVALID_STATE;
         }
@@ -301,12 +280,6 @@ esp_err_t wifi_connection_connect_configured_abortable(TickType_t wait_ticks,
 
     wifi_connection_set_progress(WIFI_CONNECTION_PROGRESS_IDLE, NULL);
     return ESP_FAIL;
-}
-
-esp_err_t wifi_connection_connect_configured(TickType_t wait_ticks,
-                                              esp32_wifi_sta_failure_reason_t *failure_reason)
-{
-    return wifi_connection_connect_configured_abortable(wait_ticks, failure_reason, NULL);
 }
 
 wifi_connection_progress_t wifi_connection_get_progress(void)

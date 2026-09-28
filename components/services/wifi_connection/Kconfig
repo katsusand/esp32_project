@@ -9,8 +9,9 @@ menu "Wi-Fi Connection"
             Wi-Fi connection task の stack size です。
             8192 では接続直後の spare が 320 バイトまで落ちることを実機で確認したため、
             1 KB 積み増しています。
-            English: this task manages STA state and connection requests,
-            while the foreground setup UI runs on the app_shell task.
+            English: this task is the only one that operates the STA. It runs
+            the connection attempts and also the setup UI's scan and connection
+            test, which the UI requests from the app_shell task.
             Measured spare dropped to 320 bytes right after association at 8192,
             hence the extra 1 KB.
 
@@ -26,8 +27,9 @@ menu "Wi-Fi Connection"
         range 500 60000
         depends on ESP32_WIFI_STA_ENABLED
         help
-            Interval used while connected to poll the STA status and detect
-            reconnection/setup transitions.
+            Interval used while connected to poll the STA status. A dropped
+            link is normally reported by an event right away; the poll covers
+            an event lost to a full queue.
 
     config WIFI_CONNECTION_STACK_LOG_INTERVAL_MS
         int "Wi-Fi connection stack log interval (ms)"

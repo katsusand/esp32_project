@@ -51,6 +51,11 @@ menu "ESP32 Wi-Fi STA"
         default 5
         range 0 100
         depends on ESP32_WIFI_STA_ENABLED
+        help
+            wifi_connection が初回の接続試行の後に行う fresh retry の回数です。
+            esp32_wifi_sta 自身は再試行しません。
+            English: fresh stop/reconfigure/start retries made by wifi_connection
+            after the first attempt. The driver wrapper never retries on its own.
 
     config ESP32_WIFI_STA_RETRY_DELAY_MS
         int "Wi-Fi fresh retry delay (ms)"
