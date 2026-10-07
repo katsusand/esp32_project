@@ -69,6 +69,15 @@ run_case "SD card status state machine" "${BUILD_DIR}/test_sd_card_status_machin
 
 run_case "SD card status icons" "${BUILD_DIR}/test_sd_card_status_icon_art"
 
+# boot_id: a well formed UUID, and one that does not collapse when the random
+# source is weak
+BOOT_ID="${PROJECT_ROOT}/components/support/boot_id"
+"${CC}" "${CFLAGS[@]}" -I"${BOOT_ID}/include" \
+    "${BOOT_ID}/boot_id_format.c" "${SCRIPT_DIR}/test_boot_id_format.c" \
+    -o "${BUILD_DIR}/test_boot_id_format"
+
+run_case "boot id" "${BUILD_DIR}/test_boot_id_format"
+
 if [[ "${status}" -eq 0 ]]; then
     echo "all host tests passed"
 else
