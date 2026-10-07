@@ -59,6 +59,8 @@ struct sd_card_writer_stream {
     bool truncate;
     sd_card_writer_path_fn_t path_fn;
     void *path_ctx;
+    sd_card_writer_target_fn_t target_fn;
+    void *target_ctx;
     size_t buffer_size;
     uint32_t flush_interval_ms;
     uint32_t max_file_size;
@@ -299,8 +301,30 @@ static bool sd_card_writer_open_file(sd_card_writer_stream_t *stream)
     char full_path[SD_CARD_WRITER_PATH_MAX + 16];
     int flags = O_WRONLY | O_CREAT;
     bool append_existing = false;
+    sd_card_writer_target_t target;
+    bool has_target = false;
 
-    if (stream->path_fn != NULL) {
+    if (stream->target_fn != NULL) {
+        memset(&target, 0, sizeof(target));
+        esp_err_t err = stream->target_fn(&target, stream->target_ctx);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "%s: no file to open: %s", stream->name, esp_err_to_name(err));
+            sd_card_writer_fail(stream, "pick file", 0);
+            return false;
+        }
+        target.path[sizeof(target.path) - 1U] = '\0';
+        if (target.header_len > sizeof(target.header)) {
+            target.header_len = sizeof(target.header);
+        }
+        strlcpy(relative, target.path, sizeof(relative));
+        has_target = true;
+        if (target.append) {
+            append_existing = true;
+        } else {
+            /* Not told to append: never take over a file that is already there. */
+            flags |= O_EXCL;
+        }
+    } else if (stream->path_fn != NULL) {
         esp_err_t err = stream->path_fn(relative, sizeof(relative), stream->path_ctx);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "%s: no file to open: %s", stream->name, esp_err_to_name(err));
@@ -350,14 +374,39 @@ static bool sd_card_writer_open_file(sd_card_writer_stream_t *stream)
         }
     }
 
+    uint64_t file_pos = end > 0 ? (uint64_t)end : 0U;
+    bool dirty = false;
+    if (has_target && target.header_len > 0) {
+        ssize_t header_written = write(fd, target.header, target.header_len);
+        if (header_written != (ssize_t)target.header_len) {
+            int saved_errno = errno;
+            (void)close(fd);
+            sd_card_writer_fail(stream, "write header", saved_errno);
+            return false;
+        }
+        file_pos += target.header_len;
+        dirty = true;
+    }
+
     stream->fd = fd;
-    stream->file_pos = end > 0 ? (uint64_t)end : 0U;
-    stream->dirty = false;
+    stream->file_pos = file_pos;
+    stream->dirty = dirty;
     stream->last_sync_tick = xTaskGetTickCount();
     portENTER_CRITICAL(&stream->lock);
     ++stream->stats.files_opened;
+    /*
+     * The producers count the bytes they queued for a file from zero, and could
+     * not know what was in the file already or how long its header is. Add both,
+     * so the size limit means the size of the FILE. Only when no rotation is
+     * pending: then the producers' count is still for this file. With one
+     * pending it already belongs to a later file, and adding to it would be
+     * wrong; this file may then run over the limit by what was queued meanwhile.
+     */
+    if (has_target && stream->rotation_count == 0) {
+        stream->producer_file_bytes += file_pos;
+    }
     portEXIT_CRITICAL(&stream->lock);
-    ESP_LOGI(TAG, "%s: writing %s", stream->name, full_path);
+    ESP_LOGI(TAG, "%s: writing %s%s", stream->name, full_path, append_existing && end > 0 ? " (appending)" : "");
     return true;
 }
 
@@ -644,18 +693,18 @@ esp_err_t sd_card_writer_open_stream(const sd_card_writer_stream_config_t *confi
     *out_stream = NULL;
 
     bool has_path = config->path != NULL && config->path[0] != '\0';
-    ESP_RETURN_ON_FALSE(has_path != (config->path_fn != NULL),
+    ESP_RETURN_ON_FALSE((has_path ? 1 : 0) + (config->path_fn != NULL ? 1 : 0) + (config->target_fn != NULL ? 1 : 0) == 1,
                         ESP_ERR_INVALID_ARG,
                         TAG,
-                        "set exactly one of path and path_fn");
+                        "set exactly one of path, path_fn and target_fn");
     ESP_RETURN_ON_FALSE(!has_path || strlen(config->path) < SD_CARD_WRITER_PATH_MAX,
                         ESP_ERR_INVALID_ARG,
                         TAG,
                         "path too long");
-    ESP_RETURN_ON_FALSE(config->max_file_size == 0 || config->path_fn != NULL,
+    ESP_RETURN_ON_FALSE(config->max_file_size == 0 || config->path_fn != NULL || config->target_fn != NULL,
                         ESP_ERR_INVALID_ARG,
                         TAG,
-                        "rotation needs path_fn");
+                        "rotation needs path_fn or target_fn");
     ESP_RETURN_ON_FALSE(config->buffer_size >= SD_CARD_WRITER_MIN_BUFFER_SIZE,
                         ESP_ERR_INVALID_ARG,
                         TAG,
@@ -672,6 +721,8 @@ esp_err_t sd_card_writer_open_stream(const sd_card_writer_stream_config_t *confi
     stream->truncate = config->truncate;
     stream->path_fn = config->path_fn;
     stream->path_ctx = config->path_ctx;
+    stream->target_fn = config->target_fn;
+    stream->target_ctx = config->target_ctx;
     stream->buffer_size = config->buffer_size;
     stream->flush_interval_ms = config->flush_interval_ms;
     stream->max_file_size = config->max_file_size;
@@ -781,6 +832,38 @@ esp_err_t sd_card_writer_write(sd_card_writer_stream_t *stream,
     if (err == ESP_OK && (stream->flush_interval_ms == 0 || waiting >= wake_level)) {
         sd_card_writer_wake();
     }
+    return err;
+}
+
+esp_err_t sd_card_writer_rotate(sd_card_writer_stream_t *stream)
+{
+    ESP_RETURN_ON_FALSE(stream != NULL, ESP_ERR_INVALID_ARG, TAG, "stream required");
+    ESP_RETURN_ON_FALSE(stream->path_fn != NULL || stream->target_fn != NULL,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "rotation needs path_fn or target_fn");
+    ESP_RETURN_ON_FALSE(!stream->failed, ESP_ERR_INVALID_STATE, TAG, "stream has failed");
+
+    esp_err_t err = ESP_OK;
+    portENTER_CRITICAL(&stream->lock);
+    bool already_pending = false;
+    if (stream->rotation_count > 0) {
+        uint8_t last = (uint8_t)((stream->rotation_head + stream->rotation_count - 1U) % SD_CARD_WRITER_ROTATION_SLOTS);
+        /* Nothing queued since the last rotation point: this one adds nothing. */
+        already_pending = stream->rotation_points[last] == stream->enqueued_total;
+    }
+    if (!already_pending) {
+        if (stream->rotation_count < SD_CARD_WRITER_ROTATION_SLOTS) {
+            uint8_t slot = (uint8_t)((stream->rotation_head + stream->rotation_count) % SD_CARD_WRITER_ROTATION_SLOTS);
+            stream->rotation_points[slot] = stream->enqueued_total;
+            ++stream->rotation_count;
+            stream->producer_file_bytes = 0;
+        } else {
+            err = ESP_ERR_NO_MEM;
+        }
+    }
+    portEXIT_CRITICAL(&stream->lock);
+    sd_card_writer_wake();
     return err;
 }
 

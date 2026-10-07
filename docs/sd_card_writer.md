@@ -51,11 +51,20 @@ if (sd_card_writer_write(s_sensor_stream, block, block_size, 0) != ESP_OK) {
 | `sd_card_writer_start()` | writer task を起動する。SD が mount 済みであること |
 | `sd_card_writer_open_stream()` | stream を登録し、バッファを確保する。file は最初のデータが来たときに writer が開く |
 | `sd_card_writer_write()` | 1 record を渡す。バッファに空きがなければ `wait_ticks` まで待ち、それでも入らなければ丸ごと捨てる |
+| `sd_card_writer_rotate()` | 次の record から新しい file にする。file が大きくなったのではなく、「どの file か」の答えが変わったとき（日付が変わった、など）に使う |
 | `sd_card_writer_flush()` | そこまでのデータを書いて sync し、SD に載るまで待つ |
 | `sd_card_writer_close_stream()` | flush して file を閉じ、stream を解放する |
 | `sd_card_writer_get_stats()` | 受け付けた量、書けた量、捨てた量、バッファの最大使用量など |
 
-stream の file は、固定の `path`（既存なら追記、`truncate` なら空から）か、`path_fn` が選ぶ新しい file のどちらかです。親ディレクトリが無ければ作ります。FATFS は長い名前に対応していない設定なので、各要素は 8.3 形式にしてください。
+stream の file は、次の 3 つのどれか 1 つで決めます。親ディレクトリが無ければ作ります。
+
+| 指定 | file |
+| --- | --- |
+| `path` | 固定の file。既存なら追記、`truncate` なら空から |
+| `path_fn` | 毎回、**新しい** file を選ぶ（既存の名前だと open が失敗する） |
+| `target_fn` | 毎回、既存の file（追記）か新しい file を選び、file の先頭に書く内容（ヘッダ）も返す |
+
+FATFS の長いファイル名（`CONFIG_FATFS_LFN_HEAP`）が有効でないと、名前の各要素は 8.3 形式でなければなりません。有効かどうかは、使う側が確かめてください。
 
 `sd_card_writer_write()` は task から呼びます（ISR からは呼べません）。同じ stream に複数の task から書いても、record 同士が混ざることはありません。
 
@@ -106,6 +115,38 @@ English supplement: data written since the last sync can be lost on power failur
 
 `path_fn` は writer task 上で呼ばれ、まだ存在しない file の名前を返します。既存の file を返すと、上書きを避けるために open が失敗します。
 
+## Target Function
+
+`target_fn` は、既存の file に続けて書く用途のための、`path_fn` の拡張です。writer task 上で、最初のデータが来たときと、切り替えのたびに呼ばれます。
+
+```c
+static esp_err_t pick_target(sd_card_writer_target_t *target, void *ctx)
+{
+    /* 今日の file を探し、余裕があればそれを、無ければ次の番号を選ぶ */
+    snprintf(target->path, sizeof(target->path), "ERR_2026-10-07_01.LOG");
+    target->append = true;                         /* 既存の file に追記する */
+    target->header_len = snprintf(target->header, sizeof(target->header), "boot: ...\n");
+    return ESP_OK;
+}
+```
+
+- `append` が真で file が無ければ、新規に作ります。偽のときは `path_fn` と同じく、既存の file を上書きしません
+- `header` は、file を開いた直後（追記のときは末尾）に、データより先に書きます。record ではなく、そのまま書きます
+- 追記した file の元のサイズと、ヘッダの長さは、`max_file_size` に数えます。数えないと、250 KB の file に追記して 500 KB を超えてしまいます
+- `target_fn` は writer task を止めますが、producer は止めません。ディレクトリを走査してもかまいません
+
+English supplement: use `target_fn` when a file is reused across runs. The size of an appended file and the header are counted toward max_file_size, so the limit means the size of the FILE. If a rotation is already queued when the file opens, the count is left alone and that file may run over the limit by what was queued meanwhile.
+
+## Rotating On Demand
+
+`sd_card_writer_rotate()` は、サイズ上限に達したときと同じ扱いで、次の record から新しい file にします。writer は今の file を閉じ、`path_fn` か `target_fn` に次の file を尋ねます。record が来るまで file は作らないので、その後何も書かない stream を切り替えても、空の file は残りません。
+
+使い所は、「どの file か」の答えが、大きさ以外の理由で変わったときです。例えばエラーログは、日付が変わったとき（0 時、または時計が合ったとき）に使います。
+
+- stream が failed なら `ESP_ERR_INVALID_STATE` です
+- 切り替えがすでに積まれていて、これ以上積めないときは `ESP_ERR_NO_MEM` です。その切り替えは、積まれているものがすでに同じ所へ届きます
+- 直前の切り替えから何も書いていなければ、何もしません（空の file を重ねないため）
+
 ## Reports
 
 取りこぼしとストリームの失敗は、`sd_card_writer_set_report_fn()` で登録した関数へ1行ずつ報告します。この製品では `error_log_store_start()` が自分を登録するので、SD のエラーログに残ります。
@@ -138,6 +179,6 @@ open、write、sync のどれかが失敗すると、その stream は failed �
 | `sd_card_storage` | SPI バスの初期化と FAT の mount |
 | `sd_card_writer` | ログのような継続的な書き込み。1つの task がすべての stream の file を持つ |
 | `sd_card_files` | 設定の保存のような、まれな単発の書き込み。呼び出し元の task で同期実行する |
-| `error_log_store` | `sd_card_writer` の stream を1つ使うエラーログ |
+| `error_log_store` | `sd_card_writer` の stream を1つ使うエラーログ。`target_fn` で、日付ごとの file に追記する |
 
 継続的に書くデータは `sd_card_writer` を使ってください。`sd_card_files` で頻繁に書くと、この文書の最初に挙げた問題がそのまま出ます。
