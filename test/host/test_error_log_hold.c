@@ -61,6 +61,24 @@ static void test_fifo(void)
     check(pop_is(&hold, 5, false, ""), "and comes back empty");
 }
 
+static void test_peek_oldest_uptime(void)
+{
+    uint8_t storage[256];
+    error_log_hold_t hold;
+    uint64_t uptime = 99;
+
+    error_log_hold_init(&hold, storage, sizeof(storage));
+    check(!error_log_hold_peek_uptime(&hold, &uptime) && uptime == 99, "nothing to peek at when empty, and the output is left alone");
+
+    (void)error_log_hold_push(&hold, 7000, false, "old", 3);
+    (void)error_log_hold_push(&hold, 9000, false, "newer", 5);
+    check(error_log_hold_peek_uptime(&hold, &uptime) && uptime == 7000, "the oldest entry's uptime");
+    check(error_log_hold_peek_uptime(&hold, &uptime) && uptime == 7000 && error_log_hold_count(&hold) == 2,
+          "looking does not take anything out");
+    check(pop_is(&hold, 7000, false, "old"), "the entry is still there to pop");
+    check(error_log_hold_peek_uptime(&hold, &uptime) && uptime == 9000, "after a pop, the next one is the oldest");
+}
+
 static void test_overflow_keeps_the_oldest(void)
 {
     uint8_t storage[ERROR_LOG_HOLD_ENTRY_OVERHEAD * 3 + 30];
@@ -171,6 +189,7 @@ static void test_pop_into_a_small_buffer(void)
 int main(void)
 {
     test_fifo();
+    test_peek_oldest_uptime();
     test_overflow_keeps_the_oldest();
     test_wrap_around();
     test_pop_into_a_small_buffer();

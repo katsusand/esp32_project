@@ -94,6 +94,22 @@ bool error_log_hold_pop(error_log_hold_t *hold,
     return true;
 }
 
+bool error_log_hold_peek_uptime(const error_log_hold_t *hold, uint64_t *uptime_ms)
+{
+    uint8_t header[ERROR_LOG_HOLD_ENTRY_OVERHEAD];
+    uint64_t value = 0;
+
+    if (hold->count == 0) {
+        return false;
+    }
+    ring_read(hold, 0, header, sizeof(header));
+    for (size_t i = 0; i < 8U; ++i) {
+        value |= (uint64_t)header[4U + i] << (8U * i);
+    }
+    *uptime_ms = value;
+    return true;
+}
+
 bool error_log_hold_is_empty(const error_log_hold_t *hold)
 {
     return hold->count == 0;

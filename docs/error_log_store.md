@@ -95,6 +95,8 @@ English supplement: long names are required. The build fails on purpose rather t
 | `clock` | 開いた時点で時計が合っていたか（`set` / `unset`） |
 | `ntp` | 時刻の問いにどう答えが出たか（`ok` / `failed` / `none` / `timeout` / `preset`） |
 
+`boot:` 行の時刻は、ファイルを開いた時点です。ただし、溜めた行を書き出すときは、その中で最も古い行の時刻にします。溜めた行は、起きた時刻で書かれるので、開いた時点の時刻にすると、先頭の行が次の行より新しくなって、上から読むと時刻が戻ってしまうからです。こうしておくと、1 回の起動のファイルは、上から下へ時刻が進みます。取りこぼしの通知（`lines were lost`）も、同じ理由で、捨てた行があった位置の時刻にします。
+
 遅れて時計が合うと、`1970-01-01` のファイルの後に日付つきのファイルが続きます。2 つのファイルの `id` が同じなら、同じ起動の記録です。UUID は「同じ起動か」を示すもので、起動の前後は日付と番号で分かります。
 
 English supplement: the boot line is what ties files together when a late clock sync, midnight or the size limit splits one boot over several files. The UUID says "same run", not "which came first".

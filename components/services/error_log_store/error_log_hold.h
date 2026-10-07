@@ -50,6 +50,9 @@ bool error_log_hold_pop(error_log_hold_t *hold,
                         size_t text_size,
                         size_t *length);
 
+/* The uptime of the oldest entry, without removing it. False when empty. */
+bool error_log_hold_peek_uptime(const error_log_hold_t *hold, uint64_t *uptime_ms);
+
 bool error_log_hold_is_empty(const error_log_hold_t *hold);
 uint32_t error_log_hold_count(const error_log_hold_t *hold);
 

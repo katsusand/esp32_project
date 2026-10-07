@@ -410,6 +410,34 @@ static int count_lines(const char *text)
     return count_substring(text, "\n");
 }
 
+/*
+ * Reading a file from the top, the +NNNNms never steps back. (Within one boot:
+ * a second boot appended to the same file starts its uptime again.) The boot
+ * line is stamped with the oldest line it introduces, which is what makes this
+ * hold for a file written from a hold.
+ */
+static bool uptime_never_steps_back(const char *text)
+{
+    unsigned long long previous = 0;
+
+    for (const char *line = text; *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        const char *plus = strstr(line, " +");
+        if (plus != NULL && (end == NULL || plus < end)) {
+            unsigned long long value = strtoull(plus + 2, NULL, 10);
+            if (value < previous) {
+                return false;
+            }
+            previous = value;
+        }
+        if (end == NULL) {
+            break;
+        }
+        line = end + 1;
+    }
+    return true;
+}
+
 static void setup(void)
 {
     remove_all_files();
@@ -448,6 +476,9 @@ static void test_nothing_is_written_until_card_and_clock(void)
     check(text[0] != '\0', "it is named for today's date, and the number is 01");
     check(strstr(text, "boot: id=11111111-2222-4333-8444-555555555555 part=1 fw=9.9.9 reset=SW dev=0 clock=set ntp=ok") != NULL,
           "it starts with the boot line: id, part, firmware, reset reason, mode, clock, ntp");
+    check(strstr(text, "[2026-10-07 11:59:45 +5000ms] boot: id=") == text,
+          "the boot line carries the time of the oldest line it introduces, not the moment the file was opened");
+    check(uptime_never_steps_back(text), "so read from the top the log never steps back in time");
     check(text == strstr(text, "[") && strstr(text, "] boot:") < strchr(text, '\n'), "the boot line is the first line");
 
     /* Held lines get the time they really had: now is 20 s into the boot, 12:00:00. */
@@ -491,6 +522,7 @@ static void test_waiting_ends_by_timeout(void)
     check(strstr(text, "clock=unset ntp=timeout") != NULL, "and its boot line says so");
     check(strstr(text, "[1970-01-01 00:00:05 +5000ms] wifi: boot-time failure") != NULL,
           "the held line reads as 1970, 5 s after boot");
+    check(strstr(text, "[1970-01-01 00:00:05 +5000ms] boot: id=") == text, "and the boot line before it reads the same");
 }
 
 static void test_timeout_is_also_checked_when_a_line_arrives(void)
@@ -691,6 +723,8 @@ static void test_lines_while_the_card_is_out_are_kept(void)
     check(count_substring(text, "] boot: id=") == 2, "with a new section start for the new run of the stream");
     check(strstr(text, "part=2") != NULL, "part 2");
     check(strstr(text, "[2026-10-07 08:00:04 +9000ms] m: while out one") != NULL, "the lines keep the time they had, not the time they were written");
+    check(strstr(text, "[2026-10-07 08:00:04 +9000ms] boot: id=") != NULL, "and the new section's boot line takes the oldest of them");
+    check(uptime_never_steps_back(text), "the whole file reads forward in time, across the old section and the new one");
 }
 
 static void test_hold_overflow(void)
@@ -710,6 +744,7 @@ static void test_hold_overflow(void)
     check(strstr(text, "lines were lost while waiting to be written (hold buffer full)") != NULL, "and the loss is written down");
     check(strstr(text, "] boot:") < strstr(text, "lines were lost") && strstr(text, "lines were lost") < strstr(text, "line number 000"),
           "after the boot line, before the lines that were kept");
+    check(uptime_never_steps_back(text), "and the notice is stamped where the lost lines would have been, so time still reads forward");
 }
 
 static void test_repeats_are_folded(void)

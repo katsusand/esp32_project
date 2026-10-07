@@ -97,6 +97,19 @@ static error_log_dedupe_t s_dedupe = { .window_ms = (uint32_t)CONFIG_ERROR_LOG_S
 /* The date in the name of the file being written, and the date a rotation was last asked for. */
 static char s_file_date[ERROR_LOG_DATE_TEXT_MAX];
 static char s_rotate_date[ERROR_LOG_DATE_TEXT_MAX];
+/*
+ * The uptime of the oldest line being released from the hold, for the boot line
+ * of the file those lines open.
+ *
+ * English contract: a boot line is stamped when its file is opened, which for
+ * the first file after a release is later than the held lines that follow it.
+ * Read in order, the log would step back in time. The boot line takes the oldest
+ * held line's time instead, so a file always starts with its oldest line. It is
+ * set when the hold is released and used (and cleared) by the next file the
+ * writer opens, which is the file those lines go to.
+ */
+static uint64_t s_header_uptime_hint_ms;
+static bool s_header_uptime_hint_valid;
 static uint32_t s_part;
 static esp_timer_handle_t s_gate_timer;
 static esp_timer_handle_t s_repeat_timer;
@@ -255,17 +268,27 @@ static esp_err_t error_log_store_target(sd_card_writer_target_t *target, void *c
 
     char today_text[ERROR_LOG_DATE_TEXT_MAX];
     error_log_date_text(&local, today_text, sizeof(today_text));
+    uint64_t uptime = error_log_uptime_ms();
+    uint64_t header_uptime = uptime;
     portENTER_CRITICAL(&s_lock);
     uint32_t part = ++s_part;
     strlcpy(s_file_date, today_text, sizeof(s_file_date));
     const char *ntp = s_ntp_text;
+    if (s_header_uptime_hint_valid && s_header_uptime_hint_ms < header_uptime) {
+        header_uptime = s_header_uptime_hint_ms;
+    }
+    s_header_uptime_hint_valid = false;
     portEXIT_CRITICAL(&s_lock);
+
+    /* The boot line's own clock: now, or the oldest line it introduces. */
+    struct tm header_local = { 0 };
+    time_t header_wall = error_log_restamp(now, uptime, header_uptime);
+    localtime_r(&header_wall, &header_local);
 
     static char body[ERROR_LOG_BODY_MAX];
     static char stamp[ERROR_LOG_STAMP_MAX];
     static char line[ERROR_LOG_LINE_MAX];
     const esp_app_desc_t *app = esp_app_get_description();
-    uint64_t uptime = error_log_uptime_ms();
 #if defined(APP_DEV) && APP_DEV
     const int dev = 1;
 #else
@@ -281,7 +304,7 @@ static esp_err_t error_log_store_target(sd_card_writer_target_t *target, void *c
                    dev,
                    error_log_clock_is_valid(now) ? "set" : "unset",
                    ntp);
-    (void)error_log_format_stamp(stamp, sizeof(stamp), &local, uptime);
+    (void)error_log_format_stamp(stamp, sizeof(stamp), &header_local, header_uptime);
     size_t length = error_log_format_line(line, sizeof(line), stamp, body);
 
     size_t at = 0;
@@ -445,7 +468,13 @@ static esp_err_t error_log_store_release(void)
         }
     }
 
+    uint64_t oldest_uptime = 0;
     portENTER_CRITICAL(&s_lock);
+    bool has_oldest = error_log_hold_peek_uptime(&s_hold, &oldest_uptime);
+    if (has_oldest) {
+        s_header_uptime_hint_ms = oldest_uptime;
+        s_header_uptime_hint_valid = true;
+    }
     uint32_t dropped = error_log_hold_take_dropped(&s_hold);
     portEXIT_CRITICAL(&s_lock);
     if (dropped > 0) {
@@ -454,8 +483,9 @@ static esp_err_t error_log_store_release(void)
                        sizeof(notice),
                        "error_log_store: %u lines were lost while waiting to be written (hold buffer full)",
                        (unsigned)dropped);
+        /* About the start of the hold, so it goes where the lost lines would have been. */
         (void)error_log_store_write_entry(stream,
-                                          error_log_uptime_ms(),
+                                          has_oldest ? oldest_uptime : error_log_uptime_ms(),
                                           false,
                                           notice,
                                           strlen(notice),
@@ -773,6 +803,7 @@ esp_err_t error_log_store_stop(void)
     s_stream = NULL;
     s_open = false;
     s_card_ready = false;
+    s_header_uptime_hint_valid = false;
     portEXIT_CRITICAL(&s_lock);
 
     if (s_gate_timer != NULL) {
@@ -822,6 +853,8 @@ __attribute__((unused)) static void error_log_store_reset_state(void)
     error_log_dedupe_init(&s_dedupe, (uint32_t)CONFIG_ERROR_LOG_STORE_REPEAT_WINDOW_SECONDS * 1000U);
     s_file_date[0] = '\0';
     s_rotate_date[0] = '\0';
+    s_header_uptime_hint_valid = false;
+    s_header_uptime_hint_ms = 0;
     s_part = 0;
     s_gate_timer = NULL;
     s_repeat_timer = NULL;
