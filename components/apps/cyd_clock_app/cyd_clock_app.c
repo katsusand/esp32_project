@@ -19,6 +19,7 @@
 #include "cyd_system_apps.h"
 #include "cyd_ui.h"
 #include "cyd_wifi_setup.h"
+#include "sd_card_status_icon.h"
 #include "time_tick.h"
 #include "time_sync.h"
 #include "wifi_connection.h"
@@ -44,6 +45,10 @@
 #define CYD_CLOCK_APP_TIME_ROW 10
 #define CYD_CLOCK_APP_TIME_SPAN_COLS CYD_DISPLAY_GRID_COLS
 #define CYD_CLOCK_APP_TIME_SPAN_ROWS 6
+/* The SD card problem icon: two grid cells square, in the top-right corner,
+   which the title (row 2 and below) never reaches. */
+#define CYD_CLOCK_APP_SD_ICON_COL 38
+#define CYD_CLOCK_APP_SD_ICON_ROW 0
 
 static cyd_display_screen_t s_clock_screen;
 static bool s_clock_use_24_hour = true;
@@ -524,6 +529,16 @@ static esp_err_t cyd_clock_app_show_clock(void)
                               alarm_mode == CYD_CLOCK_APP_ALARM_MODE_OFF ? CYD_UI_COLOR_DIMGREY : CYD_UI_COLOR_RED,
                               alarm_mode == CYD_CLOCK_APP_ALARM_MODE_OFF ? CYD_UI_COLOR_LIGHTGREY : CYD_UI_COLOR_YELLOW,
                               CYD_CLOCK_APP_ACTION_ALARM);
+
+    /*
+     * Last, so the widgets before it keep their positions whether or not it is
+     * there. The clock is drawn again every second, which is also how soon a card
+     * pulled or put back shows up here. Nothing is drawn while the card works.
+     */
+    const cyd_display_bitmap_t *sd_icon = sd_card_status_icon_for_state(sd_card_status_get_state());
+    if (sd_icon != NULL) {
+        (void)cyd_ui_add_icon(screen, sd_icon, CYD_CLOCK_APP_SD_ICON_COL, CYD_CLOCK_APP_SD_ICON_ROW, 2, 2);
+    }
     return cyd_ui_submit(screen);
 }
 

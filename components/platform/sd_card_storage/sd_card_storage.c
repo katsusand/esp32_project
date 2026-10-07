@@ -3,6 +3,7 @@
 #include "driver/spi_common.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdkconfig.h"
@@ -99,6 +100,68 @@ esp_err_t sd_card_storage_init(void)
 bool sd_card_storage_is_mounted(void)
 {
     return s_mounted;
+}
+
+esp_err_t sd_card_storage_deinit(void)
+{
+#if CONFIG_SD_CARD_STORAGE_ENABLED
+    if (!s_mounted) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = esp_vfs_fat_sdcard_unmount(SD_CARD_MOUNT_POINT, s_card);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SD card unmount reported %s; releasing anyway", esp_err_to_name(err));
+    }
+    /* The bus is released whatever the unmount said: keeping it would make the
+       next init fail on a bus that is already taken. */
+    esp_err_t bus_err = spi_bus_free(sd_card_storage_host_from_config());
+    if (bus_err != ESP_OK) {
+        ESP_LOGW(TAG, "SD card SPI bus free failed: %s", esp_err_to_name(bus_err));
+    }
+
+    s_card = NULL;
+    s_mounted = false;
+    s_initialized = false;
+    return err != ESP_OK ? err : bus_err;
+#else
+    return ESP_OK;
+#endif
+}
+
+esp_err_t sd_card_storage_probe(void)
+{
+#if CONFIG_SD_CARD_STORAGE_ENABLED
+    if (!s_mounted || s_card == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    size_t sector_size = s_card->csd.sector_size;
+    if (sector_size == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* DMA-capable, so the driver does not allocate a bounce buffer per probe. */
+    void *sector = heap_caps_malloc(sector_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (sector == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err = sdmmc_read_sectors(s_card, sector, 0, 1);
+    heap_caps_free(sector);
+    return err;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t sd_card_storage_get_space(uint64_t *total_bytes, uint64_t *free_bytes)
+{
+#if CONFIG_SD_CARD_STORAGE_ENABLED
+    ESP_RETURN_ON_FALSE(total_bytes != NULL && free_bytes != NULL, ESP_ERR_INVALID_ARG, TAG, "outputs required");
+    ESP_RETURN_ON_FALSE(s_mounted, ESP_ERR_INVALID_STATE, TAG, "SD card is not mounted");
+    return esp_vfs_fat_info(SD_CARD_MOUNT_POINT, total_bytes, free_bytes);
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 const char *sd_card_storage_get_mount_point(void)

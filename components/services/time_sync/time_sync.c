@@ -489,8 +489,9 @@ static void time_sync_task(void *arg)
             continue;
         }
         if (radio_err != ESP_OK) {
-            ESP_LOGW(TAG, "time sync radio acquire failed: %s", esp_err_to_name(radio_err));
-            (void)error_log_store_append_esp_err(TAG, "time sync failed: no Internet connection", radio_err);
+            ERROR_LOG(radio_err, "time sync failed: no Internet connection");
+            /* An answer for the error log, which holds its lines until it knows whether the clock is right. */
+            error_log_store_notify_time_decided(ERROR_LOG_TIME_FAILED);
             time_sync_record_attempt_status(radio_err);
             bool request_cleared = time_sync_clear_request_if_generation(request_generation);
             time_sync_set_state(request_cleared ? TIME_SYNC_STATE_IDLE : TIME_SYNC_STATE_WAITING_WIFI);
@@ -501,10 +502,12 @@ static void time_sync_task(void *arg)
         bool request_cleared = false;
         if (sync_err == ESP_OK) {
             time_sync_clear_requests_after_success();
+            error_log_store_notify_time_decided(ERROR_LOG_TIME_SYNCED);
             request_cleared = true;
         } else {
             /* One line per failed request, after its retries, not per attempt. */
-            (void)error_log_store_append_esp_err(TAG, "time sync failed: NTP", sync_err);
+            ERROR_LOG(sync_err, "time sync failed: NTP");
+            error_log_store_notify_time_decided(ERROR_LOG_TIME_FAILED);
             request_cleared = time_sync_clear_request_if_generation(request_generation);
         }
         esp_err_t release_err = radio_manager_release(&lease);
@@ -558,6 +561,8 @@ esp_err_t time_sync_start(void)
     time_sync_notify_task();
     return ESP_OK;
 #else
+    /* No time source in this build: the error log must not wait for one. */
+    error_log_store_notify_time_decided(ERROR_LOG_TIME_UNAVAILABLE);
     return ESP_OK;
 #endif
 }

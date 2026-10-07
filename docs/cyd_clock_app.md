@@ -46,6 +46,7 @@ ESP_ERROR_CHECK(app_shell_start(cyd_clock_app_get_app()));
 - `SYNC NOW` ボタン
 - `ALARM` ボタン: `ALARM OFF` → `ALARM1 ON` → `ALARM2 ON` → `ALARM1/2 ON` の順に有効状態を切り替える
 - `SETTINGS` / `INFO` ボタン
+- SD カードのアイコン（右上の角。カードが未挿入・未フォーマット・空き容量なし・異常のときだけ）。[SD Card Status](sd_card_status.md) が決める状態で、正常なときは何も描きません。時計は毎秒描き直すので、カードを抜き差ししても 1 秒以内に反映されます
 
 `SYNC NOW` は Wi-Fi が `connected`、`failed`、`off`、`setup needed` のときだけ有効です。ただし `time_sync_is_busy()` が `true` の間は、Wi-Fi が `connected` でも NTP 同期処理中または retry 待ちとして無効表示になり、タッチしても action は発火しません。
 

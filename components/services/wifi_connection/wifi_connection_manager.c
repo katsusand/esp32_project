@@ -269,21 +269,16 @@ static const char *wifi_connection_failure_reason_text(esp32_wifi_sta_failure_re
  * One error log line per failed connection sequence, never per attempt, with
  * the reason ("auth failed" usually means a wrong password). No SSID: it can
  * tell where the device is installed.
+ *
+ * English contract: a macro, not a function, so that the log line names the
+ * function and line that recorded the failure rather than this helper.
  */
-static void wifi_connection_record_failure(const char *what,
-                                           esp_err_t err,
-                                           esp32_wifi_sta_failure_reason_t reason)
-{
-    char message[96];
-
-    snprintf(message,
-             sizeof(message),
-             "%s: %s (%s)",
-             what,
-             esp_err_to_name(err),
-             wifi_connection_failure_reason_text(reason));
-    (void)error_log_store_append_message(TAG, message);
-}
+#define wifi_connection_record_failure(what, err, reason)                                   \
+    ERROR_LOG((err),                                                                         \
+              "%s (%s, reason=%d)",                                                          \
+              (what),                                                                        \
+              wifi_connection_failure_reason_text(reason),                                   \
+              (int)(reason))
 
 /* The main loop runs an attempt with the saved profiles next. */
 static void wifi_connection_request_connect(wifi_connection_state_t state)
@@ -534,7 +529,6 @@ static void wifi_connection_run_auto_connect(void)
     s_wifi_connection.last_failure_reason = failure_reason;
     wifi_connection_set_connection_result(esp32_wifi_sta_has_configured_ssid(), false);
     wifi_connection_set_state(WIFI_CONNECTION_STATE_FAILED);
-    ESP_LOGW(TAG, "Wi-Fi connection connect failed: %s reason=%d", esp_err_to_name(err), (int)failure_reason);
     wifi_connection_record_failure("Wi-Fi connection connect failed", err, failure_reason);
 }
 
@@ -587,10 +581,6 @@ static void wifi_connection_handle_setup_connect(const wifi_connection_cmd_t *cm
                                                    &failure_reason);
         /* An interrupted test is not a failed one: another request took the STA. */
         if (err != ESP_OK && !wifi_connection_manager_aborted()) {
-            ESP_LOGW(TAG,
-                     "Wi-Fi setup connection test failed: %s reason=%d",
-                     esp_err_to_name(err),
-                     (int)failure_reason);
             wifi_connection_record_failure("Wi-Fi setup connection test failed", err, failure_reason);
         }
     }

@@ -11,8 +11,7 @@
 #include "cyd_display.h"
 #include "cyd_system_apps.h"
 #include "error_log_store.h"
-#include "sd_card_storage.h"
-#include "sd_card_writer.h"
+#include "sd_card_status.h"
 #include "system_boot.h"
 #include "time_tick.h"
 
@@ -121,14 +120,14 @@ esp_err_t cyd_clock_composition_start(void)
         (void)error_log_store_append_esp_err(TAG, "system boot failed", err);
         ESP_RETURN_ON_ERROR(err, TAG, "system boot failed");
     }
-    esp_err_t sd_err = sd_card_storage_init();
-    cyd_clock_composition_start_optional("sd card init failed", sd_err);
-    if (sd_err == ESP_OK) {
-        /* One task does all writing to the card; the error log is its first
-           stream. Without a card both stay off and errors go to serial only. */
-        cyd_clock_composition_start_optional("sd card writer start failed", sd_card_writer_start());
-        cyd_clock_composition_start_optional("error log start failed", error_log_store_start());
-    }
+    /*
+     * The SD card is optional. Its task mounts the card, starts the error log on
+     * it, and keeps watching it (pulled, put back, not formatted, full); a
+     * missing or broken card is a state the clock face shows as an icon, never a
+     * boot failure. It mounts on its own task, so the boot does not wait for a
+     * card that is not there. Until it has, errors go to serial only.
+     */
+    cyd_clock_composition_start_optional("sd card status start failed", sd_card_status_start());
     err = time_tick_start();
     if (err != ESP_OK) {
         (void)error_log_store_append_esp_err(TAG, "time tick start failed", err);
@@ -147,8 +146,16 @@ esp_err_t cyd_clock_composition_start(void)
     cyd_clock_composition_start_optional("status indicator start failed", status_indicator_start());
     cyd_clock_composition_start_optional("Wi-Fi connection start failed", wifi_connection_start());
     cyd_clock_composition_start_optional("radio manager start failed", radio_manager_start());
-    cyd_clock_composition_start_optional("time sync start failed", time_sync_start());
+    esp_err_t time_sync_err = time_sync_start();
+    cyd_clock_composition_start_optional("time sync start failed", time_sync_err);
+    if (time_sync_err != ESP_OK) {
+        /* Nothing will ever answer the error log's clock question; do not make it wait. */
+        error_log_store_notify_time_decided(ERROR_LOG_TIME_UNAVAILABLE);
+    }
     cyd_clock_composition_start_optional("wifi rssi history start failed", wifi_rssi_history_start());
+#else
+    /* No Wi-Fi, so no time sync: the error log must not wait for a clock answer. */
+    error_log_store_notify_time_decided(ERROR_LOG_TIME_UNAVAILABLE);
 #endif
 
     cyd_clock_composition_preflight_nvs_health();

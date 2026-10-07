@@ -35,25 +35,60 @@ typedef struct sd_card_writer_stream sd_card_writer_stream_t;
  */
 typedef esp_err_t (*sd_card_writer_path_fn_t)(char *path, size_t path_size, void *ctx);
 
+/*
+ * Chooses the file a stream writes to, whether it already exists, and what its
+ * first bytes are.
+ */
+#define SD_CARD_WRITER_TARGET_PATH_MAX 64U
+#define SD_CARD_WRITER_TARGET_HEADER_MAX 320U
+
+typedef struct {
+    /* Out: the file, relative to the mount point (the name may be long if the
+       FATFS has long file names). Missing parent directories are created. */
+    char path[SD_CARD_WRITER_TARGET_PATH_MAX];
+    /* Out: add to the file if it exists, instead of requiring a new one. A file
+       that does not exist is created either way. */
+    bool append;
+    /* Out: written first, before any of the stream's data, and left as it is (it
+       is not a record). Zero length for none. */
+    char header[SD_CARD_WRITER_TARGET_HEADER_MAX];
+    size_t header_len;
+} sd_card_writer_target_t;
+
+/*
+ * Runs on the writer task when the stream first needs a file and again after
+ * every rotation. Unlike a path_fn it may name a file that already exists.
+ *
+ * English contract: it blocks the writer task for as long as it runs, not the
+ * producers, so a directory scan here is fine. The size of an appended file and
+ * the length of the header are counted toward max_file_size.
+ */
+typedef esp_err_t (*sd_card_writer_target_fn_t)(sd_card_writer_target_t *target, void *ctx);
+
 typedef struct {
     /* Short name for logs and diagnostics. */
     const char *name;
-    /* Fixed file relative to the mount point, or NULL when path_fn is set.
-       Missing parent directories are created. */
+    /* Fixed file relative to the mount point, or NULL when path_fn or target_fn
+       is set. Missing parent directories are created. */
     const char *path;
     /* With a fixed path: start the file empty instead of appending. */
     bool truncate;
     /* Picks each new file instead of a fixed path. Required for rotation. */
     sd_card_writer_path_fn_t path_fn;
     void *path_ctx;
+    /* Picks each file, existing or new, and writes a header at its head. Use it
+       instead of path_fn when a file is to be reused; it also does rotation. */
+    sd_card_writer_target_fn_t target_fn;
+    void *target_ctx;
     /* RAM that holds bytes until they reach the card. See the sizing note in
        docs/sd_card_writer.md: it has to ride out a card stall at full rate. */
     size_t buffer_size;
     /* Longest time written bytes may wait for a sync. 0 syncs as soon as
        they are written, for rare but important lines such as errors. */
     uint32_t flush_interval_ms;
-    /* With path_fn: start a new file before one would grow past this. 0 never
-       rotates. A record is never split, so a file can exceed it by one record. */
+    /* With path_fn or target_fn: start a new file before one would grow past
+       this. 0 never rotates. A record is never split, so a file can exceed it by
+       one record. */
     uint32_t max_file_size;
     /* Leaves this stream out of trouble reports (sd_card_writer_set_report_fn).
        Set it on the stream that carries the reports, so it never reports
@@ -104,6 +139,20 @@ esp_err_t sd_card_writer_write(sd_card_writer_stream_t *stream,
                                const void *data,
                                size_t size,
                                TickType_t wait_ticks);
+
+/*
+ * Makes the next record start a new file, as if the size limit had been reached
+ * at this point: the writer finishes the current file, then asks the stream's
+ * path_fn or target_fn for the next one. Nothing is created until there is a
+ * record to write, so rotating a stream that never writes again leaves no file.
+ * Use it when the answer to "which file?" changed for a reason other than size
+ * (the date moved on, the clock was set).
+ *
+ * ESP_ERR_INVALID_STATE: the stream has failed. ESP_ERR_NO_MEM: rotations are
+ * already queued, so this one would only repeat them; the stream rotates anyway.
+ * Needs path_fn or target_fn.
+ */
+esp_err_t sd_card_writer_rotate(sd_card_writer_stream_t *stream);
 
 /* Writes out and syncs everything queued so far, and waits until it is on the card. */
 esp_err_t sd_card_writer_flush(sd_card_writer_stream_t *stream);

@@ -50,6 +50,21 @@ static const nvs_key_descriptor_t NVS_KEY_CYD_DISPLAY_TOUCH_CAL = {
 #ifndef CONFIG_CYD_TOUCH_LOG_IRQ_LEVEL
 #define CONFIG_CYD_TOUCH_LOG_IRQ_LEVEL 0
 #endif
+/*
+ * Touch event logging exists for development builds only (DEV=1 defines
+ * APP_DEV).
+ *
+ * English contract: a release build never prints a line per touch, whatever
+ * CONFIG_CYD_TOUCH_LOG_EVENTS says. Touches are the one thing every user of the
+ * terminal does all day, so this would otherwise be the loudest line on the
+ * serial log of a unit that is supposed to be quiet. CYD_INPUT_LOG_TOUCH is the
+ * effective setting; use it, not the CONFIG_ value.
+ */
+#if CONFIG_CYD_TOUCH_LOG_EVENTS && defined(APP_DEV) && APP_DEV
+#define CYD_INPUT_LOG_TOUCH 1
+#else
+#define CYD_INPUT_LOG_TOUCH 0
+#endif
 #ifndef CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
 #define CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION 0
 #endif
@@ -582,6 +597,7 @@ static void IRAM_ATTR cyd_input_touch_irq_isr(void *arg)
     }
 }
 
+#if CYD_INPUT_LOG_TOUCH
 static const char *cyd_input_touch_action_name(cyd_input_touch_action_t action)
 {
     switch (action) {
@@ -597,6 +613,7 @@ static const char *cyd_input_touch_action_name(cyd_input_touch_action_t action)
         return "unknown";
     }
 }
+#endif
 
 static const char *cyd_input_button_action_name(cyd_input_button_action_t action)
 {
@@ -622,7 +639,7 @@ static void cyd_input_log_touch_event(cyd_input_touch_action_t action,
                                       int16_t y,
                                       uint8_t hold_ticks)
 {
-#if CONFIG_CYD_TOUCH_LOG_EVENTS
+#if CYD_INPUT_LOG_TOUCH
     if (CONFIG_CYD_TOUCH_LOG_IRQ_LEVEL) {
         ESP_LOGI(TAG,
                  "touch action=%s pressed=%d x=%d y=%d hold=%u irq=%d",
@@ -652,7 +669,7 @@ static void cyd_input_log_touch_event(cyd_input_touch_action_t action,
 
 static void cyd_input_log_touch_raw_change(bool pressed, int16_t x, int16_t y, int16_t last_x, int16_t last_y)
 {
-#if CONFIG_CYD_TOUCH_LOG_EVENTS
+#if CYD_INPUT_LOG_TOUCH
     if (CONFIG_CYD_TOUCH_LOG_IRQ_LEVEL) {
         if (pressed) {
             ESP_LOGI(TAG,
@@ -1414,8 +1431,8 @@ esp_err_t cyd_input_init(void)
              CONFIG_CYD_INPUT_EVENT_QUEUE_LENGTH,
              cyd_input_touch_irq_enabled(),
              CONFIG_CYD_TOUCH_PIN_INT,
-             CONFIG_CYD_TOUCH_LOG_EVENTS,
-             CONFIG_CYD_TOUCH_LOG_IRQ_LEVEL);
+             CYD_INPUT_LOG_TOUCH,
+             CYD_INPUT_LOG_TOUCH && CONFIG_CYD_TOUCH_LOG_IRQ_LEVEL);
 #endif
 
     if (cyd_input_task_needed()) {

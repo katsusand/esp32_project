@@ -1,0 +1,93 @@
+menu "SD Card Status"
+
+    config SD_CARD_STATUS_POLL_INTERVAL_MS
+        int "Card check interval while mounted (ms)"
+        default 5000
+        range 1000 60000
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            マウント中に、カードが応答するか・空き容量が足りるかを確認する間隔です。
+            English: how often a mounted card is probed for presence and free space.
+
+    config SD_CARD_STATUS_RETRY_INITIAL_MS
+        int "First retry delay after a failure (ms)"
+        default 5000
+        range 1000 600000
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            カード未挿入・未フォーマットなどで失敗した後、再マウントを試す最初の待ち時間です。
+            失敗が続くと倍々に伸びます。
+            English: first wait before trying to mount again; it doubles while failures continue.
+
+    config SD_CARD_STATUS_RETRY_SEEN_MS
+        int "Retry delay once a card has worked (ms)"
+        default 3000
+        range 500 60000
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            起動後に一度でもカードが正常に動いた個体は、未挿入・未フォーマットの間、
+            この固定間隔で再マウントを試します。カードを抜いて PC で読み、戻す、という
+            使い方で、戻してから気づくまでの待ちを短くするためです。一度もカードを
+            見ていない個体は、RETRY_INITIAL_MS から RETRY_MAX_MS まで間隔を伸ばします。
+            書き込み失敗 (FAULT) の再試行は、この設定の対象外で、間隔を伸ばします。
+
+            English: once a card has worked since boot, a missing or unformatted card
+            is retried at this fixed interval, so a card pulled to be read on a PC is
+            picked up quickly when it is put back. Units that never saw a card, and
+            retries after a write failure, keep the growing delay.
+
+    config SD_CARD_STATUS_RETRY_MAX_MS
+        int "Longest retry delay (ms)"
+        default 60000
+        range 1000 3600000
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            再マウントの待ち時間の上限です。カードを使わない個体が、シリアルログを
+            埋めないようにするためのものです。
+            English: cap on the retry delay, so a unit that runs without a card does
+            not keep the SPI bus and the serial log busy.
+
+    config SD_CARD_STATUS_MIN_FREE_KB
+        int "Treat the card as full below this much free space (KB)"
+        default 1024
+        range 0 1048576
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            空きがこれを下回ると FULL とし、エラーログへの書き込みを止めます。
+            0 にすると、完全に空きが無いときだけ FULL にします。
+            English: below this the state is FULL and the error log stops writing,
+            instead of running into a write error. 0 means only a completely full card.
+
+    config SD_CARD_STATUS_SHOW_ICON
+        bool "Offer an icon for SD card problems"
+        default y
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            SD カードの未挿入・未フォーマット・空き容量なし・異常のとき、
+            sd_card_status_icon_for_state() がアイコンを返します。画面に出すかどうかは
+            各 app が決めますが、これを無効にすると、どの app にもアイコンが出なくなります。
+            ログ自体は、このスイッチと関係なく動きます。
+
+            カードを使わない個体では、未挿入のアイコンが出続けるので無効にしてください。
+
+            English: with this off, sd_card_status_icon_for_state() returns NULL for every
+            state, so no app draws an icon. Logging is not affected. Turn it off for units
+            that run without a card on purpose; they would show the NO_CARD icon for good.
+
+    config SD_CARD_STATUS_TASK_STACK_SIZE
+        int "SD card status task stack size"
+        default 6144
+        range 3072 16384
+        depends on SD_CARD_STORAGE_ENABLED
+        help
+            マウント処理 (カード情報の printf を含む) とセルフテストの書き込みが
+            このタスクで走ります。
+            English: the card mount, its info printout and the write self-test run here.
+
+    config SD_CARD_STATUS_TASK_PRIORITY
+        int "SD card status task priority"
+        default 3
+        range 1 10
+        depends on SD_CARD_STORAGE_ENABLED
+
+endmenu
