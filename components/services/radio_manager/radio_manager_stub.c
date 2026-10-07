@@ -12,8 +12,11 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
                                 TickType_t wait_ticks)
 {
     (void)request;
-    (void)lease;
     (void)wait_ticks;
+    if (lease != NULL) {
+        lease->failure = RADIO_MANAGER_FAILURE_DISABLED;
+        lease->wifi_failure_reason = 0;
+    }
     return ESP_ERR_NOT_SUPPORTED;
 }
 

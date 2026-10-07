@@ -11,6 +11,7 @@
 #include "sdkconfig.h"
 #include "app_stack_monitor.h"
 #include "radio_manager.h"
+#include "radio_manager_failure.h"
 #include "wifi_connection.h"
 
 /* This component owns this data, so the namespace is declared here.
@@ -53,9 +54,16 @@ typedef struct {
     TickType_t expires_at;
 } radio_manager_pending_request_t;
 
+/* Why a request was rejected, as the lease carries it back to the caller. */
+typedef struct {
+    radio_manager_failure_t failure;
+    uint8_t wifi_failure_reason;
+} radio_manager_failure_detail_t;
+
 typedef struct {
     uint32_t request_id;
     esp_err_t result; /* ESP_OK when granted */
+    radio_manager_failure_detail_t detail;
 } radio_manager_response_t;
 
 typedef enum {
@@ -92,6 +100,9 @@ static QueueHandle_t s_response_queues[RADIO_MANAGER_CLIENT_COUNT];
 static TaskHandle_t s_task_handle;
 static uint32_t s_next_request_id = 1;
 static portMUX_TYPE s_request_id_lock = portMUX_INITIALIZER_UNLOCKED;
+/* The request the manager is connecting Wi-Fi for, 0 when none. Only to tell a
+   timed-out caller whether it was still waiting for Wi-Fi or for its turn. */
+static uint32_t s_preparing_request_id;
 static bool s_idle_timeout_loaded;
 static uint16_t s_idle_timeout_seconds = CONFIG_RADIO_MANAGER_IDLE_TIMEOUT_MS / 1000U;
 
@@ -213,11 +224,14 @@ static QueueHandle_t radio_manager_response_queue(radio_manager_client_t client)
     return s_response_queues[client];
 }
 
-static void radio_manager_respond(const radio_manager_pending_request_t *pending, esp_err_t result)
+static void radio_manager_respond(const radio_manager_pending_request_t *pending,
+                                  esp_err_t result,
+                                  const radio_manager_failure_detail_t *detail)
 {
     radio_manager_response_t response = {
         .request_id = pending->request_id,
         .result = result,
+        .detail = *detail,
     };
     QueueHandle_t queue = radio_manager_response_queue(pending->request.client);
 
@@ -226,39 +240,38 @@ static void radio_manager_respond(const radio_manager_pending_request_t *pending
     }
 }
 
-static esp_err_t radio_manager_prepare_internet(bool *wifi_acquired)
+static esp_err_t radio_manager_prepare_internet(bool *wifi_acquired, radio_manager_failure_detail_t *detail)
 {
     if (!*wifi_acquired) {
-        ESP_RETURN_ON_ERROR(wifi_connection_acquire(WIFI_CONNECTION_USER_RADIO_MANAGER),
-                            TAG,
-                            "Wi-Fi acquire failed");
+        esp_err_t err = wifi_connection_acquire(WIFI_CONNECTION_USER_RADIO_MANAGER);
+        if (err != ESP_OK) {
+            detail->failure = RADIO_MANAGER_FAILURE_WIFI_UNAVAILABLE;
+            return err;
+        }
         *wifi_acquired = true;
     }
 
     while (true) {
         wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
         if (wifi_connection_get_state(&state) != ESP_OK) {
+            detail->failure = RADIO_MANAGER_FAILURE_WIFI_UNAVAILABLE;
             return ESP_ERR_INVALID_STATE;
         }
         if (state == WIFI_CONNECTION_STATE_CONNECTED) {
             return ESP_OK;
         }
-        /* All three return ESP_FAIL; the log line keeps which one it was. */
-        if (state == WIFI_CONNECTION_STATE_FAILED) {
-            ESP_LOGW(TAG, "Internet unavailable: Wi-Fi connection failed (reason=%d)",
-                     (int)wifi_connection_get_last_failure_reason());
-            return ESP_FAIL;
-        }
-        if (state == WIFI_CONNECTION_STATE_SETUP_REQUIRED) {
-            ESP_LOGW(TAG, "Internet unavailable: Wi-Fi setup required");
-            return ESP_FAIL;
-        }
-        if (state == WIFI_CONNECTION_STATE_STOPPED) {
-            ESP_LOGW(TAG, "Internet unavailable: Wi-Fi stopped");
+        radio_manager_failure_t failure = radio_manager_failure_from_wifi_state(state);
+        if (failure != RADIO_MANAGER_FAILURE_NONE) {
+            /* Read now: the reason is reset when the next attempt starts. */
+            detail->failure = failure;
+            if (failure == RADIO_MANAGER_FAILURE_WIFI_CONNECT_FAILED) {
+                detail->wifi_failure_reason = (uint8_t)wifi_connection_get_last_failure_reason();
+            }
             return ESP_FAIL;
         }
         esp_err_t err = wifi_connection_wait_connected(pdMS_TO_TICKS(RADIO_MANAGER_WIFI_WAIT_MS));
         if (err == ESP_ERR_NOT_FINISHED) {
+            detail->failure = RADIO_MANAGER_FAILURE_WIFI_SETUP_PAUSED;
             return err; /* paused for Wi-Fi setup; the client retries later */
         }
         if (err == ESP_ERR_INVALID_STATE) {
@@ -268,11 +281,13 @@ static esp_err_t radio_manager_prepare_internet(bool *wifi_acquired)
 }
 
 static esp_err_t radio_manager_prepare_for_request(const radio_manager_pending_request_t *pending,
-                                                   bool *wifi_acquired)
+                                                   bool *wifi_acquired,
+                                                   radio_manager_failure_detail_t *detail)
 {
     if ((pending->request.required & RADIO_MANAGER_CAP_INTERNET) != 0) {
-        return radio_manager_prepare_internet(wifi_acquired);
+        return radio_manager_prepare_internet(wifi_acquired, detail);
     }
+    detail->failure = RADIO_MANAGER_FAILURE_NOT_SUPPORTED;
     return ESP_ERR_NOT_SUPPORTED;
 }
 
@@ -297,16 +312,26 @@ static void radio_manager_grant_owner(radio_manager_owner_t *owner,
     owner->granted_at = xTaskGetTickCount();
     owner->active = true;
 
-    radio_manager_respond(pending, ESP_OK);
+    const radio_manager_failure_detail_t none = { 0 };
+    radio_manager_respond(pending, ESP_OK, &none);
 }
 
-static void radio_manager_reject_request(const radio_manager_pending_request_t *pending, esp_err_t reason)
+static void radio_manager_reject_request(const radio_manager_pending_request_t *pending,
+                                         esp_err_t reason,
+                                         const radio_manager_failure_detail_t *detail)
 {
     if (pending == NULL) {
         return;
     }
 
-    radio_manager_respond(pending, reason);
+    radio_manager_respond(pending, reason, detail);
+}
+
+static void radio_manager_set_preparing(uint32_t request_id)
+{
+    portENTER_CRITICAL(&s_request_id_lock);
+    s_preparing_request_id = request_id;
+    portEXIT_CRITICAL(&s_request_id_lock);
 }
 
 static bool radio_manager_control_matches_owner(const radio_manager_owner_t *owner,
@@ -384,19 +409,23 @@ static void radio_manager_task(void *arg)
             continue;
         }
 
-        esp_err_t err = radio_manager_prepare_for_request(&pending, &wifi_acquired);
+        radio_manager_failure_detail_t detail = { 0 };
+        radio_manager_set_preparing(pending.request_id);
+        esp_err_t err = radio_manager_prepare_for_request(&pending, &wifi_acquired, &detail);
+        radio_manager_set_preparing(0);
         if (err != ESP_OK) {
             /* ESP_LOG_LEVEL does not parenthesize its level argument. */
             const esp_log_level_t level = err == ESP_ERR_NOT_FINISHED ? ESP_LOG_INFO : ESP_LOG_WARN;
             ESP_LOG_LEVEL(level,
                           TAG,
-                          "radio request %s: client=%d id=%u err=%s",
-                          err == ESP_ERR_NOT_FINISHED ? "paused for Wi-Fi setup" : "prepare failed",
+                          "radio request %s: client=%d id=%u err=%s (%s)",
+                          err == ESP_ERR_NOT_FINISHED ? "paused" : "prepare failed",
                           (int)pending.request.client,
                           (unsigned)pending.request_id,
-                          esp_err_to_name(err));
+                          esp_err_to_name(err),
+                          radio_manager_failure_text(detail.failure, detail.wifi_failure_reason));
             if (!radio_manager_request_expired(&pending)) {
-                radio_manager_reject_request(&pending, err);
+                radio_manager_reject_request(&pending, err, &detail);
             }
             radio_manager_release_wifi_if_idle(&wifi_acquired);
             continue;
@@ -477,17 +506,45 @@ esp_err_t radio_manager_save_idle_timeout_seconds(void)
     return radio_manager_write_idle_timeout_blob(timeout_seconds);
 }
 
+/* Leaves the reason in the lease (none on success) and returns err as it is. */
+static esp_err_t radio_manager_acquire_finish(radio_manager_lease_t *lease,
+                                              esp_err_t err,
+                                              radio_manager_failure_t failure,
+                                              uint8_t wifi_failure_reason)
+{
+    lease->failure = failure;
+    lease->wifi_failure_reason = wifi_failure_reason;
+    return err;
+}
+
+/* Why a caller timed out, from where its request was: still being connected
+   for, or queued behind another request. */
+static radio_manager_failure_t radio_manager_timeout_failure(uint32_t request_id)
+{
+    portENTER_CRITICAL(&s_request_id_lock);
+    bool preparing = s_preparing_request_id == request_id;
+    portEXIT_CRITICAL(&s_request_id_lock);
+    return preparing ? RADIO_MANAGER_FAILURE_WIFI_CONNECT_TIMEOUT : RADIO_MANAGER_FAILURE_RADIO_BUSY;
+}
+
 esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
                                 radio_manager_lease_t *lease,
                                 TickType_t wait_ticks)
 {
-    ESP_RETURN_ON_FALSE(request != NULL, ESP_ERR_INVALID_ARG, TAG, "request is null");
     ESP_RETURN_ON_FALSE(lease != NULL, ESP_ERR_INVALID_ARG, TAG, "lease is null");
-    ESP_RETURN_ON_FALSE(s_request_queue != NULL, ESP_ERR_INVALID_STATE, TAG, "manager not started");
-    ESP_RETURN_ON_FALSE(request->required != 0, ESP_ERR_INVALID_ARG, TAG, "required capability is empty");
-
+    if (request == NULL) {
+        ESP_LOGE(TAG, "request is null");
+        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_ARG, RADIO_MANAGER_FAILURE_INVALID_REQUEST, 0);
+    }
+    if (s_request_queue == NULL) {
+        ESP_LOGE(TAG, "manager not started");
+        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_STATE, RADIO_MANAGER_FAILURE_NOT_STARTED, 0);
+    }
     QueueHandle_t response_queue = radio_manager_response_queue(request->client);
-    ESP_RETURN_ON_FALSE(response_queue != NULL, ESP_ERR_INVALID_ARG, TAG, "unknown client");
+    if (request->required == 0 || response_queue == NULL) {
+        ESP_LOGE(TAG, "%s", request->required == 0 ? "required capability is empty" : "unknown client");
+        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_ARG, RADIO_MANAGER_FAILURE_INVALID_REQUEST, 0);
+    }
 
     uint32_t request_id = radio_manager_next_request_id();
     TickType_t started_at = xTaskGetTickCount();
@@ -502,7 +559,7 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
     (void)xQueueReset(response_queue);
 
     if (xQueueSend(s_request_queue, &pending, wait_ticks) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
+        return radio_manager_acquire_finish(lease, ESP_ERR_TIMEOUT, RADIO_MANAGER_FAILURE_QUEUE_FULL, 0);
     }
 
     radio_manager_response_t response = { 0 };
@@ -520,7 +577,10 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
                 .token = request_id,
             };
             (void)xQueueSend(s_control_queue, &cancel, 0);
-            return ESP_ERR_TIMEOUT;
+            return radio_manager_acquire_finish(lease,
+                                                ESP_ERR_TIMEOUT,
+                                                radio_manager_timeout_failure(request_id),
+                                                0);
         }
         if (response.request_id == request_id) {
             break;
@@ -529,12 +589,15 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
     }
 
     if (response.result != ESP_OK) {
-        return response.result;
+        return radio_manager_acquire_finish(lease,
+                                            response.result,
+                                            response.detail.failure,
+                                            response.detail.wifi_failure_reason);
     }
 
     lease->client = request->client;
     lease->token = request_id;
-    return ESP_OK;
+    return radio_manager_acquire_finish(lease, ESP_OK, RADIO_MANAGER_FAILURE_NONE, 0);
 }
 
 esp_err_t radio_manager_release(const radio_manager_lease_t *lease)

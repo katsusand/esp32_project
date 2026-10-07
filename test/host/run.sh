@@ -108,6 +108,18 @@ run_case "error log repeat folding" "${BUILD_DIR}/test_error_log_dedupe"
 
 run_case "error log end to end" "${BUILD_DIR}/test_error_log_store_machine"
 
+# radio_manager: which Wi-Fi state means which failure, and the words a caller
+# puts in its error log line - every state, every failure, every Wi-Fi reason
+RADIO_MANAGER="${PROJECT_ROOT}/components/services/radio_manager"
+WIFI_CONNECTION="${PROJECT_ROOT}/components/services/wifi_connection"
+"${CC}" "${CFLAGS[@]}" -I"${RADIO_MANAGER}" -I"${RADIO_MANAGER}/include" \
+    -I"${WIFI_CONNECTION}/include" -I"${PROJECT_ROOT}/components/services/esp32_wifi_sta/include" \
+    "${RADIO_MANAGER}/radio_manager_failure.c" "${WIFI_CONNECTION}/wifi_connection_failure_text.c" \
+    "${SCRIPT_DIR}/test_radio_manager_failure.c" \
+    -o "${BUILD_DIR}/test_radio_manager_failure"
+
+run_case "radio manager failure reasons" "${BUILD_DIR}/test_radio_manager_failure"
+
 if [[ "${status}" -eq 0 ]]; then
     echo "all host tests passed"
 else

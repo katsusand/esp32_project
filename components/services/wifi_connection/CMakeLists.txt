@@ -2,11 +2,11 @@
 # select the real sources while the code is compiled as Wi-Fi disabled.
 string(TOLOWER "$ENV{APP_WIFI_STA}" APP_WIFI_STA_ENV)
 if(NOT "${APP_WIFI_STA_ENV}" MATCHES "^(0|false|off|no)$")
-    idf_component_register(SRCS "wifi_connection.c" "wifi_connection_manager.c"
+    idf_component_register(SRCS "wifi_connection.c" "wifi_connection_manager.c" "wifi_connection_failure_text.c"
                         INCLUDE_DIRS "include"
                         REQUIRES app_diagnostics error_log_store esp32_wifi_sta esp_timer wifi_profile_store)
 else()
-    idf_component_register(SRCS "wifi_connection_stub.c"
+    idf_component_register(SRCS "wifi_connection_stub.c" "wifi_connection_failure_text.c"
                         INCLUDE_DIRS "include"
                         REQUIRES esp32_wifi_sta)
 endif()

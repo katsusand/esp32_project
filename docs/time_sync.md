@@ -102,14 +102,14 @@ English supplement: SNTP is initialized for each sync attempt and deinitialized 
 
 同期に失敗すると、エラーログ（SD）に1行記録します。
 
-- 無線を確保できなかったとき: `time sync failed: no Internet connection`。接続できなかった理由（`AP not found` など）は、Wi-Fi 側が別の行に記録します
+- 無線を確保できなかったとき: `time sync failed: no Internet connection (<理由>)`。理由は `radio_manager_lease_failure_text()` の文字列で、`Wi-Fi setup required` や `Wi-Fi connect failed: AP not found` などです（一覧は [Radio Manager](radio_manager.md#failure-reasons)）。接続の失敗は、Wi-Fi 側も別の行に記録します
 - NTP が retry を使い切って失敗したとき: `time sync failed: NTP`。試行ごとではなく1回の要求につき1行です
 
 同期中に Wi-Fi setup を開くのは普通の操作なので、失敗にはしません。`radio_manager_acquire()` が `ESP_ERR_NOT_FINISHED`（一時停止）を返したら、エラーログには書かず、同期の要求も残したまま `TIME_SYNC_SETUP_PAUSE_POLL_SECONDS`（5秒）ごとに取り直します。setup の間は何分でも待ちます。setup が終わると接続できるか理由付きで失敗するので、同期はそこで成功するか、上の失敗として記録されます。
 
 同期の結果は、エラーログにも伝えます。成功すると `error_log_store_notify_time_decided(SYNCED)`、上の失敗のどちらかなら `FAILED`、時刻同期が無効のビルドは起動時に `UNAVAILABLE` です。エラーログは、この答えが出る（または 180 秒が過ぎる）まで行を RAM に溜め、日付が確かになってからファイルを作ります。詳しくは [Error Log Store](error_log_store.md#waiting-before-writing) を参照してください。
 
-English supplement: a failed sync request leaves one error log line with the stage that failed. A pause for Wi-Fi setup (ESP_ERR_NOT_FINISHED) is not a failure: the request is kept and retried every few seconds, without a time limit, until setup ends and the connection either succeeds or fails with a reason.
+English supplement: a failed sync request leaves one error log line with the stage that failed; a radio failure also carries the reason from the lease (`radio_manager_lease_failure_text()`). A pause for Wi-Fi setup (ESP_ERR_NOT_FINISHED) is not a failure: the request is kept and retried every few seconds, without a time limit, until setup ends and the connection either succeeds or fails with a reason.
 
 English supplement: The jitter is symmetric around the base interval. If subtracting jitter would underflow, the delay is clamped to at least 1 second.
 
