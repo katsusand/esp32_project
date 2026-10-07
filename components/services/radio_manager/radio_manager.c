@@ -243,9 +243,18 @@ static esp_err_t radio_manager_prepare_internet(bool *wifi_acquired)
         if (state == WIFI_CONNECTION_STATE_CONNECTED) {
             return ESP_OK;
         }
-        if (state == WIFI_CONNECTION_STATE_FAILED ||
-            state == WIFI_CONNECTION_STATE_SETUP_REQUIRED ||
-            state == WIFI_CONNECTION_STATE_STOPPED) {
+        /* All three return ESP_FAIL; the log line keeps which one it was. */
+        if (state == WIFI_CONNECTION_STATE_FAILED) {
+            ESP_LOGW(TAG, "Internet unavailable: Wi-Fi connection failed (reason=%d)",
+                     (int)wifi_connection_get_last_failure_reason());
+            return ESP_FAIL;
+        }
+        if (state == WIFI_CONNECTION_STATE_SETUP_REQUIRED) {
+            ESP_LOGW(TAG, "Internet unavailable: Wi-Fi setup required");
+            return ESP_FAIL;
+        }
+        if (state == WIFI_CONNECTION_STATE_STOPPED) {
+            ESP_LOGW(TAG, "Internet unavailable: Wi-Fi stopped");
             return ESP_FAIL;
         }
         esp_err_t err = wifi_connection_wait_connected(pdMS_TO_TICKS(RADIO_MANAGER_WIFI_WAIT_MS));
