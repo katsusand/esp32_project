@@ -146,8 +146,16 @@ esp_err_t cyd_clock_composition_start(void)
     cyd_clock_composition_start_optional("status indicator start failed", status_indicator_start());
     cyd_clock_composition_start_optional("Wi-Fi connection start failed", wifi_connection_start());
     cyd_clock_composition_start_optional("radio manager start failed", radio_manager_start());
-    cyd_clock_composition_start_optional("time sync start failed", time_sync_start());
+    esp_err_t time_sync_err = time_sync_start();
+    cyd_clock_composition_start_optional("time sync start failed", time_sync_err);
+    if (time_sync_err != ESP_OK) {
+        /* Nothing will ever answer the error log's clock question; do not make it wait. */
+        error_log_store_notify_time_decided(ERROR_LOG_TIME_UNAVAILABLE);
+    }
     cyd_clock_composition_start_optional("wifi rssi history start failed", wifi_rssi_history_start());
+#else
+    /* No Wi-Fi, so no time sync: the error log must not wait for a clock answer. */
+    error_log_store_notify_time_decided(ERROR_LOG_TIME_UNAVAILABLE);
 #endif
 
     cyd_clock_composition_preflight_nvs_health();

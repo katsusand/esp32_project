@@ -78,6 +78,36 @@ BOOT_ID="${PROJECT_ROOT}/components/support/boot_id"
 
 run_case "boot id" "${BUILD_DIR}/test_boot_id_format"
 
+# error_log_store: the pure parts - the line format, file names and today's
+# file, the hold buffer, folding of repeats
+ERROR_LOG_STORE="${PROJECT_ROOT}/components/services/error_log_store"
+for part in format naming hold dedupe; do
+    "${CC}" "${CFLAGS[@]}" -I"${ERROR_LOG_STORE}" \
+        "${ERROR_LOG_STORE}/error_log_${part}.c" "${SCRIPT_DIR}/test_error_log_${part}.c" \
+        -o "${BUILD_DIR}/test_error_log_${part}"
+done
+
+run_case "error log line format" "${BUILD_DIR}/test_error_log_format"
+run_case "error log file names" "${BUILD_DIR}/test_error_log_naming"
+run_case "error log hold buffer" "${BUILD_DIR}/test_error_log_hold"
+run_case "error log repeat folding" "${BUILD_DIR}/test_error_log_dedupe"
+
+# error_log_store: the real source against a card writer that really writes
+# files into a temporary directory, a clock that can be set or left unset, and
+# timers the test fires by moving the clock - held lines, the clock question,
+# file choice and appending, the boot line, date changes, a card that goes away.
+"${CC}" "${CFLAGS[@]}" -std=gnu11 \
+    -I"${ERROR_LOG_STORE}" -I"${ERROR_LOG_STORE}/include" \
+    -I"${PROJECT_ROOT}/components/services/sd_card_writer/include" \
+    -I"${PROJECT_ROOT}/components/platform/sd_card_storage/include" \
+    -I"${BOOT_ID}/include" \
+    "${ERROR_LOG_STORE}/error_log_format.c" "${ERROR_LOG_STORE}/error_log_naming.c" \
+    "${ERROR_LOG_STORE}/error_log_hold.c" "${ERROR_LOG_STORE}/error_log_dedupe.c" \
+    "${SCRIPT_DIR}/test_error_log_store_machine.c" \
+    -o "${BUILD_DIR}/test_error_log_store_machine"
+
+run_case "error log end to end" "${BUILD_DIR}/test_error_log_store_machine"
+
 if [[ "${status}" -eq 0 ]]; then
     echo "all host tests passed"
 else

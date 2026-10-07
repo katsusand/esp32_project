@@ -39,6 +39,13 @@ CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS=15000
 CONFIG_ESP32_WIFI_STA_WPA3_SAE_PWE_BOTH=y
 CONFIG_ESP32_WIFI_STA_AUTH_WPA2_PSK=y
 CONFIG_APP_SHELL_TASK_STACK_SIZE=10240
+
+#
+# FAT: long file names. The error log writes ERR_2026-10-07_01.LOG. error_log_store
+# stops the build with an #error when this is off, because every open would
+# otherwise fail with FR_INVALID_NAME and the log would silently never be written.
+#
+CONFIG_FATFS_LFN_HEAP=y
 CONFIG_WIFI_CONNECTION_TASK_STACK_SIZE=9216
 
 #

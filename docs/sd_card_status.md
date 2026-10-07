@@ -61,7 +61,9 @@ English supplement: a full card stays mounted so it can still be read; only logg
 
 ## Error Log Files
 
-エラーログのファイルは、最初の 1 行を書くときに作られます。エラーのない起動はファイルを作りません。そのため、このコンポーネントは起動直後の最初のマウントをログに書きません。書くと、起動のたびに `ERR_xxxx.LOG` が 1 つ増えます。
+エラーログの書き方（ファイル名、追記、起動ごとの `boot:` 行、時刻の問いに答えが出るまで溜めること）は [Error Log Store](error_log_store.md) が決めます。このコンポーネントは、カードの準備ができたときに `error_log_store_start()`、カードが無くなる・満杯になるときに `error_log_store_stop()` を呼ぶだけです。
+
+エラーログのファイルは、最初の 1 行を書くときに作られます。エラーのない起動はファイルを作りません。そのため、このコンポーネントは起動直後の最初のマウントをログに書きません。書くと、起動のたびに、そのためだけにファイルが作られます。
 
 ログに残るのは、カードが一度確認された後の変化だけです。
 
@@ -70,9 +72,9 @@ English supplement: a full card stays mounted so it can still be read; only logg
 [789012 ms] sd_card_status: SD card NO_CARD -> OK: mounted, logging
 ```
 
-復帰のたびに新しいログファイル（次の番号）が使われます。抜いていた間の空白は、その行から読み取れます。
+抜いている間に記録された行は RAM に溜まり、カードが戻ったときに、正しい日時でファイルへ書かれます。同じ日付のファイルがあれば、それに追記し、先頭に新しい `boot:` 行を付けます。抜いていた間の空白は、その行から読み取れます。
 
-English supplement: the first mount is deliberately silent (serial only). Only a change after the card has been seen is written to the card: it filled up, or it came back.
+English supplement: the first mount is deliberately silent (serial only). Only a change after the card has been seen is written to the card: it filled up, or it came back. Lines made while the card is out are held in RAM and written when it returns.
 
 ## Public API
 

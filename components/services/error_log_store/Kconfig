@@ -1,0 +1,37 @@
+menu "Error Log Store"
+
+    config ERROR_LOG_STORE_HOLD_BYTES
+        int "RAM for lines that cannot be written yet (bytes)"
+        default 4096
+        range 512 16384
+        help
+            カードがまだ使えない間、または時刻の判定が済むまでの間、エラーの行を
+            RAM に溜めておく大きさです。あふれたときは新しい行を捨てて、捨てた件数を
+            ログの最初の行に書きます。1 行は 100 バイト前後なので、4096 で約 35 行です。
+            English: room for lines waiting for the card or for the clock question to be
+            answered. When full, the newest are refused and counted.
+
+    config ERROR_LOG_STORE_TIME_WAIT_SECONDS
+        int "Longest wait for the clock question (seconds)"
+        default 180
+        range 10 3600
+        help
+            時刻同期の成功も失敗も報告されないまま (Wi-Fi 設定中、時刻同期なしのビルドなど)
+            起動からこの秒数が過ぎたら、失敗として扱って書き始めます。このとき時計が
+            合っていなければ、ファイル名は 1970-01-01 の日付になります。
+            通常の失敗 (接続できない: 最大約 30 秒、NTP が 6 回失敗: 最大約 2〜3 分) より
+            長くしてください。
+            English: after this long since boot without an answer, writing starts as if the
+            sync had failed.
+
+    config ERROR_LOG_STORE_REPEAT_WINDOW_SECONDS
+        int "Window for folding repeated errors (seconds)"
+        default 10
+        range 0 600
+        help
+            同じ行 (タグ・関数・行・コード・メッセージが同じ) がこの秒数の間に繰り返したら、
+            最初の 1 行だけ書き、窓の最後に「N 回繰り返した」と 1 行書きます。0 で無効です。
+            English: the same line repeating inside this window is written once, then
+            counted. 0 turns folding off.
+
+endmenu

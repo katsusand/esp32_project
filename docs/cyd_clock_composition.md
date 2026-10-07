@@ -41,7 +41,7 @@ NVS が不正な場合は、この判定より前に settings と Initialize NVS
 
 ## Feature Switches
 
-`APP_WIFI_STA=0` で再構成したビルドでは、composition は Wi-Fi startup 群を起動しません。対象は `wifi_connection`、`radio_manager`、`time_sync`、`status_indicator` の起動と、Wi-Fi setup 中の home return guard です。
+`APP_WIFI_STA=0` で再構成したビルドでは、composition は Wi-Fi startup 群を起動しません。時刻の取得元が無いことは、composition がエラーログへ `UNAVAILABLE` として知らせます（エラーログが、時刻の答えを待たずに書き始められるようにするためです）。対象は `wifi_connection`、`radio_manager`、`time_sync`、`status_indicator` の起動と、Wi-Fi setup 中の home return guard です。
 
 Wi-Fi 無効ビルドでも `cyd_clock_app` は同じ API を呼べますが、下位 service は stub 実装として `ESP_ERR_NOT_SUPPORTED` または安全な空状態を返します。
 
