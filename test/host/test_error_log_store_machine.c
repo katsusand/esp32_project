@@ -772,6 +772,21 @@ static void test_repeats_are_folded(void)
     check(count_substring(text, "connect failed") == 2, "after the burst the same error is written again");
 }
 
+static void test_one_repeat_reads_in_the_singular(void)
+{
+    setup();
+    set_clock(utc(2026, 10, 7, 8, 0, 0));
+    error_log_store_start();
+    for (int i = 0; i < 2; ++i) {
+        ERROR_LOG_MSG("once more"); /* one line of source: the second is a repeat */
+        advance_ms(1000);
+    }
+    advance_ms(12000);
+    const char *text = read_file("ERR_2026-10-07_01.LOG");
+    check(strstr(text, "previous line repeated 1 more time\n") != NULL, "a single left-out repeat reads \"1 more time\"");
+    check(strstr(text, "1 more times") == NULL, "and never \"1 more times\"");
+}
+
 static void test_stop_writes_folded_counts(void)
 {
     setup();
@@ -911,6 +926,7 @@ int main(void)
     test_lines_while_the_card_is_out_are_kept();
     test_hold_overflow();
     test_repeats_are_folded();
+    test_one_repeat_reads_in_the_singular();
     test_stop_writes_folded_counts();
     test_macro_line();
     test_legacy_entry_points();

@@ -73,7 +73,9 @@ English supplement: the file is a function of today's date. The newest file of t
 
 ### Long File Names
 
-ファイル名は 8.3 に収まりません。FATFS の長いファイル名（`CONFIG_FATFS_LFN_HEAP`）が必要で、`sdkconfig.defaults` が有効にします。既存の `sdkconfig` は `sdkconfig.defaults` の変更を引き継がないので、無効のままだとビルドが `#error` で止まります。その場合は `idf.py menuconfig` で FAT Filesystem support の Long filename support を有効にするか、`sdkconfig` を消して再構成してください。
+ファイル名は 8.3 に収まりません。FATFS の長いファイル名（`CONFIG_FATFS_LFN_HEAP`）が必要で、`sdkconfig.defaults` が有効にします。既存の `sdkconfig` は `sdkconfig.defaults` の変更を引き継がないので、無効のままだとビルドが `#error` で止まります。その場合は `idf.py menuconfig` で FAT Filesystem support の Long filename support を有効にするか、プロジェクト直下の `sdkconfig` ファイルを消して再構成してください。
+
+`idf.py fullclean` は `build/` を消すだけで、`sdkconfig` は消しません。`menuconfig` も、残っている `sdkconfig` を読み込むので、どちらも、それだけでは直りません。
 
 English supplement: long names are required. The build fails on purpose rather than letting every file open fail with FR_INVALID_NAME at run time, which would leave a unit that never writes its log and says nothing.
 
@@ -135,6 +137,7 @@ English supplement: lines wait until the card is ready AND the clock question is
 [... +22400ms] wifi_connection connect_task:312: previous line repeated 41 more times
 ```
 
+- 繰り返しが 1 回のときは `1 more time`、2 回以上は `N more times` と書きます
 - メッセージが違えば別の記録です（カード番号が違うなど）。畳むのは完全に同じものだけなので、失われる情報はありません
 - ほかの行が来なくても、窓が終わるとタイマで書きます。`error_log_store_stop()` でも、溜まった回数を書いてから閉じます
 - `0` にすると、畳みません

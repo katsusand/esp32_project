@@ -28,7 +28,7 @@
  * the log would silently never be written, so the build stops here instead.
  */
 #if CONFIG_FATFS_LFN_NONE
-#error "error_log_store writes long file names: enable CONFIG_FATFS_LFN_HEAP (sdkconfig.defaults sets it, but an existing sdkconfig keeps its old value). Run `idf.py menuconfig` > Component config > FAT Filesystem support > Long filename support, or delete sdkconfig and reconfigure."
+#error "error_log_store writes long file names: enable CONFIG_FATFS_LFN_HEAP (sdkconfig.defaults sets it, but an existing sdkconfig keeps its old value). Run `idf.py menuconfig` > Component config > FAT Filesystem support > Long filename support, or delete the sdkconfig file in the project root and reconfigure. Note that `idf.py fullclean` removes build/ only, not sdkconfig, and opening menuconfig without changing the option keeps the old value, so neither fixes this by itself."
 #endif
 
 #ifndef CONFIG_ERROR_LOG_STORE_HOLD_BYTES
@@ -571,9 +571,10 @@ static void error_log_store_emit_repeat(const error_log_repeat_t *repeat, uint64
     char body[ERROR_LOG_BODY_MAX];
     int length = snprintf(body,
                           sizeof(body),
-                          "%s: previous line repeated %u more times",
+                          "%s: previous line repeated %u more time%s",
                           repeat->label,
-                          (unsigned)repeat->count);
+                          (unsigned)repeat->count,
+                          repeat->count == 1U ? "" : "s");
 
     if (length > 0) {
         error_log_store_emit(now_uptime_ms, false, body, strlen(body));
