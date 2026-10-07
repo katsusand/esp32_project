@@ -90,7 +90,8 @@ menu "CYD Input"
         depends on CYD_TOUCH_ENABLED
         help
             When enabled, debounced touch press/release and coordinate updates
-            are logged.
+            are logged. Only in a development build (DEV=1, which defines
+            APP_DEV): a release build prints no touch log whatever this is set to.
 
     config CYD_TOUCH_LOG_IRQ_LEVEL
         bool "Include CYD touch IRQ level in serial logs"

@@ -278,7 +278,7 @@ English supplement: This keeps the persisted `touch_cal` blob layout stable whil
 - `CONFIG_CYD_BOOT_BUTTON_ENABLE_INTERNAL_PULLUP`: BOOT ボタン GPIO の内部 pull-up を有効にする
 - `CONFIG_CYD_BOOT_BUTTON_LONG_PRESS_MAX_SECONDS`: BOOT ボタン長押し通知の最大秒数
 - `CONFIG_CYD_BOOT_BUTTON_DOUBLE_CLICK_TIMEOUT_MS`: BOOT ボタン double click 判定の待ち時間
-- `CONFIG_CYD_TOUCH_LOG_EVENTS`: タッチイベントログを有効にする
+- `CONFIG_CYD_TOUCH_LOG_EVENTS`: タッチイベントログを有効にする。開発ビルド（`DEV=1`、`APP_DEV` が定義される）でだけ効きます。リリースビルドでは、この設定にかかわらずタッチのログは出ません
 - `CONFIG_CYD_TOUCH_LOG_IRQ_LEVEL`: タッチログに IRQ レベルを含める
 - `CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION`: タッチ補正値を NVS に保存/読込する
 - `CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT`: 保存済み補正がない場合に起動時補正を実行する
@@ -286,4 +286,4 @@ English supplement: This keeps the persisted `touch_cal` blob layout stable whil
 - `CONFIG_CYD_INPUT_LONG_PRESS_MS`: 長押し判定までの時間
 - `CONFIG_CYD_INPUT_LONG_PRESS_REPEAT_MS`: 長押し繰り返し通知の間隔
 
-English supplement: Touch polling period and click timing directly affect user interaction latency. Keep them explicit when changing UI behavior.
+English supplement: touch logging is compiled in only when `APP_DEV` is defined, so a release build prints no line per touch regardless of `CONFIG_CYD_TOUCH_LOG_EVENTS`. Touch polling period and click timing directly affect user interaction latency. Keep them explicit when changing UI behavior.
