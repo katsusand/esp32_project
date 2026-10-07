@@ -14,6 +14,7 @@ English supplement: This component is the product composition root. It selects a
 main
   -> cyd_clock_composition
        -> system_boot (NVS / CYD platform / input calibration)
+       -> sd_card_status (SD card: its own task mounts it and starts the error log)
        -> time_tick / app_scheduler (service only)
        -> Wi-Fi / radio / time sync
        -> register apps (clock + its settings screen + its alarms)

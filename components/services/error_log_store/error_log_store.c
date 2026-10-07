@@ -2,6 +2,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -35,6 +37,16 @@ static const size_t ERROR_LOG_LINE_MAX = 256;
  * only the serial log has them.
  */
 static sd_card_writer_stream_t *volatile s_stream;
+/*
+ * Producers currently inside sd_card_writer_write() on s_stream.
+ *
+ * English contract: error_log_store_stop() closes and frees the stream while any
+ * task may be logging. It first unpublishes s_stream, so no new producer can
+ * pick it up, then waits for the ones already holding it to leave. That wait is
+ * short because the write below never waits for room (wait_ticks 0).
+ */
+static portMUX_TYPE s_stream_lock = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t s_producers_in_flight;
 static bool s_sink_warning_emitted = false;
 
 static void error_log_store_warn_sink_failure_once(esp_err_t err, const char *detail)
@@ -135,22 +147,64 @@ esp_err_t error_log_store_start(void)
     };
     sd_card_writer_stream_t *stream = NULL;
     ESP_RETURN_ON_ERROR(sd_card_writer_open_stream(&config, &stream), ERROR_LOG_TAG, "error log stream failed");
+    /* A new stream is a new chance to say why logging stopped. */
+    s_sink_warning_emitted = false;
+    portENTER_CRITICAL(&s_stream_lock);
     s_stream = stream;
+    portEXIT_CRITICAL(&s_stream_lock);
     sd_card_writer_set_report_fn(error_log_store_on_sd_report, NULL);
     return ESP_OK;
+}
+
+esp_err_t error_log_store_stop(void)
+{
+    portENTER_CRITICAL(&s_stream_lock);
+    sd_card_writer_stream_t *stream = s_stream;
+    s_stream = NULL;
+    portEXIT_CRITICAL(&s_stream_lock);
+    if (stream == NULL) {
+        return ESP_OK;
+    }
+
+    while (s_producers_in_flight > 0) {
+        vTaskDelay(1);
+    }
+    /* ESP_FAIL: the stream had already failed, or failed while closing. It is
+       closed and freed either way. */
+    return sd_card_writer_close_stream(stream);
+}
+
+bool error_log_store_is_failed(void)
+{
+    sd_card_writer_stream_t *stream = s_stream;
+    sd_card_writer_stats_t stats = { 0 };
+
+    if (stream == NULL || sd_card_writer_get_stats(stream, &stats) != ESP_OK) {
+        return false;
+    }
+    return stats.failed;
 }
 
 esp_err_t error_log_store_write_error_log(const char *line)
 {
     ESP_RETURN_ON_FALSE(line != NULL, ESP_ERR_INVALID_ARG, ERROR_LOG_TAG, "line is null");
 
+    portENTER_CRITICAL(&s_stream_lock);
     sd_card_writer_stream_t *stream = s_stream;
+    if (stream != NULL) {
+        ++s_producers_in_flight;
+    }
+    portEXIT_CRITICAL(&s_stream_lock);
     if (stream == NULL) {
         /* Not started (early boot, or no card): the caller's own serial log
            line is all there is. */
         return ESP_OK;
     }
+
     esp_err_t err = sd_card_writer_write(stream, line, strlen(line), 0);
+    portENTER_CRITICAL(&s_stream_lock);
+    --s_producers_in_flight;
+    portEXIT_CRITICAL(&s_stream_lock);
     if (err != ESP_OK) {
         error_log_store_warn_sink_failure_once(err, "error log line dropped");
     }

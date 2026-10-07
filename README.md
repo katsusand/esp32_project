@@ -82,6 +82,7 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `components/services/time_sync/`: SNTP/NTP 時刻同期
 - `components/services/app_scheduler/`: アプリ共通の時刻スケジューラー
 - `components/services/sd_card_writer/`: SD カードへの継続的な書き込みを1つの task にまとめる service（ログ用）
+- `components/services/sd_card_status/`: SD カードの状態（未挿入・未フォーマット・空き容量なし・異常）の判定と、抜き差しからの復帰、問題を示すアイコン
 - `components/apps/cyd_clock_app/`: clock app
 - `components/apps/cyd_clock_alarm/`: clock app の alarm (時計の一部。`cyd_clock_app_register()` がインストールする)
 - `components/apps/cyd_clock_settings_app/`: clock-specific settings app
@@ -319,6 +320,18 @@ English supplement: Unless there is a specific reason to validate a non-developm
 
 AI / IDE Assistant は、ユーザーから明示的に別条件を指定されていない限り、ビルド手順の案内では `DEV=1` を優先してください。
 
+## Host Tests
+
+SDK に依存しない判断（SD カードの状態、アイコンの絵など）は、ホストの C コンパイラで検証できます。実機は要りません。
+
+```bash
+bash test/host/run.sh
+```
+
+`test/host/stub/` の最小限の ESP-IDF スタブに対して、component の実際のソースをコンパイルします。SDSPI ドライバ、実物のカード、画面は対象外なので、それらは実機で確認してください。詳細は [SD Card Status](docs/sd_card_status.md#tests) を参照してください。
+
+English supplement: the host tests compile the real component sources against minimal stubs, so they cover decisions and state machines, not drivers or hardware.
+
 ## Build Directory Handling
 
 `build/` はマシン依存・環境依存の生成物です。別の Mac、別の Python 環境、別の ESP-IDF セットアップで作られた `build/` を、そのまま安全に再利用できる前提では扱いません。
@@ -449,6 +462,7 @@ source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py
 - [Time Sync](docs/time_sync.md)
 - [SD Card Storage](docs/sd_card_storage.md)
 - [SD Card Writer](docs/sd_card_writer.md)
+- [SD Card Status](docs/sd_card_status.md)
 - [SD Card Files](docs/sd_card_files.md)
 - [Error Log Store](docs/error_log_store.md)
 - [CYD Clock App](docs/cyd_clock_app.md)

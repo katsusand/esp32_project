@@ -11,11 +11,19 @@ English supplement: logging never blocks the caller on the card. The line is que
 ## Public API
 
 - `error_log_store_start()`
+- `error_log_store_stop()`
+- `error_log_store_is_failed()`
 - `error_log_store_write_error_log(line)`
 - `error_log_store_append_message(tag, message)`
 - `error_log_store_append_esp_err(tag, message, err)`
 
-`error_log_store_start()` は SD の mount と `sd_card_writer_start()` の後に一度呼びます。この製品では composition が呼びます。それより前の行と、SD が無いときの行は捨てます（呼び出し元の serial log には残ります）。
+`error_log_store_start()` は SD の mount と `sd_card_writer_start()` の後に呼びます。[SD Card Status](sd_card_status.md) が、カードを mount できるたびに呼びます。composition が直接呼ぶことはありません。それより前の行と、SD が無いときの行は捨てます（呼び出し元の serial log には残ります）。
+
+`error_log_store_stop()` は stream を閉じます。以後の行は、`error_log_store_start()` をもう一度呼ぶまで捨てます。カードを unmount する前と、空き容量が尽きる前に使います。他の task が書いている最中に呼んでも安全で、戻った後は、どの task も stream を持っていません。
+
+`error_log_store_is_failed()` は、カードの書き込みが失敗して stream が止まったかを返します。止まった stream は、書き込みが再開することはありません。`stop` の後に `start` して、開き直したものだけが書けます。
+
+English supplement: `stop` waits for producers that are inside `sd_card_writer_write()`, which never waits for room here, so it returns quickly. A stream that has failed does not recover on its own; closing it and starting a new one is the only way back, and each new stream starts a new `ERR_xxxx.LOG` file.
 
 `error_log_store_start()` は `sd_card_writer` の報告先にもなります。ほかのストリームの取りこぼし（まとめて最大10秒に1行）とストリームの失敗が、tag `sd_card_writer` の行として記録されます（[SD Card Writer](sd_card_writer.md#reports)）。エラーログ自身のストリームは報告の対象外です。
 
