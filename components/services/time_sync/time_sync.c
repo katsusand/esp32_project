@@ -489,7 +489,8 @@ static void time_sync_task(void *arg)
             continue;
         }
         if (radio_err != ESP_OK) {
-            ERROR_LOG(radio_err, "time sync failed: no Internet connection");
+            ERROR_LOG(radio_err, "time sync failed: no Internet connection (%s)",
+                      radio_manager_lease_failure_text(&lease));
             /* An answer for the error log, which holds its lines until it knows whether the clock is right. */
             error_log_store_notify_time_decided(ERROR_LOG_TIME_FAILED);
             time_sync_record_attempt_status(radio_err);

@@ -246,25 +246,6 @@ static void wifi_connection_log_stack_usage(void)
     APP_STACK_MONITOR_CHECK(TAG, "wifi_connection", CONFIG_WIFI_CONNECTION_STACK_LOG_INTERVAL_MS);
 }
 
-static const char *wifi_connection_failure_reason_text(esp32_wifi_sta_failure_reason_t reason)
-{
-    switch (reason) {
-    case ESP32_WIFI_STA_FAILURE_NO_SAVED_PROFILE:
-        return "no saved profile";
-    case ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE:
-        return "AP not found";
-    case ESP32_WIFI_STA_FAILURE_AUTH:
-        return "auth failed";
-    case ESP32_WIFI_STA_FAILURE_TIMEOUT:
-        return "timeout";
-    case ESP32_WIFI_STA_FAILURE_CONNECT:
-        return "connect failed";
-    case ESP32_WIFI_STA_FAILURE_NONE:
-    default:
-        return "unknown";
-    }
-}
-
 /*
  * One error log line per failed connection sequence, never per attempt, with
  * the reason ("auth failed" usually means a wrong password). No SSID: it can
@@ -630,7 +611,8 @@ static void wifi_connection_handle_sta_event(const esp32_wifi_sta_event_t *event
 {
     if (event->type == ESP32_WIFI_STA_EVENT_DISCONNECTED &&
         s_wifi_connection.state == WIFI_CONNECTION_STATE_CONNECTED) {
-        ESP_LOGW(TAG, "Wi-Fi link lost (reason=%d); reconnecting", (int)event->failure_reason);
+        ESP_LOGW(TAG, "Wi-Fi link lost (%s); reconnecting",
+                 wifi_connection_failure_reason_text(event->failure_reason));
         wifi_connection_request_connect(WIFI_CONNECTION_STATE_RECONNECTING);
     }
     /* Anything else belongs to an attempt that has already ended. */
@@ -725,9 +707,6 @@ static void wifi_connection_task(void *arg)
         s_wifi_connection.setup_requested_on_start = false;
         wifi_connection_set_setup_required(true);
     } else if (!configured) {
-        /* Once per boot. The radio_manager clients' own lines only say there was
-           no connection; this is the one that says why. */
-        ERROR_LOG_MSG("Wi-Fi not configured: setup required");
         wifi_connection_set_setup_required(false);
     } else {
         (void)wifi_connection_turn_off();

@@ -97,6 +97,23 @@ uint32_t wifi_connection_get_connected_duration_seconds(void);
 uint32_t wifi_connection_get_connected_duration_high_water_seconds(void);
 wifi_connection_warning_t wifi_connection_get_warning(void);
 esp32_wifi_sta_failure_reason_t wifi_connection_get_last_failure_reason(void);
+/*
+ * The words for a failure reason, for log lines ("auth failed" usually means a
+ * wrong password). One set of words, shared by the error log and the serial log
+ * here and by radio_manager, which builds its own texts from the macros.
+ *
+ * English contract: short, ASCII and stable. No SSID (it tells where the device
+ * is installed) and nothing that changes from one failure to the next, because
+ * the error log folds repeats only when the whole line is the same.
+ * ESP32_WIFI_STA_FAILURE_NONE and unknown values give "unknown".
+ */
+#define WIFI_CONNECTION_FAILURE_TEXT_NO_SAVED_PROFILE "no saved profile"
+#define WIFI_CONNECTION_FAILURE_TEXT_NO_AP_IN_RANGE   "AP not found"
+#define WIFI_CONNECTION_FAILURE_TEXT_AUTH             "auth failed"
+#define WIFI_CONNECTION_FAILURE_TEXT_TIMEOUT          "timeout"
+#define WIFI_CONNECTION_FAILURE_TEXT_CONNECT          "connect failed"
+#define WIFI_CONNECTION_FAILURE_TEXT_UNKNOWN          "unknown"
+const char *wifi_connection_failure_reason_text(esp32_wifi_sta_failure_reason_t reason);
 bool wifi_connection_can_request_connection(void);
 bool wifi_connection_is_enabled(void);
 bool wifi_connection_is_setup_active(void);

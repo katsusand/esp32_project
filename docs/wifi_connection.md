@@ -83,6 +83,10 @@ English supplement: Credential persistence is gated by a successful live connect
 
 English supplement: one error log line per failed connection sequence (automatic connect, or the setup connection test), with the failure reason and without the SSID. Attempts are not logged one by one.
 
+理由の言葉は `wifi_connection_failure_reason_text()` で公開しています。エラーログ、シリアルログ、`radio_manager` の失敗の文字列は、すべてこの言葉（`wifi_connection.h` の `WIFI_CONNECTION_FAILURE_TEXT_*`）を使います。Wi-Fi が未設定であること自体はエラーログに書きません。インターネットを要求した側が、自分の失敗の行に `Wi-Fi setup required` として残します。
+
+English contract: one public set of reason words, shared by the error log, the serial log and radio_manager. An unconfigured Wi-Fi is not an error by itself; the client that needed the Internet records it on its own line.
+
 ## Setup
 
 setup UI は `wifi_connection_begin_setup()` で通常の接続処理を止めて `SETUP_RUNNING` にし、完了時に `wifi_connection_complete_setup()` を呼びます。接続テストが成功した後なら `CONNECTED` です。キャンセルの場合、active user がいなければ STA を止めて `OFF`、いれば保存済み profile で接続し直します（`CONNECTING`）。
