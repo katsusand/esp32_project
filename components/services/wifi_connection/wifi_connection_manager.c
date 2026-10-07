@@ -725,6 +725,9 @@ static void wifi_connection_task(void *arg)
         s_wifi_connection.setup_requested_on_start = false;
         wifi_connection_set_setup_required(true);
     } else if (!configured) {
+        /* Once per boot. The radio_manager clients' own lines only say there was
+           no connection; this is the one that says why. */
+        ERROR_LOG_MSG("Wi-Fi not configured: setup required");
         wifi_connection_set_setup_required(false);
     } else {
         (void)wifi_connection_turn_off();
