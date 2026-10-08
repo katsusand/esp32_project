@@ -10,16 +10,15 @@ English supplement: This component is product-specific UI. It edits the clock's 
 
 ## Pages
 
-現在は以下の page を持ちます。
+現在は以下の page を持ちます。見出しは「時計の設定」で、文字はすべて 16px です。画面の組み立ては `cyd_clock_settings_view.c` にあります。
 
-- `ALARM1`
-  Alarm 1 の hour / minute と weekday mask を変更する
-- `ALARM2`
-  Alarm 2 の hour / minute を変更する
-- `SCHED`
-  `app_scheduler` の登録状況を診断表示する
+| 表示名 | 内容 |
+|---|---|
+| アラーム1 | 時・分と曜日 (日〜土のボタン) を変更する |
+| アラーム2 | 時・分を変更する |
+| スケジュール | `app_scheduler` の登録状況を診断表示する |
 
-画面下部の `<` / `>` で page を切り替え、左上の `<<` で遷移元 app へ戻ります。
+画面下部の「前へ」「次へ」で page を切り替え、左上の「戻る」で遷移元 app へ戻ります。
 
 ## Alarm Pages
 
@@ -27,21 +26,21 @@ English supplement: This component is product-specific UI. It edits the clock's 
 
 - hour は `0..23`
 - minute は `0..59`
-- `ALARM1` は `SUN` から `SAT` の weekday button を持つ
+- アラーム1 は日〜土の曜日ボタンを持つ。選んだ曜日は塗りで表示する
 - 曜日を 1 つも選ばない状態も有効。その場合 `ALARM1` は発火しない（「絶対に鳴らさない」という明示的な設定として扱う）
 
-`-` / `+` の stepper は `PRESS` と `REPEAT` で反応します。通常 button は `RELEASE` 時に同じ button 上で離された場合だけ確定します。
+「−」「+」の stepper は `PRESS` と `REPEAT` で反応します。時・分は端で反対側へ回り込みます。通常 button は `RELEASE` 時に同じ button 上で離された場合だけ確定します。
 
 English supplement: Stepper actions are intentionally handled separately from confirmed tap actions so long-press repeat works without affecting normal buttons.
 
 ## Scheduler Page
 
-`SCHED` は `app_scheduler_list()` の結果を表示する診断 page です。
+「スケジュール」は `app_scheduler_list()` の結果を表示する診断 page です。
 
 表示内容は以下です。
 
-- `schedules: n/5`
-- 各 entry: `slot owner/tag mode+behavior scope state time`
+- 「登録 n / 5 件」
+- 各 entry を 2 行で: 1 行目に `slot owner/tag` と状態 (待機中 / 動作中 / 無効 / 停止)、2 行目に時刻と `edge` / `latched`、`app` / `feature`。owner・tag と behavior・scope は `app_scheduler` の識別子・用語なので英語のまま
 
 `mode+behavior` は短縮表示です。
 
