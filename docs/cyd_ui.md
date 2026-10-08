@@ -73,6 +73,24 @@ cyd_ui_add_styled_button(&screen, "出勤", 1, 4, 18, 9, CYD_DISPLAY_FONT_TITLE,
 
 English supplement: string literals passed to these calls are referenced, not copied, so they may be any length. Formatted text is copied and capped at `CYD_DISPLAY_TEXT_MAX_LEN` bytes.
 
+## Settings Chrome
+
+設定画面の共通の枠 (`cyd_ui_add_settings_chrome()`、または `cyd_ui_add_settings_title()` / `_back()` / `_page_nav()`) は、日本語書体とテーマ色で描きます。
+
+```text
+rows 0-3    [戻る] 見出し                       (見出しの帯)
+rows 4-26   ページの中身 (呼び出し側が描く)
+rows 27-29  [前へ]     ページ名 n/N     [次へ]
+```
+
+- 枠は画面の背景を塗らない。旧 ASCII 書体のままのページは背景が黒のままなので、旧書体の文字 (自分の枠を黒で塗る) が浮かない
+- 見出しの帯は `cyd_ui_add_settings_title()` が描くので、ページの中身より先に呼ぶ
+- ページ名が長いときは文字境界で切り、` n/N` は必ず残す
+
+増減行 (`cyd_ui_add_stepper_row()`) は、項目名を 16px 太字、値を 24px 太字 (行の高さが 24px 未満なら 16px 太字) で描きます。`−` / `+` のボタンは、入る中で一番大きい書体を使います。旧寸法の小さいボタン (幅 24px、高さ 16px) と、16px 太字に入らない項目名は旧 ASCII 書体に戻すので、ページを日本語化するまでも読めます。新しく作る行は、抵抗膜タッチのため高さ 4 行 (32px) 以上にしてください。
+
+English supplement: the chrome deliberately leaves the background to the page. Pages are converted one at a time; a themed background under a legacy page would show its text boxes as black blocks.
+
 ## Graph Widgets
 
 グラフ系は `cyd_ui_add_rect()` / `cyd_ui_add_bar()` / `cyd_ui_add_sparkline()` で追加します。いずれもグリッドで箱を指定し、中身はピクセル精度で描かれます。

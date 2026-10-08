@@ -37,21 +37,6 @@ static uint16_t cyd_ui_button_border_color(uint16_t border_color, bool enabled)
     return enabled ? border_color : CYD_UI_COLOR_DISABLED_BORDER;
 }
 
-static uint16_t cyd_ui_stepper_row_button_fg_color(const cyd_ui_stepper_row_t *row)
-{
-    return row->has_button_fg_color ? row->button_fg_color : CYD_UI_COLOR_WHITE;
-}
-
-static uint16_t cyd_ui_stepper_row_button_bg_color(const cyd_ui_stepper_row_t *row)
-{
-    return row->has_button_bg_color ? row->button_bg_color : CYD_UI_COLOR_BLUE;
-}
-
-static uint16_t cyd_ui_stepper_row_button_border_color(const cyd_ui_stepper_row_t *row)
-{
-    return row->has_button_border_color ? row->button_border_color : CYD_UI_COLOR_CYAN;
-}
-
 bool cyd_ui_add_text(cyd_display_screen_t *screen,
                      const char *text,
                      uint8_t col,
@@ -410,70 +395,112 @@ bool cyd_ui_add_panel(cyd_display_screen_t *screen,
     return cyd_ui_add_widget(screen, &widget);
 }
 
+/*
+ * The largest face in which `text` fits a button of the given size: 24px bold,
+ * then 16px bold, then the legacy ASCII font. Small legacy-sized buttons keep
+ * a readable "-" instead of an ellipsis until their page is laid out again.
+ */
+static cyd_display_font_t cyd_ui_button_font_for(const char *text, uint8_t span_cols, uint8_t span_rows)
+{
+    /* WIDGET_BUTTON_TEXT_INSET_PX on each side, in cyd_display_render.hpp. */
+    const int32_t inner_w = (int32_t)span_cols * CYD_DISPLAY_GRID_CELL_PX - 2 * 6;
+    const int32_t h = (int32_t)span_rows * CYD_DISPLAY_GRID_CELL_PX;
+
+    if (h >= 24 && cyd_display_text_width(CYD_DISPLAY_FONT_TITLE, text) <= inner_w) {
+        return CYD_DISPLAY_FONT_TITLE;
+    }
+    if (h >= 16 && cyd_display_text_width(CYD_DISPLAY_FONT_BODY_BOLD, text) <= inner_w) {
+        return CYD_DISPLAY_FONT_BODY_BOLD;
+    }
+    return CYD_DISPLAY_FONT_LEGACY;
+}
+
 esp_err_t cyd_ui_add_stepper_row(cyd_display_screen_t *screen,
                                  const cyd_ui_stepper_row_t *row)
 {
-    ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, "cyd_ui", "screen is null");
-    ESP_RETURN_ON_FALSE(row != NULL, ESP_ERR_INVALID_ARG, "cyd_ui", "row is null");
-    ESP_RETURN_ON_FALSE(row->label_text != NULL, ESP_ERR_INVALID_ARG, "cyd_ui", "row label is null");
-    ESP_RETURN_ON_FALSE(row->value_text != NULL, ESP_ERR_INVALID_ARG, "cyd_ui", "row value is null");
+    ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, TAG, "screen is null");
+    ESP_RETURN_ON_FALSE(row != NULL, ESP_ERR_INVALID_ARG, TAG, "row is null");
+    ESP_RETURN_ON_FALSE(row->label_text != NULL, ESP_ERR_INVALID_ARG, TAG, "row label is null");
+    ESP_RETURN_ON_FALSE(row->value_text != NULL, ESP_ERR_INVALID_ARG, TAG, "row value is null");
 
-    ESP_RETURN_ON_FALSE(cyd_ui_add_text(screen,
-                                        row->label_text,
-                                        row->label_col,
-                                        row->row,
-                                        row->label_span_cols,
-                                        row->button_span_rows,
-                                        CYD_DISPLAY_ALIGN_LEFT,
-                                        row->label_scale > 0 ? row->label_scale : 1,
-                                        CYD_UI_COLOR_WHITE),
+    /* The *_scale fields belong to the legacy font and are ignored here. The
+       value uses 24px text when the row is tall enough for it. */
+    const cyd_display_font_t value_font = row->button_span_rows * CYD_DISPLAY_GRID_CELL_PX >= 24
+                                              ? CYD_DISPLAY_FONT_TITLE
+                                              : CYD_DISPLAY_FONT_BODY_BOLD;
+    const cyd_display_font_t button_font =
+        cyd_ui_button_font_for("−", row->button_span_cols, row->button_span_rows);
+    /* The legacy font has no U+2212. */
+    const char *minus = button_font == CYD_DISPLAY_FONT_LEGACY ? "-" : "−";
+    const uint16_t fg = row->has_button_fg_color ? row->button_fg_color : CYD_UI_THEME_PRIMARY_SOFT;
+    const uint16_t bg = row->has_button_bg_color ? row->button_bg_color : CYD_UI_THEME_SURFACE;
+    const uint16_t border = row->has_button_border_color ? row->button_border_color : CYD_UI_THEME_PRIMARY;
+
+    /* A label written for the legacy font (e.g. "LcdBrightness:") can be too
+       wide for 16px bold; it stays readable in the legacy font rather than
+       being cut with "…" until its page is reworded. */
+    const cyd_display_font_t label_font =
+        cyd_display_text_width(CYD_DISPLAY_FONT_BODY_BOLD, row->label_text) <=
+                (int32_t)row->label_span_cols * CYD_DISPLAY_GRID_CELL_PX
+            ? CYD_DISPLAY_FONT_BODY_BOLD
+            : CYD_DISPLAY_FONT_LEGACY;
+
+    ESP_RETURN_ON_FALSE(cyd_ui_add_label(screen,
+                                         row->label_text,
+                                         row->label_col,
+                                         row->row,
+                                         row->label_span_cols,
+                                         row->button_span_rows,
+                                         CYD_DISPLAY_ALIGN_LEFT,
+                                         label_font,
+                                         CYD_UI_THEME_SUBTEXT),
                         ESP_ERR_NO_MEM,
-                        "cyd_ui",
+                        TAG,
                         "add stepper label failed");
-    ESP_RETURN_ON_FALSE(cyd_ui_add_text(screen,
-                                        row->value_text,
-                                        row->value_col,
-                                        row->row,
-                                        row->value_span_cols,
-                                        row->button_span_rows,
-                                        CYD_DISPLAY_ALIGN_CENTER,
-                                        row->value_scale > 0 ? row->value_scale : 1,
-                                        CYD_UI_COLOR_WHITE),
+    ESP_RETURN_ON_FALSE(cyd_ui_add_label(screen,
+                                         row->value_text,
+                                         row->value_col,
+                                         row->row,
+                                         row->value_span_cols,
+                                         row->button_span_rows,
+                                         CYD_DISPLAY_ALIGN_CENTER,
+                                         value_font,
+                                         CYD_UI_THEME_TEXT),
                         ESP_ERR_NO_MEM,
-                        "cyd_ui",
+                        TAG,
                         "add stepper value failed");
-    ESP_RETURN_ON_FALSE(cyd_ui_add_button_with_fg_enabled(screen,
-                                                          "-",
-                                                          row->button_left_col,
-                                                          row->row,
-                                                          row->button_span_cols,
-                                                          row->button_span_rows,
-                                                          cyd_ui_stepper_row_button_fg_color(row),
-                                                          cyd_ui_stepper_row_button_bg_color(row),
-                                                          cyd_ui_stepper_row_button_border_color(row),
-                                                          row->decrease_action_id,
-                                                          row->can_decrease),
+    ESP_RETURN_ON_FALSE(cyd_ui_add_styled_button(screen,
+                                                 minus,
+                                                 row->button_left_col,
+                                                 row->row,
+                                                 row->button_span_cols,
+                                                 row->button_span_rows,
+                                                 button_font,
+                                                 fg,
+                                                 bg,
+                                                 border,
+                                                 CYD_UI_THEME_BORDER_PX,
+                                                 row->decrease_action_id,
+                                                 row->can_decrease),
                         ESP_ERR_NO_MEM,
-                        "cyd_ui",
+                        TAG,
                         "add stepper decrease button failed");
-    screen->widgets[screen->widget_count - 1].scale_x = row->button_scale > 0 ? row->button_scale : 1;
-    screen->widgets[screen->widget_count - 1].scale_y = row->button_scale > 0 ? row->button_scale : 1;
-    ESP_RETURN_ON_FALSE(cyd_ui_add_button_with_fg_enabled(screen,
-                                                          "+",
-                                                          row->button_right_col,
-                                                          row->row,
-                                                          row->button_span_cols,
-                                                          row->button_span_rows,
-                                                          cyd_ui_stepper_row_button_fg_color(row),
-                                                          cyd_ui_stepper_row_button_bg_color(row),
-                                                          cyd_ui_stepper_row_button_border_color(row),
-                                                          row->increase_action_id,
-                                                          row->can_increase),
+    ESP_RETURN_ON_FALSE(cyd_ui_add_styled_button(screen,
+                                                 "+",
+                                                 row->button_right_col,
+                                                 row->row,
+                                                 row->button_span_cols,
+                                                 row->button_span_rows,
+                                                 button_font,
+                                                 fg,
+                                                 bg,
+                                                 border,
+                                                 CYD_UI_THEME_BORDER_PX,
+                                                 row->increase_action_id,
+                                                 row->can_increase),
                         ESP_ERR_NO_MEM,
-                        "cyd_ui",
+                        TAG,
                         "add stepper increase button failed");
-    screen->widgets[screen->widget_count - 1].scale_x = row->button_scale > 0 ? row->button_scale : 1;
-    screen->widgets[screen->widget_count - 1].scale_y = row->button_scale > 0 ? row->button_scale : 1;
     return ESP_OK;
 }
 
@@ -482,40 +509,49 @@ esp_err_t cyd_ui_submit(const cyd_display_screen_t *screen)
     return cyd_display_submit_screen(screen);
 }
 
-/* Settings chrome geometry. The single definition of this layout. */
+/*
+ * Settings chrome geometry. The single definition of this layout.
+ *
+ * The header band (rows 0-3) and the page navigation (rows 27-29) stay
+ * outside CYD_UI_SETTINGS_CONTENT_FIRST_ROW..LAST_ROW, so pages never collide
+ * with them. The chrome paints no screen background: a page that still uses
+ * the legacy font keeps its black background, and its text (which fills its
+ * own box black) does not show as dark blocks on a themed one.
+ */
+#define CYD_UI_SETTINGS_HEADER_ROWS 4
 #define CYD_UI_SETTINGS_BACK_COL 0
-#define CYD_UI_SETTINGS_BACK_ROW 0
-#define CYD_UI_SETTINGS_BACK_SPAN_COLS 6
-#define CYD_UI_SETTINGS_BACK_SPAN_ROWS 3
-#define CYD_UI_SETTINGS_TITLE_COL 8
-#define CYD_UI_SETTINGS_TITLE_ROW 0
-#define CYD_UI_SETTINGS_TITLE_SPAN_COLS 32
-#define CYD_UI_SETTINGS_TITLE_SPAN_ROWS 2
-#define CYD_UI_SETTINGS_TITLE_SCALE 2
-#define CYD_UI_SETTINGS_PAGE_PREV_COL 2
-#define CYD_UI_SETTINGS_PAGE_NEXT_COL 31
-#define CYD_UI_SETTINGS_PAGE_BUTTON_ROW 27
-#define CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS 7
-#define CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_ROWS 3
-#define CYD_UI_SETTINGS_PAGE_LABEL_COL 12
-#define CYD_UI_SETTINGS_PAGE_LABEL_ROW 27
-#define CYD_UI_SETTINGS_PAGE_LABEL_SPAN_COLS 16
-#define CYD_UI_SETTINGS_PAGE_LABEL_SPAN_ROWS 3
+#define CYD_UI_SETTINGS_BACK_SPAN_COLS 8
+#define CYD_UI_SETTINGS_TITLE_COL 9
+#define CYD_UI_SETTINGS_TITLE_SPAN_COLS 30
+#define CYD_UI_SETTINGS_PAGE_ROW 27
+#define CYD_UI_SETTINGS_PAGE_SPAN_ROWS 3
+#define CYD_UI_SETTINGS_PAGE_PREV_COL 0
+#define CYD_UI_SETTINGS_PAGE_NEXT_COL 30
+#define CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS 10
+#define CYD_UI_SETTINGS_PAGE_LABEL_COL 10
+#define CYD_UI_SETTINGS_PAGE_LABEL_SPAN_COLS 20
+
+_Static_assert(CYD_UI_SETTINGS_HEADER_ROWS <= CYD_UI_SETTINGS_CONTENT_FIRST_ROW,
+                  "settings header overlaps the content area");
+_Static_assert(CYD_UI_SETTINGS_PAGE_ROW > CYD_UI_SETTINGS_CONTENT_LAST_ROW,
+                  "settings page navigation overlaps the content area");
 
 void cyd_ui_add_settings_title(cyd_display_screen_t *screen, const char *app_title)
 {
     if (screen == NULL || app_title == NULL) {
         return;
     }
-    cyd_ui_add_text(screen,
-                    app_title,
-                    CYD_UI_SETTINGS_TITLE_COL,
-                    CYD_UI_SETTINGS_TITLE_ROW,
-                    CYD_UI_SETTINGS_TITLE_SPAN_COLS,
-                    CYD_UI_SETTINGS_TITLE_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_RIGHT,
-                    CYD_UI_SETTINGS_TITLE_SCALE,
-                    CYD_UI_COLOR_CYAN);
+    cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_UI_SETTINGS_HEADER_ROWS,
+                     CYD_UI_THEME_SURFACE, 0, 0, 0);
+    cyd_ui_add_label(screen,
+                     app_title,
+                     CYD_UI_SETTINGS_TITLE_COL,
+                     0,
+                     CYD_UI_SETTINGS_TITLE_SPAN_COLS,
+                     CYD_UI_SETTINGS_HEADER_ROWS,
+                     CYD_DISPLAY_ALIGN_LEFT,
+                     CYD_DISPLAY_FONT_TITLE,
+                     CYD_UI_THEME_TEXT);
 }
 
 void cyd_ui_add_settings_back(cyd_display_screen_t *screen, uint16_t back_action_id)
@@ -523,15 +559,19 @@ void cyd_ui_add_settings_back(cyd_display_screen_t *screen, uint16_t back_action
     if (screen == NULL) {
         return;
     }
-    cyd_ui_add_button(screen,
-                      "<<",
-                      CYD_UI_SETTINGS_BACK_COL,
-                      CYD_UI_SETTINGS_BACK_ROW,
-                      CYD_UI_SETTINGS_BACK_SPAN_COLS,
-                      CYD_UI_SETTINGS_BACK_SPAN_ROWS,
-                      CYD_UI_COLOR_BLUE,
-                      CYD_UI_COLOR_CYAN,
-                      back_action_id);
+    cyd_ui_add_styled_button(screen,
+                             "戻る",
+                             CYD_UI_SETTINGS_BACK_COL,
+                             0,
+                             CYD_UI_SETTINGS_BACK_SPAN_COLS,
+                             CYD_UI_SETTINGS_HEADER_ROWS,
+                             CYD_DISPLAY_FONT_BODY_BOLD,
+                             CYD_UI_THEME_PRIMARY_SOFT,
+                             CYD_UI_THEME_SURFACE,
+                             CYD_UI_THEME_PRIMARY,
+                             CYD_UI_THEME_BORDER_PX,
+                             back_action_id,
+                             true);
 }
 
 esp_err_t cyd_ui_add_settings_page_nav(cyd_display_screen_t *screen,
@@ -552,44 +592,48 @@ esp_err_t cyd_ui_add_settings_page_nav(cyd_display_screen_t *screen,
                         (unsigned)page_index,
                         (unsigned)page_count);
 
-    /* Navigation stops at the ends; the arrows render disabled there. */
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      "<",
-                                      CYD_UI_SETTINGS_PAGE_PREV_COL,
-                                      CYD_UI_SETTINGS_PAGE_BUTTON_ROW,
-                                      CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS,
-                                      CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_ROWS,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      prev_page_action_id,
-                                      page_index > 0);
-    snprintf(page_line,
-             sizeof(page_line),
-             "%s  %u/%u",
-             page_title,
-             (unsigned)page_index + 1U,
-             (unsigned)page_count);
-    cyd_ui_add_text(screen,
-                    page_line,
-                    CYD_UI_SETTINGS_PAGE_LABEL_COL,
-                    CYD_UI_SETTINGS_PAGE_LABEL_ROW,
-                    CYD_UI_SETTINGS_PAGE_LABEL_SPAN_COLS,
-                    CYD_UI_SETTINGS_PAGE_LABEL_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    1,
-                    CYD_UI_COLOR_LIGHTGREY);
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      ">",
-                                      CYD_UI_SETTINGS_PAGE_NEXT_COL,
-                                      CYD_UI_SETTINGS_PAGE_BUTTON_ROW,
-                                      CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS,
-                                      CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_ROWS,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      next_page_action_id,
-                                      page_index + 1U < page_count);
+    /* Navigation stops at the ends; the buttons render disabled there. */
+    cyd_ui_add_styled_button(screen,
+                             "前へ",
+                             CYD_UI_SETTINGS_PAGE_PREV_COL,
+                             CYD_UI_SETTINGS_PAGE_ROW,
+                             CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS,
+                             CYD_UI_SETTINGS_PAGE_SPAN_ROWS,
+                             CYD_DISPLAY_FONT_BODY_BOLD,
+                             CYD_UI_THEME_PRIMARY_SOFT,
+                             CYD_UI_THEME_SURFACE,
+                             CYD_UI_THEME_PRIMARY,
+                             CYD_UI_THEME_BORDER_PX,
+                             prev_page_action_id,
+                             page_index > 0);
+    /* The page title is cut on a character boundary, never the "n/N". */
+    char count[24] = { 0 };
+    snprintf(count, sizeof(count), " %u/%u", (unsigned)page_index + 1U, (unsigned)page_count);
+    const size_t count_len = strlen(count);
+    (void)cyd_display_utf8_copy(page_line, sizeof(page_line) - count_len, page_title);
+    memcpy(page_line + strlen(page_line), count, count_len + 1U);
+    cyd_ui_add_label(screen,
+                     page_line,
+                     CYD_UI_SETTINGS_PAGE_LABEL_COL,
+                     CYD_UI_SETTINGS_PAGE_ROW,
+                     CYD_UI_SETTINGS_PAGE_LABEL_SPAN_COLS,
+                     CYD_UI_SETTINGS_PAGE_SPAN_ROWS,
+                     CYD_DISPLAY_ALIGN_CENTER,
+                     CYD_DISPLAY_FONT_BODY,
+                     CYD_UI_THEME_SUBTEXT);
+    cyd_ui_add_styled_button(screen,
+                             "次へ",
+                             CYD_UI_SETTINGS_PAGE_NEXT_COL,
+                             CYD_UI_SETTINGS_PAGE_ROW,
+                             CYD_UI_SETTINGS_PAGE_BUTTON_SPAN_COLS,
+                             CYD_UI_SETTINGS_PAGE_SPAN_ROWS,
+                             CYD_DISPLAY_FONT_BODY_BOLD,
+                             CYD_UI_THEME_PRIMARY_SOFT,
+                             CYD_UI_THEME_SURFACE,
+                             CYD_UI_THEME_PRIMARY,
+                             CYD_UI_THEME_BORDER_PX,
+                             next_page_action_id,
+                             page_index + 1U < page_count);
     return ESP_OK;
 }
 
@@ -599,8 +643,9 @@ esp_err_t cyd_ui_add_settings_chrome(cyd_display_screen_t *screen,
     ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, TAG, "screen is null");
     ESP_RETURN_ON_FALSE(chrome != NULL, ESP_ERR_INVALID_ARG, TAG, "chrome is null");
 
-    cyd_ui_add_settings_back(screen, chrome->back_action_id);
+    /* The title draws the header band, so it goes first. */
     cyd_ui_add_settings_title(screen, chrome->app_title);
+    cyd_ui_add_settings_back(screen, chrome->back_action_id);
     return cyd_ui_add_settings_page_nav(screen,
                                         chrome->page_title,
                                         chrome->page_index,

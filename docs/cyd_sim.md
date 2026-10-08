@@ -78,6 +78,8 @@ English contract: the shared simulator sources (`sim_main.cpp`, `sim_catalog.h`,
 
 現在のシーン:
 
+- `settings_*`: 設定画面の共通枠と増減行。`settings_legacy_mix` は、旧書体のままのページが新しい枠の中でどう見えるか
+- `keyboard_*`: キーボード画面 (`cyd_text_input`) の全状態 (パスワード、大文字、記号 2 種、URL、数字だけ)
 - `specimen_*`: 書体見本、テーマ色とボタン、はみ出しの扱い
 
 ## Writing Simulator-Friendly Apps
@@ -96,4 +98,3 @@ English contract: a view file must not call services, read the clock or touch gl
 - フォントにはファームウェアの文字列リテラルにある文字しか入りません。シーンのファイルにしか無い文言は枠 (豆腐) で表示されます。シーンの文言はアプリと同じものを使ってください
 - 描画速度、SPI 転送、タッチの読み取り精度は実機と異なります
 - フォントの文字は親と派生プロジェクトで異なります (`scripts/ui_fonts/font_profile.json` と各プロジェクトの文字列)。シーンの文言は、そのプロジェクトのフォントで描ける文字にしてください。書体見本 (`specimen.c`) は、かな・ASCII・`extra_chars.txt` の文字だけを使っています
-- `cyd_text_input` (キーボード画面) はまだシーンにありません

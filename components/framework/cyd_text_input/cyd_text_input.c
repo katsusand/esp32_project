@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -6,27 +7,27 @@
 #include "esp_check.h"
 #include "cyd_display.h"
 #include "cyd_text_input.h"
+#include "cyd_text_input_view.h"
 #include "cyd_ui.h"
 
 #define TAG "cyd_text_input"
 
-#define TEXT_INPUT_KEY_BASE 0x5200
-#define TEXT_INPUT_DELETE 0x5301
-#define TEXT_INPUT_SPACE 0x5302
-#define TEXT_INPUT_CANCEL 0x5303
-#define TEXT_INPUT_SAVE 0x5304
-#define TEXT_INPUT_SYMBOL 0x5305
-#define TEXT_INPUT_CASE 0x5306
-#define TEXT_INPUT_SHOW 0x5307
-#define TEXT_INPUT_URL_SCHEME 0x5308
+#define TEXT_INPUT_KEY_BASE CYD_TEXT_INPUT_VIEW_ACTION_KEY_BASE
+#define TEXT_INPUT_DELETE CYD_TEXT_INPUT_VIEW_ACTION_DELETE
+#define TEXT_INPUT_SPACE CYD_TEXT_INPUT_VIEW_ACTION_SPACE
+#define TEXT_INPUT_CANCEL CYD_TEXT_INPUT_VIEW_ACTION_CANCEL
+#define TEXT_INPUT_SAVE CYD_TEXT_INPUT_VIEW_ACTION_SAVE
+#define TEXT_INPUT_SYMBOL CYD_TEXT_INPUT_VIEW_ACTION_SYMBOL
+#define TEXT_INPUT_CASE CYD_TEXT_INPUT_VIEW_ACTION_CASE
+#define TEXT_INPUT_SHOW CYD_TEXT_INPUT_VIEW_ACTION_SHOW
+#define TEXT_INPUT_URL_SCHEME CYD_TEXT_INPUT_VIEW_ACTION_URL_SCHEME
 #define TEXT_INPUT_CURSOR_BLINK_MS 500
 
-typedef enum {
-    TEXT_INPUT_PAGE_LOWER = 0,
-    TEXT_INPUT_PAGE_UPPER,
-    TEXT_INPUT_PAGE_SYMBOL,
-    TEXT_INPUT_PAGE_SYMBOL_EXTRA,
-} text_input_page_t;
+#define TEXT_INPUT_PAGE_LOWER CYD_TEXT_INPUT_VIEW_PAGE_LOWER
+#define TEXT_INPUT_PAGE_UPPER CYD_TEXT_INPUT_VIEW_PAGE_UPPER
+#define TEXT_INPUT_PAGE_SYMBOL CYD_TEXT_INPUT_VIEW_PAGE_SYMBOL
+#define TEXT_INPUT_PAGE_SYMBOL_EXTRA CYD_TEXT_INPUT_VIEW_PAGE_SYMBOL_EXTRA
+typedef cyd_text_input_view_page_t text_input_page_t;
 
 typedef struct {
     bool pending;
@@ -36,11 +37,18 @@ typedef struct {
 
 typedef struct {
     bool initialized;
+    /* Copied on a character boundary: Japanese is 3 bytes per character. */
     char title[CYD_DISPLAY_TEXT_MAX_LEN + 1];
-    char context_label[17];
+    char context_label[CYD_DISPLAY_TEXT_MAX_LEN + 1];
     char context_value[CYD_DISPLAY_TEXT_MAX_LEN + 1];
-    char input_label[17];
+    char input_label[CYD_DISPLAY_TEXT_MAX_LEN + 1];
     char value[CYD_TEXT_INPUT_MAX_LEN + 1];
+    size_t fixed_prefix_len;
+    bool force_upper;
+    bool digits_only;
+    char auto_separator;
+    uint8_t auto_groups[CYD_TEXT_INPUT_MAX_GROUPS];
+    size_t auto_group_count;
     char url_restore[CYD_TEXT_INPUT_MAX_LEN + 1];
     size_t max_len;
     bool obscure_input;
@@ -93,115 +101,150 @@ static bool text_input_confirmed_action(const cyd_input_event_t *event, uint16_t
     }
 }
 
-static const char *text_input_row(size_t row)
+/*
+ * Separators are presentation only: the value holds exactly what was typed.
+ * That keeps DEL a plain one-character operation and means the caller never has
+ * to strip formatting back out.
+ *
+ * The formatted length is prefix + typed characters + one separator per
+ * completed group, with no trailing separator once the value is full.
+ */
+static size_t text_input_group_len(size_t group_index)
 {
-    static const char *lower[] = { "qwertyuiop", "asdfghjkl", "zxcvbnm.-_" };
-    static const char *upper[] = { "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM.-_" };
-    static const char *symbol[] = { "1234567890", "~!@#$%^&*", "-_=+,.;:/?" };
-    static const char *extra[] = { "1234567890", "()[]{}<>|", "'\"`/\\" };
-    if (row >= 3) {
-        return "";
+    if (s_session.auto_group_count == 0U) {
+        return 0U;
     }
-    switch (s_session.page) {
-    case TEXT_INPUT_PAGE_UPPER: return upper[row];
-    case TEXT_INPUT_PAGE_SYMBOL: return symbol[row];
-    case TEXT_INPUT_PAGE_SYMBOL_EXTRA: return extra[row];
-    default: return lower[row];
+    if (group_index >= s_session.auto_group_count) {
+        group_index = s_session.auto_group_count - 1U;
     }
+    return s_session.auto_groups[group_index];
 }
 
+/* Separators shown before the `typed`-th character, i.e. group boundaries the
+   value has already passed. */
+static size_t text_input_separator_count(size_t typed)
+{
+    size_t separators = 0;
+    size_t consumed = 0;
+
+    if (s_session.auto_group_count == 0U) {
+        return 0U;
+    }
+    for (size_t group = 0; consumed < typed; ++group) {
+        size_t len = text_input_group_len(group);
+
+        if (len == 0U || typed <= consumed + len) {
+            break;
+        }
+        consumed += len;
+        separators++;
+    }
+    return separators;
+}
+
+static size_t text_input_formatted_len(size_t typed)
+{
+    return s_session.fixed_prefix_len + typed + text_input_separator_count(typed);
+}
+
+/* How many characters the value can hold once separators are accounted for. */
+static size_t text_input_value_capacity(void)
+{
+    size_t typed = 0;
+
+    if (s_session.auto_group_count == 0U) {
+        return s_session.max_len;
+    }
+    while (text_input_formatted_len(typed + 1U) <= s_session.max_len) {
+        typed++;
+    }
+    return s_session.fixed_prefix_len + typed;
+}
+
+/*
+ * A completed group shows its separator immediately, so the operator sees the
+ * grouping while typing. It is dropped again when the character before it is
+ * deleted, and never shown once no further character fits.
+ */
+static void text_input_format_value(char *dst, size_t dst_size)
+{
+    size_t out = 0;
+    size_t typed = 0;
+    size_t group = 0;
+    size_t in_group = 0;
+    const char *value = s_session.value;
+
+    for (size_t i = 0; value[i] != '\0' && out + 1U < dst_size; ++i) {
+        if (i >= s_session.fixed_prefix_len && s_session.auto_group_count > 0U) {
+            if (in_group == text_input_group_len(group)) {
+                dst[out++] = s_session.auto_separator;
+                group++;
+                in_group = 0;
+                if (out + 1U >= dst_size) {
+                    break;
+                }
+            }
+            in_group++;
+            typed++;
+        }
+        dst[out++] = value[i];
+    }
+    /* A completed group shows its separator right away, so the grouping is
+       visible while typing -- but not once no further character fits. */
+    if (s_session.auto_group_count > 0U && typed > 0U &&
+        in_group == text_input_group_len(group) &&
+        text_input_formatted_len(typed + 1U) <= s_session.max_len &&
+        out + 1U < dst_size) {
+        dst[out++] = s_session.auto_separator;
+    }
+    dst[out] = '\0';
+}
+
+/* The value as shown: formatted, and masked while a password is hidden. */
 static void text_input_visible_value(char *dst, size_t dst_size)
 {
-    char masked[CYD_TEXT_INPUT_MAX_LEN + 1] = { 0 };
-    const char *source = s_session.value;
+    char formatted[CYD_TEXT_INPUT_MAX_LEN + 1] = { 0 };
+
+    text_input_format_value(formatted, sizeof(formatted));
     if (s_session.obscure_input && !s_session.show_value) {
-        size_t len = strlen(source);
-        memset(masked, '*', len);
-        masked[len] = '\0';
-        source = masked;
+        size_t len = strlen(formatted);
+        if (len >= dst_size) {
+            len = dst_size - 1U;
+        }
+        memset(dst, '*', len);
+        dst[len] = '\0';
+        return;
     }
-    size_t len = strlen(source);
-    if (len < dst_size) {
-        snprintf(dst, dst_size, "%s", source);
-    } else if (dst_size > 4) {
-        snprintf(dst, dst_size, "...%s", source + len - (dst_size - 4));
-    }
-}
-
-static void text_input_labeled_line(char *dst, size_t dst_size, const char *label, const char *value)
-{
-    snprintf(dst, dst_size, "%s%s%s", label != NULL ? label : "",
-             value != NULL && value[0] != '\0' ? " " : "",
-             value != NULL ? value : "");
-}
-
-static const char *text_input_url_button(void)
-{
-    static const char *labels[] = { "http://", "https://", "UNDO" };
-    return labels[s_session.url_scheme_step % 3U];
+    snprintf(dst, dst_size, "%s", formatted);
 }
 
 static esp_err_t text_input_render(void)
 {
-    char context[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char value_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char visible[34] = { 0 };
-    const bool has_title = s_session.title[0] != '\0';
-    const bool symbol_page = s_session.page == TEXT_INPUT_PAGE_SYMBOL ||
-                             s_session.page == TEXT_INPUT_PAGE_SYMBOL_EXTRA;
-    const uint8_t rows[] = { 10, 13, 16 };
+    char visible[CYD_TEXT_INPUT_MAX_LEN + 1] = { 0 };
+    cyd_text_input_view_extra_t extra = CYD_TEXT_INPUT_VIEW_EXTRA_NONE;
 
     text_input_visible_value(visible, sizeof(visible));
-    if (s_session.cursor_visible && strlen(visible) + 1 < sizeof(visible)) {
-        strcat(visible, "|");
-    }
-    text_input_labeled_line(context, sizeof(context), s_session.context_label, s_session.context_value);
-    text_input_labeled_line(value_line, sizeof(value_line), s_session.input_label, visible);
-
-    cyd_ui_screen_clear(&s_screen);
-    cyd_ui_add_button(&s_screen, "<<", 0, 0, 6, 3, CYD_UI_COLOR_BLUE, CYD_UI_COLOR_CYAN, TEXT_INPUT_CANCEL);
-    if (has_title) {
-        cyd_ui_add_text(&s_screen, s_session.title, 0, 1, CYD_DISPLAY_GRID_COLS, 2,
-                        CYD_DISPLAY_ALIGN_CENTER, 2, CYD_UI_COLOR_YELLOW);
-    }
-    if (s_session.context_label[0] != '\0') {
-        cyd_ui_add_text(&s_screen, context, 1, has_title ? 5 : 4, CYD_DISPLAY_GRID_COLS - 2, 1,
-                        CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-    }
-    cyd_ui_add_text(&s_screen, value_line, 1, has_title ? 7 : 6, CYD_DISPLAY_GRID_COLS - 2, 1,
-                    CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_CYAN);
-
-    for (size_t row = 0; row < 3; ++row) {
-        const char *keys = text_input_row(row);
-        uint8_t offset = row == 1 ? 2 : 0;
-        for (size_t i = 0; keys[i] != '\0'; ++i) {
-            char label[2] = { keys[i], '\0' };
-            cyd_ui_add_button(&s_screen, label, (uint8_t)(offset + i * 4), rows[row], 4, 2,
-                              CYD_UI_COLOR_DARKGREY, CYD_UI_COLOR_LIGHTGREY,
-                              (uint16_t)(TEXT_INPUT_KEY_BASE + (uint8_t)keys[i]));
-        }
-    }
-
-    cyd_ui_add_button(&s_screen, symbol_page ? "abc" : (s_session.page == TEXT_INPUT_PAGE_UPPER ? "abc" : "ABC"),
-                      0, 21, 8, 3, CYD_UI_COLOR_BLUE, CYD_UI_COLOR_CYAN, TEXT_INPUT_CASE);
-    cyd_ui_add_button(&s_screen, s_session.page == TEXT_INPUT_PAGE_SYMBOL ? "()[]" : "123",
-                      8, 21, 8, 3, CYD_UI_COLOR_BLUE, CYD_UI_COLOR_CYAN, TEXT_INPUT_SYMBOL);
-    cyd_ui_add_button(&s_screen, "SPACE", 16, 21, 16, 3,
-                      CYD_UI_COLOR_DARKGREY, CYD_UI_COLOR_LIGHTGREY, TEXT_INPUT_SPACE);
-    cyd_ui_add_button(&s_screen, "DEL", 32, 21, 8, 3,
-                      CYD_UI_COLOR_RED, CYD_UI_COLOR_LIGHTGREY, TEXT_INPUT_DELETE);
     if (s_session.obscure_input) {
-        char show[16];
-        snprintf(show, sizeof(show), "[%c] SHOW", s_session.show_value ? 'x' : ' ');
-        cyd_ui_add_button(&s_screen, show, 1, 26, 18, 3,
-                          s_session.show_value ? CYD_UI_COLOR_BLUE : CYD_UI_COLOR_DARKGREY,
-                          CYD_UI_COLOR_LIGHTGREY, TEXT_INPUT_SHOW);
+        extra = CYD_TEXT_INPUT_VIEW_EXTRA_SHOW_TOGGLE;
     } else if (s_session.mode == CYD_TEXT_INPUT_MODE_URL) {
-        cyd_ui_add_button(&s_screen, text_input_url_button(), 1, 26, 18, 3,
-                          CYD_UI_COLOR_BLUE, CYD_UI_COLOR_CYAN, TEXT_INPUT_URL_SCHEME);
+        extra = CYD_TEXT_INPUT_VIEW_EXTRA_URL_SCHEME;
     }
-    cyd_ui_add_button(&s_screen, "SAVE", 21, 26, 18, 3,
-                      CYD_UI_COLOR_GREEN, CYD_UI_COLOR_LIGHTGREY, TEXT_INPUT_SAVE);
+
+    const cyd_text_input_view_model_t model = {
+        .title = s_session.title,
+        .context_label = s_session.context_label,
+        .context_value = s_session.context_value,
+        .input_label = s_session.input_label,
+        .value = visible,
+        .cursor_visible = s_session.cursor_visible,
+        .page = s_session.page,
+        .force_upper = s_session.force_upper,
+        .digits_only = s_session.digits_only,
+        .extra = extra,
+        .show_value = s_session.show_value,
+        .url_scheme_step = s_session.url_scheme_step,
+    };
+    cyd_text_input_view_build(&s_screen, &model);
     return cyd_ui_submit(&s_screen);
 }
 
@@ -228,14 +271,40 @@ esp_err_t cyd_text_input_begin_session(const cyd_text_input_config_t *config)
     s_session.obscure_input = config->obscure_input || config->mode == CYD_TEXT_INPUT_MODE_PASSWORD;
     s_session.show_value = !s_session.obscure_input;
     s_session.mode = config->mode;
-    snprintf(s_session.title, sizeof(s_session.title), "%s", config->title != NULL ? config->title : "");
-    snprintf(s_session.context_label, sizeof(s_session.context_label), "%s",
-             config->context_label != NULL ? config->context_label : "");
-    snprintf(s_session.context_value, sizeof(s_session.context_value), "%s",
-             config->context_value != NULL ? config->context_value : "");
-    snprintf(s_session.input_label, sizeof(s_session.input_label), "%s", config->input_label);
-    snprintf(s_session.value, sizeof(s_session.value), "%s",
-             config->initial_text != NULL ? config->initial_text : "");
+    s_session.force_upper = config->force_upper;
+    s_session.digits_only = config->digits_only;
+    s_session.auto_separator = config->auto_separator;
+    if (config->auto_separator != '\0' && config->auto_groups != NULL) {
+        ESP_RETURN_ON_FALSE(config->auto_group_count > 0U &&
+                                config->auto_group_count <= CYD_TEXT_INPUT_MAX_GROUPS,
+                            ESP_ERR_INVALID_ARG, TAG, "invalid auto group count");
+        for (size_t i = 0; i < config->auto_group_count; ++i) {
+            ESP_RETURN_ON_FALSE(config->auto_groups[i] > 0U,
+                                ESP_ERR_INVALID_ARG, TAG, "auto group length is zero");
+            s_session.auto_groups[i] = config->auto_groups[i];
+        }
+        s_session.auto_group_count = config->auto_group_count;
+    }
+    if (s_session.force_upper) {
+        s_session.page = TEXT_INPUT_PAGE_UPPER;
+    }
+    (void)cyd_display_utf8_copy(s_session.title, sizeof(s_session.title), config->title);
+    (void)cyd_display_utf8_copy(s_session.context_label, sizeof(s_session.context_label), config->context_label);
+    (void)cyd_display_utf8_copy(s_session.context_value, sizeof(s_session.context_value), config->context_value);
+    (void)cyd_display_utf8_copy(s_session.input_label, sizeof(s_session.input_label), config->input_label);
+    const char *fixed_prefix = config->fixed_prefix != NULL ? config->fixed_prefix : "";
+    const char *initial_text = config->initial_text != NULL ? config->initial_text : "";
+
+    s_session.fixed_prefix_len = strlen(fixed_prefix);
+    ESP_RETURN_ON_FALSE(s_session.fixed_prefix_len < config->max_len,
+                        ESP_ERR_INVALID_ARG, TAG, "fixed prefix does not fit in max len");
+    /* The prefix is part of the value, so an initial text that already carries
+       it is not doubled. */
+    if (strncmp(initial_text, fixed_prefix, s_session.fixed_prefix_len) == 0) {
+        snprintf(s_session.value, sizeof(s_session.value), "%s", initial_text);
+    } else {
+        snprintf(s_session.value, sizeof(s_session.value), "%s%s", fixed_prefix, initial_text);
+    }
     s_session.value[s_session.max_len] = '\0';
     text_input_reset_transient_state();
     return text_input_render();
@@ -272,19 +341,35 @@ esp_err_t cyd_text_input_poll_session(const cyd_input_event_t *event,
     }
     if (action == TEXT_INPUT_SAVE) {
         if (text_out != NULL && text_out_size > 0) {
-            snprintf(text_out, text_out_size, "%s", s_session.value);
+            /* The caller gets what the operator saw, separators included: for a
+               date the grouping IS the format. A trailing separator is dropped
+               because it belongs to a group that was never typed. */
+            char formatted[CYD_TEXT_INPUT_MAX_LEN + 1] = { 0 };
+            size_t formatted_len = 0;
+
+            text_input_format_value(formatted, sizeof(formatted));
+            formatted_len = strlen(formatted);
+            if (s_session.auto_group_count > 0U && formatted_len > 0U &&
+                formatted[formatted_len - 1U] == s_session.auto_separator) {
+                formatted[formatted_len - 1U] = '\0';
+            }
+            snprintf(text_out, text_out_size, "%s", formatted);
         }
         s_session.initialized = false;
         *result = CYD_TEXT_INPUT_RESULT_SAVED;
         return ESP_OK;
     }
-    if (action == TEXT_INPUT_DELETE && len > 0) {
+    if (action == TEXT_INPUT_DELETE && len > s_session.fixed_prefix_len) {
         s_session.value[len - 1] = '\0';
-    } else if (action == TEXT_INPUT_SPACE && len < s_session.max_len) {
+    } else if (action == TEXT_INPUT_SPACE && len < text_input_value_capacity()) {
         s_session.value[len] = ' ';
         s_session.value[len + 1] = '\0';
     } else if (action == TEXT_INPUT_CASE) {
-        if (s_session.page == TEXT_INPUT_PAGE_SYMBOL || s_session.page == TEXT_INPUT_PAGE_SYMBOL_EXTRA) {
+        /* With the case locked the button still has a job: it is the way back
+           from the symbol pages. */
+        if (s_session.force_upper) {
+            s_session.page = TEXT_INPUT_PAGE_UPPER;
+        } else if (s_session.page == TEXT_INPUT_PAGE_SYMBOL || s_session.page == TEXT_INPUT_PAGE_SYMBOL_EXTRA) {
             s_session.page = TEXT_INPUT_PAGE_LOWER;
         } else {
             s_session.page = s_session.page == TEXT_INPUT_PAGE_UPPER ? TEXT_INPUT_PAGE_LOWER : TEXT_INPUT_PAGE_UPPER;
@@ -304,8 +389,14 @@ esp_err_t cyd_text_input_poll_session(const cyd_input_event_t *event,
         snprintf(s_session.value, sizeof(s_session.value), "%s", replacement);
         s_session.value[s_session.max_len] = '\0';
         s_session.url_scheme_step = (uint8_t)((s_session.url_scheme_step + 1U) % 3U);
-    } else if (action >= TEXT_INPUT_KEY_BASE && action <= TEXT_INPUT_KEY_BASE + 0x7f && len < s_session.max_len) {
-        s_session.value[len] = (char)(action - TEXT_INPUT_KEY_BASE);
+    } else if (action >= TEXT_INPUT_KEY_BASE && action <= TEXT_INPUT_KEY_BASE + 0x7f &&
+               len < text_input_value_capacity()) {
+        char ch = (char)(action - TEXT_INPUT_KEY_BASE);
+
+        if (s_session.force_upper) {
+            ch = (char)toupper((unsigned char)ch);
+        }
+        s_session.value[len] = ch;
         s_session.value[len + 1] = '\0';
     }
 

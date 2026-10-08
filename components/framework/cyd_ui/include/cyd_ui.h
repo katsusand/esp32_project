@@ -60,6 +60,20 @@ extern "C" {
 /* Border thickness of outlined buttons and panels in the themed UI. */
 #define CYD_UI_THEME_BORDER_PX 2
 
+/*
+ * One "label  [−] value [+]" row of a settings page.
+ *
+ * Drawn with the anti-aliased faces: the label in 16px bold, the value in 24px
+ * bold when `button_span_rows` gives it 24px or more (else 16px bold). The
+ * "−" / "+" buttons use the largest face that fits them, falling back to the
+ * legacy font for legacy-sized buttons. `button_span_rows` is the height of the whole row; for the
+ * resistive panel, prefer 4 rows (32px) or more.
+ * Button colours default to the theme's outlined primary button; a caller sets
+ * has_button_*_color only to give a row a different meaning.
+ *
+ * English supplement: the *_scale fields are left over from the legacy ASCII
+ * font and are ignored. They stay so existing initialisers keep compiling.
+ */
 typedef struct {
     const char *label_text;
     const char *value_text;
@@ -99,13 +113,19 @@ typedef struct {
  *
  * The layout is therefore defined once, here.
  *
- *   row 0    [<<]                              APP TITLE   (right aligned)
- *   rows 4-26  page content, owned by the caller
- *   row 27   [<]        Page title  n/N        [>]
+ *   rows 0-3    [戻る] App title                    (header band)
+ *   rows 4-26   page content, owned by the caller
+ *   rows 27-29  [前へ]     Page title n/N     [次へ]
+ *
+ * Drawn with the anti-aliased Japanese faces and the theme colours. The chrome
+ * paints no screen background, so a page still drawn with the legacy font
+ * keeps its black background.
  *
  * English contract: the caller supplies its own action ids so it keeps control
  * of its input handling; this only draws. Page navigation stops at the first
- * and last page rather than wrapping - the buttons render disabled there.
+ * and last page rather than wrapping - the buttons render disabled there. Call
+ * cyd_ui_add_settings_title() before the page content: it paints the header
+ * band that the back button and the content are drawn over.
  */
 
 /* Rows a page may draw into without colliding with the chrome. */
@@ -113,14 +133,14 @@ typedef struct {
 #define CYD_UI_SETTINGS_CONTENT_LAST_ROW 26
 
 typedef struct {
-    /* Right-aligned heading, e.g. "SETTINGS" or "CLOCK SETTINGS". */
+    /* Heading in the header band, e.g. "設定". Cut with "…" when too long. */
     const char *app_title;
     /*
-     * Shown in the navigation row; "  n/N" is appended. Pages that are numbered
-     * within a group pass the number already formatted in, e.g. "NETWORK2".
+     * Shown in the navigation row; " n/N" is appended. Pages that are numbered
+     * within a group pass the number already formatted in, e.g. "ネットワーク2".
      */
     const char *page_title;
-    /* 0-based. page_count of 1 renders both arrows disabled. */
+    /* 0-based. page_count of 1 renders both page buttons disabled. */
     size_t page_index;
     size_t page_count;
     uint16_t back_action_id;
