@@ -62,7 +62,7 @@ typedef enum {
  */
 typedef enum {
     CYD_DISPLAY_FONT_LEGACY = 0,
-    CYD_DISPLAY_FONT_BODY,         /* 16px regular; all of JIS X 0208 */
+    CYD_DISPLAY_FONT_BODY,         /* 16px regular; all of JIS X 0208 when the font profile asks */
     CYD_DISPLAY_FONT_BODY_BOLD,    /* 16px bold */
     CYD_DISPLAY_FONT_TITLE,        /* 24px bold */
     CYD_DISPLAY_FONT_CLOCK_MEDIUM, /* 48px bold, digits, ":/-. " and "✓!" only */
@@ -239,13 +239,18 @@ uint8_t cyd_display_get_brightness(void);
 esp_err_t cyd_display_claim_owner(void);
 esp_err_t cyd_display_release_owner(void);
 esp_err_t cyd_display_submit_screen(const cyd_display_screen_t *screen);
-esp_err_t cyd_display_show_boot_screen(void);
 /*
  * Canned screens. Each is built into the caller's `screen` and then submitted,
  * so that buffer always holds what is on the display and the caller can
  * hit-test it (see cyd_display_screen_hit_test()). A text or lines screen has
  * no buttons; mode screen buttons get action ids 0 .. button_count - 1.
+ *
+ * Legacy ASCII font: do not use in new code. These screens cannot show
+ * Japanese and ignore the colour theme; build the screen with cyd_ui labels
+ * and styled buttons instead. Kept for derived projects that still call them.
+ * The boot and log screens are developer diagnostics and stay in English.
  */
+esp_err_t cyd_display_show_boot_screen(void);
 esp_err_t cyd_display_show_text(cyd_display_screen_t *screen, const char *title, const char *message);
 esp_err_t cyd_display_show_lines(cyd_display_screen_t *screen,
                                  const char *title,

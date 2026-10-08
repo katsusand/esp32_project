@@ -9,9 +9,11 @@ English supplement: This sample is intentionally stored under `components/framew
 ## Behavior
 
 - `hello_app`: 1 秒ごとに `hello world` をログ出力する
-- `info` button: `info_app` に切り替える
-- `info_app`: `title: hello_app` と `author: katsusand` を表示する
-- `OK` button: `hello_app` に戻る
+- 「情報」ボタン: `info_app` に切り替える
+- `info_app`: 名前 (`hello_app`) と作者 (`katsusand`) を表示する
+- 「OK」ボタン: `hello_app` に戻る
+
+画面は今の UI の決まりに沿って組んであるので、新しいアプリの画面の見本にもなります。全面の背景の板から始め、色は `CYD_UI_THEME_*` (設定の配色に追従する)、文字は `cyd_ui_add_label()` の日本語書体、ボタンは高さ 40px 以上です ([CYD UI](../../../../../docs/cyd_ui.md))。
 
 ## Learning Points
 

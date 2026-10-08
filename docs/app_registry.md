@@ -113,13 +113,13 @@ English contract: register during composition startup, before the shell task run
 
 ## Settings APPS Page
 
-`system_settings_app` は、登録された app を一覧する `APPS` ページを持ちます。
+`system_settings_app` は、登録された app を一覧する「アプリ」(`APPS`) ページを持ちます。
 
 - 登録が 0 件のときはページごと出ません（空ページが遷移列に混ざるのを避けるため）
 - 表示できるのは `SYSTEM_SETTINGS_VIEW_APPS_MAX` (4) 件までです。スクロールはまだありません
 - ボタンを押すとその app へ遷移します
 
-以前 `GENERAL` ページに 1 個だけ置いていた拡張ボタンは、このページに移りました。
+以前「一般」(`GENERAL`) ページに 1 個だけ置いていた拡張ボタンは、このページに移りました。
 
 ## Configuration
 
@@ -131,13 +131,13 @@ entry はポインタで保持するため、消費 RAM は この値 x 4 バイ
 
 登録は **composition の起動時**に行います。app の `enter()` の中で自分を登録してはいけません。
 
-その形だと、その app が home でなくなった瞬間に登録が走らなくなり、launcher にも `APPS` page にも出てこなくなります。実際に `cyd_clock_app` が `Clock Settings` を `enter()` で登録していて、home app を差し替え可能にする際に問題になりました。
+その形だと、その app が home でなくなった瞬間に登録が走らなくなり、launcher にも「アプリ」page にも出てこなくなります。実際に `cyd_clock_app` が `Clock Settings` を `enter()` で登録していて、home app を差し替え可能にする際に問題になりました。
 
 各 app は `*_register()` を公開し、composition がどの app を載せるか決めます。
 
 ## Consumers
 
 - `app_launcher` — 登録 app を一覧する汎用 home / メニュー app
-- `system_settings_app` の `APPS` page — 設定からの導線
+- `system_settings_app` の「アプリ」page — 設定からの導線
 
 どちらも registry を読むだけなので、app 追加時に更新が要るのは登録だけです。

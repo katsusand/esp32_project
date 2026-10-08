@@ -80,38 +80,26 @@ static bool hello_app_touch_confirmed_action(const cyd_display_screen_t *screen,
     return confirmed;
 }
 
+/*
+ * The screens follow the current UI conventions, so this sample is also the
+ * template for a new app's screens: start from a full-screen background
+ * panel, take colours from CYD_UI_THEME_* (they follow the theme chosen in
+ * settings), write Japanese with cyd_ui_add_label(), and make buttons at least
+ * 40px tall for the resistive panel. See docs/cyd_ui.md.
+ */
 static esp_err_t hello_app_show_main(void)
 {
     cyd_display_screen_t *screen = &s_hello_screen;
 
     cyd_ui_screen_clear(screen);
-    cyd_ui_add_text(screen,
-                    "hello_app",
-                    0,
-                    4,
-                    CYD_DISPLAY_GRID_COLS,
-                    4,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    2,
-                    CYD_UI_COLOR_CYAN);
-    cyd_ui_add_text(screen,
-                    "hello world is logging every second",
-                    0,
-                    12,
-                    CYD_DISPLAY_GRID_COLS,
-                    2,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    1,
-                    CYD_UI_COLOR_LIGHTGREY);
-    cyd_ui_add_button(screen,
-                      "info",
-                      12,
-                      27,
-                      16,
-                      2,
-                      CYD_UI_COLOR_BLUE,
-                      CYD_UI_COLOR_CYAN,
-                      HELLO_APP_ACTION_INFO);
+    cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
+    cyd_ui_add_label(screen, "hello_app", 0, 4, CYD_DISPLAY_GRID_COLS, 4,
+                     CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_INFO);
+    cyd_ui_add_label(screen, "1 秒ごとにログへ hello world を出しています", 1, 11, CYD_DISPLAY_GRID_COLS - 2, 3,
+                     CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    cyd_ui_add_styled_button(screen, "情報", 12, 24, 16, 5, CYD_DISPLAY_FONT_BODY_BOLD,
+                             CYD_UI_THEME_ON_PRIMARY, CYD_UI_THEME_PRIMARY, CYD_UI_THEME_PRIMARY, 0,
+                             HELLO_APP_ACTION_INFO, true);
 
     return cyd_ui_submit(screen);
 }
@@ -121,42 +109,20 @@ static esp_err_t info_app_show_main(void)
     cyd_display_screen_t *screen = &s_info_screen;
 
     cyd_ui_screen_clear(screen);
-    cyd_ui_add_text(screen,
-                    "hello_app",
-                    0,
-                    4,
-                    CYD_DISPLAY_GRID_COLS,
-                    4,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    2,
-                    CYD_UI_COLOR_CYAN);
-    cyd_ui_add_text(screen,
-                    "title: hello_app",
-                    4,
-                    12,
-                    32,
-                    2,
-                    CYD_DISPLAY_ALIGN_LEFT,
-                    1,
-                    CYD_UI_COLOR_WHITE);
-    cyd_ui_add_text(screen,
-                    "author: katsusand",
-                    4,
-                    15,
-                    32,
-                    2,
-                    CYD_DISPLAY_ALIGN_LEFT,
-                    1,
-                    CYD_UI_COLOR_WHITE);
-    cyd_ui_add_button(screen,
-                      "OK",
-                      12,
-                      27,
-                      16,
-                      2,
-                      CYD_UI_COLOR_GREEN,
-                      CYD_UI_COLOR_CYAN,
-                      INFO_APP_ACTION_OK);
+    cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
+    cyd_ui_add_label(screen, "hello_app", 0, 4, CYD_DISPLAY_GRID_COLS, 4,
+                     CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_INFO);
+    cyd_ui_add_label(screen, "名前", 4, 11, 8, 3, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD,
+                     CYD_UI_THEME_SUBTEXT);
+    cyd_ui_add_label(screen, "hello_app", 12, 11, 24, 3, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY,
+                     CYD_UI_THEME_TEXT);
+    cyd_ui_add_label(screen, "作者", 4, 15, 8, 3, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD,
+                     CYD_UI_THEME_SUBTEXT);
+    cyd_ui_add_label(screen, "katsusand", 12, 15, 24, 3, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY,
+                     CYD_UI_THEME_TEXT);
+    cyd_ui_add_styled_button(screen, "OK", 12, 24, 16, 5, CYD_DISPLAY_FONT_BODY_BOLD,
+                             CYD_UI_THEME_ON_SUCCESS, CYD_UI_THEME_SUCCESS, CYD_UI_THEME_SUCCESS, 0,
+                             INFO_APP_ACTION_OK, true);
 
     return cyd_ui_submit(screen);
 }

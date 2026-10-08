@@ -157,12 +157,12 @@ SSIDが未設定の場合、`esp32_wifi_sta_init()` は `ESP_ERR_NOT_FOUND` を�
 
 このプロジェクトでは、対話的な scan/password UI は `cyd_wifi_setup` の `wifi setup app` が担当します。`wifi_connection` は SSID 未設定や起動時 setup shortcut を `SETUP_REQUIRED` として表し、`clock app` や `settings app` が必要に応じて `wifi setup app` へ切り替えます。setup UI はこの component を直接呼ばず、`wifi_connection_setup_scan()` で manager task に scan を依頼します。
 
-scan mode画面は、画面下部の `SCAN` ボタンを押した時だけスキャン結果を更新します。
+scan mode画面は、画面下部の「再検索」ボタンを押した時だけスキャン結果を更新します。
 SSID行をタッチするとパスワード入力画面へ進みます。
-パスワード入力画面の下部には `CANCEL` と `SAVE` を表示します。
-`CANCEL` はscan mode画面へ戻ります。
-`SAVE` は接続テストを行い、成功した場合だけSSID/passwordをNVSに保存します。
-失敗した場合は `OK` ボタンだけを持つ失敗ダイアログを表示し、`OK` 後にscan mode画面へ戻ります。
+パスワード入力画面の見出しの帯には「戻る」と「保存」を表示します。
+「戻る」はscan mode画面へ戻ります。
+「保存」は接続テストを行い、成功した場合だけSSID/passwordをNVSに保存します。
+失敗した場合は「OK」ボタンだけを持つ失敗ダイアログ (失敗理由つき) を表示し、「OK」後にscan mode画面へ戻ります。
 
 scan mode中にRAMへ保持される情報は以下です。
 

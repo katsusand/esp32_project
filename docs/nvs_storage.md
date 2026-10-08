@@ -71,7 +71,7 @@ prefix が 4 文字なので、component 側に使えるのは 11 文字です�
 
 `app_scheduler` は 2 つの namespace を持ち、schedule ごとの `scope` で保存先を選びます ([app_scheduler.md](app_scheduler.md#scope))。`app_sched` の中身は現在、時計のアラーム (`cyd_clock_alarm`) だけです。時計アプリ自身は NVS を直接使いません。
 
-`Clear App Data` で `app_sched` を消しても、次回起動時に時計が既定の (無効な) アラームを作り直すので、namespace はすぐに戻ります。消えるのはユーザーが設定した時刻と曜日です。
+「アプリのデータを消去」で `app_sched` を消しても、次回起動時に時計が既定の (無効な) アラームを作り直すので、namespace はすぐに戻ります。消えるのはユーザーが設定した時刻と曜日です。
 
 English supplement: `app_sched` belongs to `app_scheduler`, but its contents belong to apps. Clearing it resets the clock's alarms to their disabled defaults; the namespace itself reappears on the next boot.
 
@@ -81,7 +81,7 @@ English supplement: `app_sched` belongs to `app_scheduler`, but its contents bel
 
 **namespace は書き込みが発生した瞬間に作られます。** 一覧に出てこないのは「壊れている」ではなく「まだ誰も保存していない」だけです。
 
-このため、設定画面を離れるときの保存処理が namespace を新規に作ることがあります。実機で `Clear App Data` を実行した際、1 件消したのに合計が 10 → 12 に増えたのはこれが理由でした（再起動前の保存で `sys_display` / `ftr_timesync` / `ftr_radio` が生まれた）。動作としては正しく、値を失わないための処理です。
+このため、設定画面を離れるときの保存処理が namespace を新規に作ることがあります。実機で「アプリのデータを消去」を実行した際、1 件消したのに合計が 10 → 12 に増えたのはこれが理由でした（再起動前の保存で `sys_display` / `ftr_timesync` / `ftr_radio` が生まれた）。動作としては正しく、値を失わないための処理です。
 
 ## Namespaces We Do Not Own
 
@@ -109,7 +109,7 @@ esp_err_t nvs_schema_erase_scope(nvs_schema_scope_t scope, size_t *erased_count)
 
 ### 一覧表示
 
-`INFO` app の `NVS` page が、実際にフラッシュへ入っている namespace を scope とエントリ数つきで一覧します。**コンポーネントの自己申告ではなくフラッシュの実データ**なので、孤児がここに現れます。
+システム情報の「NVS」page が、実際にフラッシュへ入っている namespace を scope とエントリ数つきで一覧します。**コンポーネントの自己申告ではなくフラッシュの実データ**なので、孤児がここに現れます。
 
 ### scope 単位の消去
 
@@ -121,7 +121,7 @@ esp_err_t nvs_schema_erase_scope(nvs_schema_scope_t scope, size_t *erased_count)
 
 ## Reset Actions
 
-`SETTINGS` の `NVS` page には、破壊範囲の小さい順に 3 つ並んでいます。
+設定の「初期化」page には、破壊範囲の小さい順に 3 つ並んでいます。
 
 | 操作 | 消える範囲 | 再起動 |
 |---|---|---|
@@ -129,7 +129,7 @@ esp_err_t nvs_schema_erase_scope(nvs_schema_scope_t scope, size_t *erased_count)
 | 「アプリのデータを消去」(`Clear App Data`) | `app_` scope の namespace 全部 | あり |
 | 「すべて初期化」(`Initialize NVS`) | `nvs_flash_erase()` で全部 | あり |
 
-`Initialize NVS` は `phy` と `nvs.net80211` も消しますが、どちらも起動時に再生成されます。
+「すべて初期化」は `phy` と `nvs.net80211` も消しますが、どちらも起動時に再生成されます。
 
 ## Migration
 
@@ -154,7 +154,7 @@ English contract: a storage format change (namespace rename, blob layout or vers
 4. blob を保存するなら先頭に version を持たせ、不一致は `nvs_health_report_invalid()` で報告する
 5. `support/nvs_schema` は編集しない
 
-blob の version チェックに失敗すると、起動時に `Initialize NVS` 画面へ強制遷移します。壊れたデータや形式の違うデータを黙って使わず、[Migration](#migration) の方針どおり全消去で回復するための仕組みです。
+blob の version チェックに失敗すると、起動時に「保存データが読めません」の確認画面へ強制遷移します。壊れたデータや形式の違うデータを黙って使わず、[Migration](#migration) の方針どおり全消去で回復するための仕組みです。
 
 ## Notes
 

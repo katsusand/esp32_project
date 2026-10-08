@@ -69,9 +69,9 @@ English contract: apps expose a `*_register()` function; the composition decides
 
 ## Relationship To The Settings APPS Page
 
-`system_settings_app` の `APPS` page も同じ registry を並べます。役割が重複して見えますが、想定は次のとおりです。
+`system_settings_app` の「アプリ」page も同じ registry を並べます。役割が重複して見えますが、想定は次のとおりです。
 
-- home が clock のとき: `APPS` page が実質の app 一覧になる
-- home が launcher のとき: launcher が一覧で、`APPS` page は設定からの補助導線になる
+- home が clock のとき: 設定の「アプリ」page が実質の app 一覧になる
+- home が launcher のとき: launcher が一覧で、設定の「アプリ」page は設定からの補助導線になる
 
 どちらも registry を読むだけなので、app を追加したときに更新が要るのは registry への登録だけです。

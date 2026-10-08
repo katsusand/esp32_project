@@ -22,12 +22,12 @@ English supplement: This component is product-specific UI. It edits the clock's 
 
 ## Alarm Pages
 
-`ALARM1` / `ALARM2` は `cyd_clock_alarm_get()` / `cyd_clock_alarm_set()` で読み書きします。scheduler 上の owner/tag や既定値はこの app には書かれていません。以前はここと `cyd_clock_composition` に既定値が重複していました ([cyd_clock_alarm.md](cyd_clock_alarm.md))。
+「アラーム1」「アラーム2」は `cyd_clock_alarm_get()` / `cyd_clock_alarm_set()` で読み書きします。scheduler 上の owner/tag や既定値はこの app には書かれていません。以前はここと `cyd_clock_composition` に既定値が重複していました ([cyd_clock_alarm.md](cyd_clock_alarm.md))。
 
 - hour は `0..23`
 - minute は `0..59`
 - アラーム1 は日〜土の曜日ボタンを持つ。選んだ曜日は塗りで表示する
-- 曜日を 1 つも選ばない状態も有効。その場合 `ALARM1` は発火しない（「絶対に鳴らさない」という明示的な設定として扱う）
+- 曜日を 1 つも選ばない状態も有効。その場合アラーム1 は発火しない（「絶対に鳴らさない」という明示的な設定として扱う）
 
 「−」「+」の stepper は `PRESS` と `REPEAT` で反応します。時・分は端で反対側へ回り込みます。通常 button は `RELEASE` 時に同じ button 上で離された場合だけ確定します。
 
@@ -59,9 +59,9 @@ English supplement: Stepper actions are intentionally handled separately from co
 `cyd_clock_settings_app` は以下のコンポーネントに依存します。
 
 - `app_registry`
-- `app_scheduler` (`SCHED` page)
+- `app_scheduler` (「スケジュール」page)
 - `app_shell`
-- `cyd_clock_alarm` (`ALARM1` / `ALARM2` page)
+- `cyd_clock_alarm` (「アラーム1」「アラーム2」page)
 - `cyd_display`
 - `cyd_input`
 - `cyd_ui`

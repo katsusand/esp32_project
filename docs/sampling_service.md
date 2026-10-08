@@ -88,7 +88,7 @@ English contract: a gap must stay visible as a gap -- compressing it silently is
 最終的に lease は撤去しました。判断は次のとおりです。
 
 - 資源を起こすかどうかは**製品の方針**であって、診断ビューが勝手に決めることではない
-- 資源を長く保ちたいなら、**ユーザーに見える設定として出す**（`NETWORK` page の `WiFiIdleOff`）
+- 資源を長く保ちたいなら、**ユーザーに見える設定として出す**（設定の「ネットワーク2」page の「Wi-Fi切断」）
 - 資源が落ちている間は、取り繕わず**そう表示する**（「Wi-Fi はオフです」）
 
 どうしても view の寿命に資源を紐付ける場合は、app の `leave()` で必ず解放し、解放漏れの保険に最大保持時間を掛けます。`app_shell` の idle 復帰も `leave()` を通ります。ただしその前に、**本当に service 側が起こす必要があるのか**を疑ってください。
