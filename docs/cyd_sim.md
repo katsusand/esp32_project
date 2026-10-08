@@ -79,6 +79,7 @@ English contract: the shared simulator sources (`sim_main.cpp`, `sim_catalog.h`,
 
 現在のシーン:
 
+- `launcher*`、`clock*`、`clock_settings_*`: ランチャー、時計 (時計画面、Wi-Fi に接続できない、再接続中)、時計の設定
 - `settings_*`: 設定画面の共通枠と増減行。`settings_legacy_mix` は、旧書体のままのページが新しい枠の中でどう見えるか
 - `keyboard_*`: キーボード画面 (`cyd_text_input`) の全状態 (パスワード、大文字、記号 2 種、URL、数字だけ)
 - `sys_*`: システム設定 (`system_settings_view.c`) の全ページ、主な状態、全ダイアログ

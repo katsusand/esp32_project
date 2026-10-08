@@ -36,25 +36,28 @@ ESP_ERROR_CHECK(app_shell_start(cyd_clock_app_get_app()));
 
 ## Display Behavior
 
-時計画面は以下の要素で構成されます。
+時計画面は以下の要素で構成されます。画面の組み立ては `cyd_clock_view.c` にあり、`cyd_clock_app.c` は時刻・同期・Wi-Fi・アラームの状態を model (`cyd_clock_view_model_t`) に集めて渡します。
 
-- タイトル: `CYD CLOCK`
-- 時刻: `HH:MM:SS` または `HH:MM:SS AM/PM`
-- 日付: `YYYY-MM-DD`
-- 状態: 最後の NTP 同期状態
-- Wi-Fi 状態: `wifi: off`、`wifi: connecting`、`wifi: setup needed` など
-- `SYNC NOW` ボタン
-- `ALARM` ボタン: `ALARM OFF` → `ALARM1 ON` → `ALARM2 ON` → `ALARM1/2 ON` の順に有効状態を切り替える
-- `SETTINGS` / `INFO` ボタン
+- 日付: `2026年10月8日（木）`
+- 12 時間表示のときは「午前」「午後」(数字の書体に AM/PM が無いため、時刻の上に 16px で出す)
+- 時刻: `HH:MM:SS` (48px の数字)。64px にしないのは、時刻によって画面幅に入ったり入らなかったりし、毎秒の描き直しで大きさが変わってしまうため
+- 時刻同期: `時刻同期: まだ` / `時刻同期: 失敗` / `時刻同期: 10/8 09:41 成功`
+- Wi-Fi の状態: `Wi-Fi: 接続済み` など
+- 「設定」「情報」ボタン
+- アラームのボタン: 「アラーム オフ」→「アラーム 1」→「アラーム 2」→「アラーム 1と2」の順に有効状態を切り替える。有効なときは注意色 (橙)
 - SD カードのアイコン（右上の角。カードが未挿入・未フォーマット・空き容量なし・異常のときだけ）。[SD Card Status](sd_card_status.md) が決める状態で、正常なときは何も描きません。時計は毎秒描き直すので、カードを抜き差ししても 1 秒以内に反映されます
 
-`SYNC NOW` は Wi-Fi が `connected`、`failed`、`off`、`setup needed` のときだけ有効です。ただし `time_sync_is_busy()` が `true` の間は、Wi-Fi が `connected` でも NTP 同期処理中または retry 待ちとして無効表示になり、タッチしても action は発火しません。
+時刻の部分をタップすると 12 / 24 時間表示を切り替えます (位置は `CYD_CLOCK_VIEW_TIME_*`)。
 
-ローカル時刻の年が 2024 年未満の場合、未同期とみなし、時刻欄は `--:--:--`、日付欄は `Waiting for NTP` を表示します。状態欄は `time_sync_get_last_success_at()` と `time_sync_get_last_attempt_status()` を使い、`sync: pending`、`sync: failed`、または `sync: MM-DD HH:MM OK` を表示します。
+ローカル時刻の年が 2024 年未満の場合、未同期とみなし、時刻欄は `--:--:--`、日付欄は「時刻を合わせています…」を表示します。同期の状態は `time_sync_get_last_success_at()` と `time_sync_get_last_attempt_status()` から決めます。
 
-`ALARM` ボタンは `cyd_clock_alarm_set_enabled()` で有効/無効だけを切り替えます。時刻と曜日は `Clock Settings` で変更します ([cyd_clock_alarm.md](cyd_clock_alarm.md))。
+アラームのボタンは `cyd_clock_alarm_set_enabled()` で有効/無効だけを切り替えます。時刻と曜日は時計の設定画面 (`cyd_clock_settings_app`) で変更します ([cyd_clock_alarm.md](cyd_clock_alarm.md))。
 
-`SETTINGS` は `settings app`、`INFO` は `info app` へ切り替えます。戻り先は `app_shell` が `enter()` に渡す `from_app` により、遷移先 app 側で保持されます。
+「設定」は `settings app`、「情報」は `info app` へ切り替えます。戻り先は `app_shell` が `enter()` に渡す `from_app` により、遷移先 app 側で保持されます。
+
+Wi-Fi に接続できないときの画面は「Wi-Fi に接続できません」と理由を出し、「もう一度」(保存済みの AP へ再接続) と「Wi-Fi を設定」(Wi-Fi の設定へ) を選ばせます。再接続中は「Wi-Fi に接続しています…」と、探している / 試している SSID を出します。
+
+シミュレーターの `clock*` シーンと `test/host/test_launcher_clock_view.c` が確認します。テストは 1 日の全分を 12 / 24 時間表示で組み、時刻が縮まずに入ることを見ます。
 
 English supplement: Time sync detection is intentionally simple. The app treats years before 2024 as unsynchronized, while the status line is based on `time_sync`'s last-attempt/last-success status APIs.
 

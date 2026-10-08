@@ -4,6 +4,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "app_launcher.h"
+#include "app_launcher_view.h"
 #include "app_registry.h"
 #include "app_shell.h"
 #include "cyd_display.h"
@@ -12,11 +13,7 @@
 
 #define TAG "app_launcher"
 #define APP_LAUNCHER_INPUT_POLL_MS 50
-#define APP_LAUNCHER_ACTION_BACK 0x2500
-#define APP_LAUNCHER_ACTION_PAGE 0x2501
-#define APP_LAUNCHER_ACTION_APP_BASE 0x2510
-/* Rows that fit between the title and the bottom button strip. */
-#define APP_LAUNCHER_ROWS_PER_PAGE 5
+#define APP_LAUNCHER_ROWS_PER_PAGE APP_LAUNCHER_VIEW_APPS_PER_PAGE
 
 typedef struct {
     bool pending;
@@ -83,85 +80,24 @@ static bool app_launcher_is_home(void)
 
 static esp_err_t app_launcher_show(void)
 {
-    cyd_display_screen_t *screen = &s_launcher_screen;
     size_t total = app_registry_count();
-    size_t page_count = app_launcher_page_count();
     size_t first = s_launcher_page * APP_LAUNCHER_ROWS_PER_PAGE;
-    char page_label[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    app_launcher_view_model_t model = {
+        .total = total,
+        .page_index = s_launcher_page,
+        .page_count = app_launcher_page_count(),
+        /* As home there is nothing above to go back to, so the control is
+           omitted rather than drawn as a dead button. */
+        .show_back = !app_launcher_is_home() && s_launcher_return_app != NULL,
+    };
 
-    cyd_ui_screen_clear(screen);
-    cyd_ui_add_text(screen,
-                    "APPS",
-                    8,
-                    0,
-                    32,
-                    2,
-                    CYD_DISPLAY_ALIGN_RIGHT,
-                    2,
-                    CYD_UI_COLOR_CYAN);
-
-    if (total == 0) {
-        cyd_ui_add_text(screen,
-                        "no apps registered",
-                        2,
-                        12,
-                        36,
-                        2,
-                        CYD_DISPLAY_ALIGN_CENTER,
-                        1,
-                        CYD_UI_COLOR_LIGHTGREY);
+    for (size_t i = 0; i < APP_LAUNCHER_ROWS_PER_PAGE && first + i < total; ++i) {
+        const app_registry_entry_t *entry = app_registry_at(first + i);
+        model.titles[i] = entry != NULL ? entry->title : NULL;
+        model.count = i + 1U;
     }
-
-    for (size_t i = 0; i < APP_LAUNCHER_ROWS_PER_PAGE; ++i) {
-        size_t index = first + i;
-        if (index >= total) {
-            break;
-        }
-
-        const app_registry_entry_t *entry = app_registry_at(index);
-        if (entry == NULL) {
-            continue;
-        }
-
-        cyd_ui_add_button(screen,
-                          entry->title,
-                          4,
-                          (uint8_t)(4 + (i * 4)),
-                          32,
-                          3,
-                          CYD_UI_COLOR_DIMGREY,
-                          CYD_UI_COLOR_LIGHTGREY,
-                          (uint16_t)(APP_LAUNCHER_ACTION_APP_BASE + i));
-    }
-
-    if (page_count > 1) {
-        snprintf(page_label, sizeof(page_label), "%u/%u >", (unsigned)(s_launcher_page + 1), (unsigned)page_count);
-        cyd_ui_add_button(screen,
-                          page_label,
-                          26,
-                          25,
-                          12,
-                          3,
-                          CYD_UI_COLOR_DIMGREY,
-                          CYD_UI_COLOR_LIGHTGREY,
-                          APP_LAUNCHER_ACTION_PAGE);
-    }
-
-    /* As home there is nothing above to go back to, so the control is omitted
-       rather than drawn as a dead button. */
-    if (!app_launcher_is_home() && s_launcher_return_app != NULL) {
-        cyd_ui_add_button(screen,
-                          "<<",
-                          0,
-                          0,
-                          6,
-                          3,
-                          CYD_UI_COLOR_BLUE,
-                          CYD_UI_COLOR_CYAN,
-                          APP_LAUNCHER_ACTION_BACK);
-    }
-
-    return cyd_ui_submit(screen);
+    app_launcher_view_build(&s_launcher_screen, &model);
+    return cyd_ui_submit(&s_launcher_screen);
 }
 
 static esp_err_t app_launcher_enter(void *ctx, const app_shell_app_t *from_app)
@@ -197,8 +133,13 @@ static esp_err_t app_launcher_step(void *ctx)
         return ESP_OK;
     }
 
-    if (action_id == APP_LAUNCHER_ACTION_PAGE) {
-        s_launcher_page = (s_launcher_page + 1) % app_launcher_page_count();
+    /* Like the settings pages, navigation stops at both ends. */
+    if (action_id == APP_LAUNCHER_ACTION_PREV_PAGE && s_launcher_page > 0) {
+        s_launcher_page--;
+        return app_launcher_show();
+    }
+    if (action_id == APP_LAUNCHER_ACTION_NEXT_PAGE && s_launcher_page + 1 < app_launcher_page_count()) {
+        s_launcher_page++;
         return app_launcher_show();
     }
 
