@@ -16,38 +16,37 @@ English supplement: This is not a UI framework. It is a small screen-builder hel
 #include "cyd_ui.h"
 ```
 
-画面を初期化する場合は `cyd_ui_screen_clear()` を使います。
+画面は `cyd_ui_screen_clear()` で初期化し、widget を足して、最後に `cyd_ui_submit()` で `cyd_display` へ渡します。
 
 ```c
 cyd_display_screen_t screen = { 0 };
 cyd_ui_screen_clear(&screen);
+cyd_ui_add_panel(&screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
+cyd_ui_add_label(&screen, "こんにちは", 1, 10, 38, 3, CYD_DISPLAY_ALIGN_CENTER,
+                 CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_TEXT);
+cyd_ui_add_styled_button(&screen, "OK", 12, 24, 16, 5, CYD_DISPLAY_FONT_BODY_BOLD,
+                         CYD_UI_THEME_ON_PRIMARY, CYD_UI_THEME_PRIMARY, CYD_UI_THEME_PRIMARY,
+                         0, ACTION_OK, true);
+ESP_ERROR_CHECK(cyd_ui_submit(&screen));
 ```
 
-text widget と button widget は以下で追加します。
-
-```c
-cyd_ui_add_text(&screen, "Hello", 0, 0, CYD_DISPLAY_GRID_COLS, 2,
-                CYD_DISPLAY_ALIGN_CENTER, 2, CYD_UI_COLOR_WHITE);
-
-cyd_ui_add_button(&screen, "OK", 10, 20, 20, 4,
-                  CYD_UI_COLOR_BLUE, CYD_UI_COLOR_CYAN, 1);
-```
-
-押せない状態のボタンは `cyd_ui_add_button_enabled()` または `cyd_ui_add_button_with_fg_enabled()` で追加します。`enabled=false` のボタンは表示だけ行われ、タッチ hit-test の対象になりません。
-
-```c
-cyd_ui_add_button_enabled(&screen, "NEXT", 27, 26, 12, 3,
-                          CYD_UI_COLOR_DIMGREY, CYD_UI_COLOR_DARKGREY,
-                          ACTION_NEXT, false);
-```
+`enabled=false` のボタンは無効の色で描かれ、タッチ hit-test の対象になりません。
 
 English supplement: Disabled buttons keep their `action_id` for screen state clarity, but `cyd_display_screen_hit_test()` skips them.
 
-最後に `cyd_ui_submit()` で `cyd_display` へ渡します。
+## Screen Rules
 
-```c
-ESP_ERROR_CHECK(cyd_ui_submit(&screen));
-```
+新しい画面は、次の決まりで組みます。`components/framework/app_shell/sample/hello_app` が最小の見本です。
+
+- 画面は全面の背景の板 (`cyd_ui_add_panel(..., CYD_UI_THEME_BG, ...)`) から始める
+- 色は `CYD_UI_THEME_*` だけを使う。設定の配色に追従する ([Color Themes](#color-themes))
+- 文字は `cyd_ui_add_label()` と `cyd_ui_add_styled_button()` の日本語書体で描く
+- 設定・情報・入力など項目の多い画面は、文字をすべて 16px (`BODY` / `BODY_BOLD`) にする。24px は収まっても周りの 16px の行と釣り合わない。大きな書体 (24px、数字の 48px・64px) は、時計や打刻結果のように一目で読ませる画面にだけ使う
+- 抵抗膜タッチなので、ボタンは高さ 32〜40px 以上にする
+- 画面の組み立ては、サービスを呼ばない `*_view.c` に分ける。シミュレーター (`tools/cyd_sim`) とホストテストで全状態を確かめられる ([CYD Simulator](cyd_sim.md#writing-simulator-friendly-apps))
+- 表示する文言はすべて日本語にする。ログ、識別子、技術的な値 (エラー名、heap のバイト数など) は英語のままでよい
+
+English contract: new screens use the themed calls and colours only. The legacy calls below exist for screens in derived projects that have not been converted yet.
 
 ## Themed Japanese UI
 
@@ -122,6 +121,20 @@ rows 27-29  [前へ]     ページ名 n/N     [次へ]
 増減行 (`cyd_ui_add_stepper_row()`) は、項目名・値・`−` / `+` のボタンをすべて 16px 太字で描きます。設定画面は項目が多いので、24px の値やボタンは収まっても周りの行と釣り合いません。旧寸法の小さいボタン (幅 24px、高さ 16px) と、16px 太字に入らない項目名は旧 ASCII 書体に戻すので、ページを日本語化するまでも読めます。共通枠の見出しも 16px 太字です。新しく作る行は、抵抗膜タッチのため高さ 4 行 (32px) 以上にしてください。
 
 English supplement: the chrome deliberately leaves the background to the page. Pages are converted one at a time; a themed background under a legacy page would show its text boxes as black blocks.
+
+## Legacy ASCII API
+
+`cyd_ui_add_text()` と `cyd_ui_add_button*()` は旧 ASCII 書体で描く API です。**新しいコードでは使わないでください。** 日本語を描けず、配色に追従せず、文字の大きさは整数の倍率 (`scale`) で決まります。このリポジトリの画面はもう使っていませんが、派生プロジェクトの未変換の画面のために残しています。`cyd_display_show_text()` / `show_lines()` / `show_mode_screen()` も同じ扱いです。
+
+```c
+/* 旧 API。新規使用禁止 */
+cyd_ui_add_text(&screen, "Hello", 0, 0, CYD_DISPLAY_GRID_COLS, 2,
+                CYD_DISPLAY_ALIGN_CENTER, 2, CYD_UI_COLOR_WHITE);
+cyd_ui_add_button(&screen, "OK", 10, 20, 20, 4,
+                  CYD_UI_COLOR_BLUE, CYD_UI_COLOR_CYAN, 1);
+```
+
+English contract: do not use the legacy calls in new code; they cannot draw Japanese and ignore the colour theme.
 
 ## Graph Widgets
 

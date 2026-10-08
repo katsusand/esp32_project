@@ -27,7 +27,7 @@ composition が登録するのは app 単位です。時計の場合は `cyd_clo
 
 composition 自身はアラームのコードを持ちません。以前はアラームの既定値、存在確認、発火時の handler がここにありましたが、アラームは時計の機能なので時計側へ移しました。composition が起動するのは共有 service の `app_scheduler` だけで、その上に何を載せるかは各 app が決めます。
 
-時計を別のメインアプリに差し替えるときは、`cyd_clock_app_register()` の呼び出しを外せばアラームと設定画面も一緒に外れます。前の時計が保存したアラームは app scope なので、`Clear App Data` で消せる残骸として扱えます ([cyd_clock_alarm.md](cyd_clock_alarm.md))。
+時計を別のメインアプリに差し替えるときは、`cyd_clock_app_register()` の呼び出しを外せばアラームと設定画面も一緒に外れます。前の時計が保存したアラームは app scope なので、「アプリのデータを消去」で消せる残骸として扱えます ([cyd_clock_alarm.md](cyd_clock_alarm.md))。
 
 登録は `app_scheduler_init()` の後に行います。アラームの登録に scheduler が必要なためです。登録の失敗は optional service と同じく error log に記録して起動を続けます。時計はアラームなしでも動作します。
 
@@ -35,9 +35,9 @@ English contract: the composition registers apps, not app features. The clock's 
 
 `system_boot` が検出した起動ショートカット (`system_boot_result_t.setup_shortcut_requested`) は、時計製品では **settings app を初期 app にする** 要求として解釈します。画面を押したまま電源を入れると時計ではなく settings が開きます。
 
-以前はここで Wi-Fi setup ウィザードを予約していました。settings に変えたのは、settings が Wi-Fi setup・タッチ補正・Initialize NVS のいずれにも届く単一の行き先であり、「Wi-Fi profile が存在するかどうか」で意味が変わる shortcut より予測しやすいためです。またウィザードの予約は Wi-Fi build feature の `#if` の内側にあったため、Wi-Fi を無効にしたビルドでは shortcut が何もしていませんでした。
+以前はここで Wi-Fi setup ウィザードを予約していました。settings に変えたのは、settings が Wi-Fi の設定・タッチ補正・すべて初期化のいずれにも届く単一の行き先であり、「Wi-Fi profile が存在するかどうか」で意味が変わる shortcut より予測しやすいためです。またウィザードの予約は Wi-Fi build feature の `#if` の内側にあったため、Wi-Fi を無効にしたビルドでは shortcut が何もしていませんでした。
 
-NVS が不正な場合は、この判定より前に settings と Initialize NVS 確認画面が選ばれており、そちらが優先されます。
+NVS が不正な場合は、この判定より前に settings と「保存データが読めません」の確認画面が選ばれており、そちらが優先されます。
 
 ## Feature Switches
 

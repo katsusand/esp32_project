@@ -6,7 +6,7 @@
 
 独立したシステム機能ではなく時計の一部で、インストールするのは `cyd_clock_app_register()` だけです。時計を載せない製品にはアラームも存在せず、メインアプリを時計から差し替えればアラームも一緒に外れます。
 
-アラームは 2 本 (`ALARM1` は繰り返し、`ALARM2` は 1 回だけ) で、どちらも `app_scheduler` の schedule として保存し、発火すると speaker の alarm event を鳴らします。
+アラームは 2 本 (アラーム1 は繰り返し、アラーム2 は 1 回だけ) で、どちらも `app_scheduler` の schedule として保存し、発火すると speaker の alarm event を鳴らします。
 
 English contract: the alarm is part of the clock app, not a system feature. Only `cyd_clock_app_register()` installs it. A product without the clock has no alarm, and swapping the main app removes it.
 
@@ -49,7 +49,7 @@ English contract: stateless. The scheduler entry is the only storage. Do not add
 
 どちらも `APP_SCHEDULER_MODE_INSTANT` + `APP_SCHEDULER_BEHAVIOR_EVENT`、`scope = APP_SCHEDULER_SCOPE_APP` です。
 
-`ALARM1` の曜日を 1 つも選ばない状態は有効な設定で、その場合は発火しません。`ALARM2` は発火後に scheduler が自動で無効にします。
+アラーム1 の曜日を 1 つも選ばない状態は有効な設定で、その場合は発火しません。アラーム2 は発火後に scheduler が自動で無効にします。
 
 ## Public API
 
@@ -91,8 +91,8 @@ English contract: call after `app_scheduler_init()`. A failure leaves the clock 
 
 アラームは app scope なので `app_sched` namespace に保存されます。
 
-- `SETTINGS` の `Clear App Data` で消え、次回起動時に既定値 (無効) で作り直されます
-- メインアプリを時計以外に差し替えた場合、`clock/alarm1` と `clock/alarm2` は handler のいない残骸として scheduler の slot を 2 つ占有します。時計と一緒に `SCHED` page (Clock Settings) も外れるので、`INFO` の `NVS` page に `app_sched` として残っていることを確認し、`Clear App Data` で消します
+- 設定の「アプリのデータを消去」で消え、次回起動時に既定値 (無効) で作り直されます
+- メインアプリを時計以外に差し替えた場合、`clock/alarm1` と `clock/alarm2` は handler のいない残骸として scheduler の slot を 2 つ占有します。時計と一緒に時計の設定の「スケジュール」page も外れるので、システム情報の「NVS」page に `app_sched` として残っていることを確認し、設定の「アプリのデータを消去」で消します
 
 English supplement: App scope is what makes the alarm's data follow the app. Clear App Data resets it, and after an app swap it counts as leftover app data instead of feature data that survives every reset.
 

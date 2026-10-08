@@ -72,7 +72,7 @@ English contract: "no blocking call" is not sufficient reason to drop a task. In
 
 その結果、グラフは「他の機能が Wi-Fi を使っていた区間」を映します。Wi-Fi が落ちている間は `system_info_app` の RSSI page が「Wi-Fi はオフです」と明示します。
 
-Wi-Fi を長く保ちたい場合は、設定の `NETWORK` にある `WiFiIdleOff` で `radio_manager` の idle timeout を延ばしてください（`never` を含む）。
+Wi-Fi を長く保ちたい場合は、設定の「ネットワーク2」にある「Wi-Fi切断」で `radio_manager` の idle timeout を延ばしてください（「しない」を含む）。
 
 English contract: this service observes, it never acquires. Keeping Wi-Fi alive is a user-facing policy exposed as a setting, not something a diagnostic view decides on its own.
 

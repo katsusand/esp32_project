@@ -46,7 +46,7 @@ ESP_ERROR_CHECK(app_shell_switch_to(system_settings_app_get_app()));
 
 English supplement: Return apps come from the `from_app` pointer passed to `enter()`, avoiding compile-time dependency from system apps back to the clock app.
 
-戻る操作は `app_shell_return_to()` を通します。`from_app` が NULL のときは home app へフォールバックするため、戻り先が無い画面でも `<<` が死にません。
+戻る操作は `app_shell_return_to()` を通します。`from_app` が NULL のときは home app へフォールバックするため、戻り先が無い画面でも「戻る」が死にません。
 
 settings の root page の「戻る」は、**settings にどう入ったか**で振る舞いが変わります。
 

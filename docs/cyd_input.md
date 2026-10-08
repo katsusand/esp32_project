@@ -223,7 +223,7 @@ English supplement: Treat BOOT as a user button only after firmware has started.
 
 `CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT` が有効で、保存済み補正値がない場合は、起動時に補正フローを実行します。
 
-保存済み補正値は versioned blob として保存します。blob サイズ、version/header、または raw 座標が異常な場合は、その値を信用せず `Initialize NVS` を要求する warning 対象として扱います。
+保存済み補正値は versioned blob として保存します。blob サイズ、version/header、または raw 座標が異常な場合は、その値を信用せず「すべて初期化」(`Initialize NVS`) を要求する warning 対象として扱います。
 
 English supplement: Calibration data, affine math, and runtime touch mapping are owned by `cyd_input`. `cyd_display` is only responsible for drawing the targets used during calibration.
 
@@ -252,7 +252,7 @@ English supplement: This keeps the persisted `touch_cal` blob layout stable whil
 - `xpt2046_softspi` 分離直後の旧 `esp32_project` 実装は、saved `touch_cal` を visible screen corner 順序で事実上解釈していた
 - 現在の実装と `espnow_logger` は、LovyanGFX と同じく touch calibration frame 順序で解釈する
 - そのため、旧 `esp32_project` が保存した `touch_cal` blob は、新ルールとは互換性がない可能性がある
-- この旧 blob は canonical blob と layout/version が同一で自動判別できないため、安全側として一度 `cyd_input_clear_touch_calibration()` または `Initialize NVS` 後に再キャリブレーションする
+- この旧 blob は canonical blob と layout/version が同一で自動判別できないため、安全側として一度 `cyd_input_clear_touch_calibration()` または「すべて初期化」後に再キャリブレーションする
 
 ## Configuration
 

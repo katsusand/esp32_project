@@ -87,7 +87,7 @@ English supplement: CYD clone boards often look identical but use different LCD 
 - `components/apps/cyd_clock_app/`: clock app
 - `components/apps/cyd_clock_alarm/`: clock app の alarm (時計の一部。`cyd_clock_app_register()` がインストールする)
 - `components/apps/cyd_clock_settings_app/`: clock-specific settings app
-- `components/apps/cyd_system_apps/`: reusable `INFO` / `SETTINGS` / touch calibration apps
+- `components/apps/cyd_system_apps/`: reusable system info / settings / touch calibration apps
 - `components/platform/cyd_status_led/`: RGB status LED
 - `components/platform/cyd_speaker/`: PWM speaker
 - `components/support/lovyangfx_wrapper/`: LovyanGFX を ESP-IDF component として組み込む wrapper
@@ -352,7 +352,7 @@ English supplement: Avoid preserving a build directory across different machines
 
 起動時に設定済み credential がある場合でも、`wifi_connection` は通常 Wi-Fi radio を開始せず、`OFF` 状態で待機します。NTP 同期など Wi-Fi を使う処理が `wifi_connection_acquire()` した期間だけ接続し、処理完了後の `wifi_connection_release()` で利用者がいなくなると Wi-Fi を OFF に戻します。
 
-現在の UI 構造は `main -> app_shell -> clock app / settings app / wifi setup app` です。SSID が未設定、未同期状態での接続失敗、または起動時にタッチ IRQ が LOW の場合は Wi-Fi setup app に入れます。同期済みの通常時計画面から Wi-Fi 設定へ入る場合は、`SETTINGS` から `Wi-Fi Setup` を選択します。
+現在の UI 構造は `main -> app_shell -> clock app / settings app / wifi setup app` です。SSID が未設定、未同期状態での接続失敗、または起動時にタッチ IRQ が LOW の場合は Wi-Fi setup app に入れます。同期済みの通常時計画面から Wi-Fi 設定へ入る場合は、「設定」の「ネットワーク1」ページから「Wi-Fi を設定する」を選択します。
 
 一度でも NTP 同期に成功した後は、再同期の接続失敗だけでは自動的に setup UI へ入らず、時計画面を維持します。
 
@@ -361,7 +361,7 @@ setup flow は以下です。
 1. 周辺 AP をスキャンする
 2. SSID 一覧を表示する
 3. タッチキーボードで password を入力する
-4. `SAVE` で接続テストを行う
+4. 「保存」で接続テストを行う
 5. 成功した場合だけ SSID/password を NVS に保存する
 
 保存先は `esp32_wifi_sta` コンポーネントの NVS namespace です。`CONFIG_ESP32_WIFI_STA_SSID` が空の場合、次回起動時に保存済み credential が default configuration として使われます。
@@ -396,11 +396,11 @@ English supplement: `APP_WIFI_STA` is a build-time feature switch. Kconfig optio
 
 一度も NTP 同期に成功していない状態では、Wi-Fi 接続失敗時に setup UI へ遷移できます。一度でも同期に成功した後は、再同期の Wi-Fi 接続失敗では setup UI に遷移せず、時計表示を維持します。
 
-時刻同期前は時計画面に `Waiting for NTP` が表示されます。年が 2024 年以上になったら同期済みとして扱い、現在時刻と日付を表示します。
+時刻同期前は時計画面に「時刻を合わせています…」が表示されます。年が 2024 年以上になったら同期済みとして扱い、現在時刻と日付を表示します。
 
-時刻表示部分をタップすると 24時間表示と 12時間表示が切り替わります。長押しはタップ扱いをキャンセルするだけで、Wi-Fi setup app への shortcut ではありません。`SYNC NOW` ボタンを押すと、その場で time sync を前倒し要求できます。Wi-Fi が落ちている場合は再接続も試みます。
+時刻表示部分をタップすると 24時間表示と 12時間表示が切り替わります。長押しはタップ扱いをキャンセルするだけで、Wi-Fi setup app への shortcut ではありません。設定の「ネットワーク2」ページの「今すぐ時刻を合わせる」を押すと、その場で time sync を前倒し要求できます。Wi-Fi が落ちている場合は再接続も試みます。
 
-timezone は `Time Sync` の `CONFIG_TIME_SYNC_TIMEZONE` で設定します。標準は `JST-9` です。
+timezone は `Time Sync` の `CONFIG_TIME_SYNC_TIMEZONE` で既定値を設定し、設定の「時刻」ページの「タイムゾーン」で変更できます。標準は `JST-9` です。
 
 ## Configuration Defaults
 

@@ -198,7 +198,7 @@ English contract: prefer `app_shell_return_to()` over `app_shell_switch_to()` fo
 - `settings`: `system_settings_app_get_app()`
 - `wifi_setup`: `cyd_wifi_setup_get_app()`
 
-`clock app` は通常時の時計表示、`SYNC NOW`、Wi-Fi failed 画面、retry progress を担当します。`info app` は firmware / chip / heap / Wi-Fi 状態などの参照情報を表示します。`settings app` は system-level settings UI で、brightness、volume、time sync interval、timezone、stored SSIDs、Wi-Fi setup、touch calibration、NVS maintenance、app-specific extension entry を扱います。`wifi setup app` は scan / password / setup completion を担当します。
+`clock app` は通常時の時計表示、「Wi-Fi に接続できません」の画面、保存済み AP への再接続の進捗を担当します。`info app` は firmware / chip / heap / Wi-Fi 状態などの参照情報を表示します。`settings app` は system-level settings UI で、brightness、volume、time sync interval、timezone、stored SSIDs、Wi-Fi setup、touch calibration、NVS maintenance、app-specific extension entry を扱います。`wifi setup app` は scan / password / setup completion を担当します。
 
 English supplement: `info` and `settings` are regular shell apps. They use the `from_app` passed to `enter()` as their return target, keeping them independent from `clock`.
 

@@ -4,6 +4,7 @@
 #include "app_shell.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
+#include "cyd_ui.h"
 #include "cyd_wifi_setup.h"
 
 #define TAG "cyd_wifi_setup"
@@ -15,11 +16,16 @@ static esp_err_t cyd_wifi_setup_disabled_enter(void *ctx, const app_shell_app_t 
 {
     (void)ctx;
     s_wifi_setup_return_app = from_app;
-    const char *lines[] = {
-        "Wi-Fi is disabled",
-        "Tap to go back",
-    };
-    return cyd_display_show_lines(&s_wifi_setup_disabled_screen, "Wi-Fi Setup", lines, 2);
+    cyd_display_screen_t *screen = &s_wifi_setup_disabled_screen;
+
+    cyd_ui_screen_clear(screen);
+    cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
+    cyd_ui_add_settings_title(screen, "Wi-Fi の設定");
+    cyd_ui_add_label(screen, "このファームウェアでは Wi-Fi を使いません", 1, 10, 38, 3,
+                     CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_TEXT);
+    cyd_ui_add_label(screen, "画面をタッチすると戻ります", 1, 14, 38, 3,
+                     CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    return cyd_ui_submit(screen);
 }
 
 static esp_err_t cyd_wifi_setup_disabled_step(void *ctx)

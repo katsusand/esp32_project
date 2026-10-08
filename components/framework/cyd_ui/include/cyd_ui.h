@@ -232,6 +232,20 @@ esp_err_t cyd_ui_add_settings_chrome(cyd_display_screen_t *screen,
                                      const cyd_ui_settings_chrome_t *chrome);
 
 void cyd_ui_screen_clear(cyd_display_screen_t *screen);
+
+/*
+ * Legacy ASCII font: do not use in new code.
+ *
+ * cyd_ui_add_text() and the cyd_ui_add_button*() family draw with the old
+ * bitmap font, sized by an integer `scale`. It has no Japanese glyphs, does
+ * not follow the colour theme and gives 16px-tall buttons by default. Use
+ * cyd_ui_add_label() and cyd_ui_add_styled_button() with the CYD_UI_THEME_*
+ * colours instead (see "Themed Japanese UI" in docs/cyd_ui.md).
+ *
+ * English contract: kept only for screens not yet converted, notably in
+ * derived projects. No screen in this repository uses them any more; removing
+ * them would break those projects on their next upstream merge.
+ */
 bool cyd_ui_add_text(cyd_display_screen_t *screen,
                      const char *text,
                      uint8_t col,

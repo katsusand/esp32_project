@@ -32,14 +32,14 @@ English supplement: `owner/tag` is the stable application contract. `slot_id` is
 
 各スケジュールは `scope` を持ち、どの NVS namespace に保存されるかが決まります。
 
-| Scope | NVS namespace | Clear App Data | 用途 |
+| Scope | NVS namespace | 「アプリのデータを消去」 | 用途 |
 | --- | --- | --- | --- |
 | `APP_SCHEDULER_SCOPE_APP` (既定値 `0`) | `app_sched` | 消える | アプリが所有する schedule。例: 時計のアラーム |
 | `APP_SCHEDULER_SCOPE_FEATURE` | `ftr_sched` | 残る | 再利用 service が所有する schedule |
 
 `scope` を指定せずゼロ初期化した config は `APP` になります。アプリの schedule はアプリのデータと一緒に消せるべきなので、残したい側 (service) だけが `FEATURE` を明示します。
 
-メインアプリを差し替えると、前のアプリの `APP` scope schedule は handler のいない「残骸」として slot を占有し続けます。`SCHED` 診断ページで確認でき、Clear App Data で消えます。
+メインアプリを差し替えると、前のアプリの `APP` scope schedule は handler のいない「残骸」として slot を占有し続けます。時計の設定の「スケジュール」診断ページで確認でき、「アプリのデータを消去」で消えます。
 
 English contract: `scope` selects the namespace, not behavior. APP (zero default) lives in `app_sched` and is removed by Clear App Data together with the rest of the app's data; FEATURE lives in `ftr_sched` and survives it. After an app swap, the old app's APP-scope entries stay as ownerless leftovers until Clear App Data.
 
@@ -377,7 +377,7 @@ on-flash 形式は API の `app_scheduler_config_t` とは別の固定 struct (`
 
 保存は snapshot と NVS 書き込みを 1 つの mutex で直列化しています。scheduler task (one-shot の disable) と UI 操作が同時に保存しても、古い snapshot が後から書かれることはありません。
 
-Clear App Data は `app_sched` を消したあと約 2 秒のメッセージ表示を経て再起動します。この間に one-shot が発火すると、その disable の保存で `app_sched` が書き戻されます。実害はそのアラーム設定が残る程度です。
+「アプリのデータを消去」は `app_sched` を消したあと約 2 秒のメッセージ表示を経て再起動します。この間に one-shot が発火すると、その disable の保存で `app_sched` が書き戻されます。実害はそのアラーム設定が残る程度です。
 
 English supplement: Runtime counters are diagnostic only and are not part of the persisted contract. The on-flash layout is frozen separately from the API struct; changing it requires a new version or key. Writes are serialized, so the last snapshot taken is the last one written.
 
@@ -395,7 +395,7 @@ English supplement: an INSTANT schedule fires only when a tick lands on its exac
 
 ## Clock Settings Page
 
-この時計プロジェクトでは、`Clock Settings` アプリに `SCHED` ページがあります。
+この時計プロジェクトでは、時計の設定 (`cyd_clock_settings_app`) に「スケジュール」ページがあります。
 
 表示内容は以下です。
 
@@ -408,7 +408,7 @@ English supplement: an INSTANT schedule fires only when a tick lands on its exac
 
 表示幅の都合で `owner` や `tag` は短縮されます。詳細な状態をアプリ側で確認する場合は `app_scheduler_get_status()` または `app_scheduler_list()` を使ってください。
 
-English supplement: Scheduler diagnostics are product UI in this project. Keep reusable `INFO` independent from `app_scheduler`.
+English supplement: Scheduler diagnostics are product UI in this project. Keep the reusable system info app independent from `app_scheduler`.
 
 ## Dependencies
 

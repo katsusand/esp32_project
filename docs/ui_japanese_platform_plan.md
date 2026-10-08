@@ -112,6 +112,10 @@ English supplement: the generator must be deterministic (same TTF, same freetype
 | `cyd_ui.c` / `cyd_ui.h` (Phase 2) | 設定画面の共通枠と増減行を日本語書体にした | 親の版を採る。子の打刻設定画面の英語の見出し・ページ名は ASCII なのでそのまま描ける |
 | `cyd_text_input` (Phase 2) | 子の機能 (`fixed_prefix`、`force_upper`、`digits_only`、区切りの自動挿入) を取り込んだうえで、画面を `cyd_text_input_view.c` に分けて日本語化した | 親の版を採る。子の機能はすべて入っている |
 | `docs/ui_japanese_plan.md` | (衝突しない) 親の計画書は `ui_japanese_platform_plan.md` という別名にした | — |
+| `cyd_display_render.hpp` / `cyd_display.cpp` (Phase 4) | `cyd_display_draw_aa_text()` に `solid_bg` を足し、タッチ補正の案内文を日本語にした | 子は変えていないので、そのまま取り込まれる |
+| `cyd_ui` の配色テーマ (Color Themes) | `CYD_UI_THEME_*` を実行時に選ばれたテーマの色を引く式にした。`DANGER_SOFT` と `DISABLED` を足し、選択を `sys_ui` に保存して `system_boot` が読む | 親の版を採る。打刻画面は色の名前をそのまま使えるので配色に追従する。赤を文字色に使っている 5 か所は `DANGER_SOFT` に替える |
+| 設定・システム情報・Wi-Fi の設定・ランチャー・時計 (Phase 3〜5) | 画面を `*_view.c` に分けて日本語化した | 子がこれらを変えていなければ、そのまま取り込まれる。打刻アプリの設定画面 (`cyd_time_punch_settings_app`) は子の画面なので、子で同じ決まり ([CYD UI の Screen Rules](cyd_ui.md#screen-rules)) に沿って日本語化する |
+| 旧 API (`cyd_ui_add_text()`、`cyd_ui_add_button*()`、`cyd_display_show_*()`) (Phase 6) | 「新規使用禁止」と注記した。削除はしていない | 子の未変換の画面は動き続ける。変換が済んだら使うのをやめる |
 
 English supplement: the files listed above were reshaped so that a derived project only ever adds files (scene files, `*_view.c`, its own host tests) instead of editing shared ones. After the first merge, the shared files should merge cleanly.
 
@@ -165,7 +169,7 @@ English contract: a view function takes a model struct and a screen, calls only 
 | 3 | (完了) `system_settings_app` の view 分割と日本語化、`cyd_wifi_setup` | シミュレーター (全ページ・全確認ダイアログ)、ホストテスト |
 | 4 | (完了) `system_info_app`、タッチ較正、`cyd_system_apps_common.c` の状態文言 | ビルド |
 | 5 | (完了) ランチャー、時計、時計設定、アラーム。アプリ名 (`app_registry` の `title`) の日本語化 | シミュレーター (ランチャー)、ビルド |
-| 6 | 旧 API に「新規使用禁止」の注記、docs の更新 | — |
+| 6 | (完了) 旧 API に「新規使用禁止」の注記、docs の更新 | — |
 
 各 Phase で以下を記録します。
 
@@ -271,6 +275,20 @@ English contract: a view function takes a model struct and a screen, calls only 
 旧 API の画面で残っているのは、`app_shell` のサンプル (`hello_app`) と Wi-Fi 無効ビルドのスタブ (`cyd_wifi_setup_stub.c`) だけ。段階 6 で扱う。
 
 実機で確かめること: ランチャー (home にした場合)、時計画面 (12 / 24 時間の切り替え、アラームのボタン、設定・情報への遷移)、Wi-Fi に接続できないときの画面と「もう一度」「Wi-Fi を設定」、時計の設定 (曜日、時・分の長押し、スケジュール)。
+
+## Phase 6 Results
+
+2026-10-08 時点:
+
+- 旧 API (`cyd_ui_add_text()`、`cyd_ui_add_button*()`、`cyd_display_show_text()` / `show_lines()` / `show_mode_screen()` / `show_boot_screen()`) のヘッダーに「新規使用禁止」と書いた。このリポジトリの画面はもう使っていない。子の未変換の画面がまだ多く使っている (`cyd_ui_add_text` だけで 89 か所) ので、削除はしない
+- `docs/cyd_ui.md` を組み替えた。先頭を今の書き方 (Public API と Screen Rules) にし、旧 API は「Legacy ASCII API」の節へ移した。Screen Rules に、背景の板・テーマ色・16px の決まり・40px のボタン・view の分割をまとめた
+- `app_shell` のサンプル (`hello_app`) を、テーマ色と日本語書体の見本に書き直した (通常のビルドには入らない)
+- Wi-Fi を無効にしたビルドの案内画面 (`cyd_wifi_setup_stub.c`) を日本語にした
+- docs に残っていた英語のボタン名・ページ名 (`SYNC NOW`、`Clear App Data`、`Waiting for NTP`、`<<`、`SCAN` / `SAVE` / `CANCEL` など) を、今の表示に直した。ページの ID (`GENERAL` など)、enum の値、英語の補足文と見出しの中の機能名は英語のまま
+- `cyd_display.h` の「16px 標準書体は JIS X 0208 全体を収録」というコメントを、プロファイル次第である旨に直した
+- 起動画面 (`cyd_display_show_boot_screen()`) とログ画面 (`cyd_display_log_*()`) は開発者向けの診断なので、英語の旧書体のまま
+
+これで親の画面はすべて日本語のアンチエイリアス書体になった。
 
 ## Agreed Choices
 
