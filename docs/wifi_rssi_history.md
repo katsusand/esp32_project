@@ -70,7 +70,7 @@ English contract: "no blocking call" is not sufficient reason to drop a task. In
 
 一時期は「グラフ表示中だけ radio lease を保持する」実装にしていましたが、グラフを見るためだけに Wi-Fi を起動するのは過剰なので取りやめました。`radio_manager` の lease も client enum も参照しません。
 
-その結果、グラフは「他の機能が Wi-Fi を使っていた区間」を映します。Wi-Fi が落ちている間は `system_info_app` の RSSI page が `Wi-Fi is off` と明示します。
+その結果、グラフは「他の機能が Wi-Fi を使っていた区間」を映します。Wi-Fi が落ちている間は `system_info_app` の RSSI page が「Wi-Fi はオフです」と明示します。
 
 Wi-Fi を長く保ちたい場合は、設定の `NETWORK` にある `WiFiIdleOff` で `radio_manager` の idle timeout を延ばしてください（`never` を含む）。
 
@@ -115,7 +115,7 @@ English contract: this is the same trade-off documented for `cyd_display_sparkli
 - `wifi_rssi_history_start()` は `ESP_ERR_NOT_SUPPORTED` を返す
 - `wifi_rssi_history_get()` / `_get_latest()` は `false` を返す
 
-app 側に `#if` を書かずに済むよう、API は維持されます。RSSI ページは `Wi-Fi is off` 表示になります。
+app 側に `#if` を書かずに済むよう、API は維持されます。RSSI ページは「Wi-Fi はオフです」表示になります。
 
 ## Configuration
 

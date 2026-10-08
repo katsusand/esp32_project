@@ -169,6 +169,15 @@ typedef struct {
     const char *message_detail;
 } system_settings_view_model_t;
 
+/* Words for the service states, shared with the system info screens. */
+const char *system_settings_view_wifi_text(system_settings_view_wifi_t wifi);
+uint16_t system_settings_view_wifi_color(system_settings_view_wifi_t wifi);
+const char *system_settings_view_sync_text(system_settings_view_sync_t sync);
+/* "前回: 10/8 09:41 成功" and the like ("10/8 09:41 成功" without the prefix);
+   `at` is read only for LAST_OK_AT. */
+void system_settings_view_format_sync_last(char *out, size_t out_size, system_settings_view_sync_last_t last,
+                                           const struct tm *at, bool with_prefix);
+
 /* "日本" for "JST-9" and so on; index into the app's timezone table. */
 const char *system_settings_view_timezone_label(size_t index);
 size_t system_settings_view_timezone_count(void);

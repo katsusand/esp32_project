@@ -18,10 +18,9 @@
 #include "wifi_connection.h"
 #include "wifi_profile_store.h"
 #include "wifi_rssi_history.h"
+#include "system_info_view.h"
 
 #define TAG "cyd_system_apps"
-#define CYD_INFO_APP_ACTION_BACK 0x2101
-#define CYD_INFO_APP_ACTION_TOGGLE_PAGE 0x2102
 /* Fixed RSSI scale. -30 dBm is effectively "next to the AP", -100 dBm is the
    practical noise floor, so a fixed scale keeps the graph comparable over time
    instead of auto-ranging on every sample. */
@@ -29,429 +28,163 @@
 #define CYD_INFO_RSSI_MIN_DBM (-100)
 #define CYD_INFO_RSSI_WEAK_DBM (-75)
 
-typedef enum {
-    CYD_INFO_PAGE_INFO = 0,
-    CYD_INFO_PAGE_DIAG,
-    CYD_INFO_PAGE_DIAG2,
-    CYD_INFO_PAGE_RSSI,
-    CYD_INFO_PAGE_NVS,
-    CYD_INFO_PAGE_COUNT,
-} cyd_info_page_t;
-
 static cyd_display_screen_t s_info_screen;
 static const app_shell_app_t *s_info_return_app;
 static cyd_system_apps_touch_tracker_t s_info_touch_tracker;
-static cyd_info_page_t s_info_page = CYD_INFO_PAGE_INFO;
+static system_info_view_page_t s_info_page = SYSTEM_INFO_VIEW_OVERVIEW;
 static uint16_t s_info_rssi_shown_revision;
 static bool s_info_rssi_has_history;
+/* The NVS page's namespace names are copied here; the model points into it. */
+static char s_info_nvs_names[SYSTEM_INFO_VIEW_NVS_MAX][16];
+static system_info_view_model_t s_info_model;
 
-static const char *cyd_system_apps_wifi_warning_text(wifi_connection_warning_t warning)
-{
-    switch (warning) {
-    case WIFI_CONNECTION_WARNING_CONNECTED_TOO_LONG:
-        return "connected too long";
-    case WIFI_CONNECTION_WARNING_NONE:
-    default:
-        return "none";
-    }
-}
-
-static void cyd_system_apps_format_wifi_users(char *status_text, size_t status_size)
-{
-    uint32_t active_users = wifi_connection_get_active_users();
-
-    if (status_text == NULL || status_size == 0) {
-        return;
-    }
-
-    if (active_users == 0) {
-        snprintf(status_text, status_size, "wifi users: none");
-        return;
-    }
-
-    if (active_users == WIFI_CONNECTION_USER_RADIO_MANAGER) {
-        snprintf(status_text, status_size, "wifi users: radio mgr");
-        return;
-    }
-
-    snprintf(status_text, status_size, "wifi users: 0x%02lx", (unsigned long)active_users);
-}
-
-static const char *cyd_system_apps_wifi_user_text(wifi_connection_user_t user)
-{
-    switch (user) {
-    case WIFI_CONNECTION_USER_RADIO_MANAGER:
-        return "radio mgr";
-    default:
-        return "none";
-    }
-}
-
-static void cyd_system_apps_format_wifi_last_user(char *status_text, size_t status_size)
-{
-    if (status_text == NULL || status_size == 0) {
-        return;
-    }
-
-    snprintf(status_text,
-             status_size,
-             "wifi last user: %s",
-             cyd_system_apps_wifi_user_text(wifi_connection_get_last_user()));
-}
-
-static void cyd_system_apps_format_wifi_duration(char *status_text, size_t status_size)
-{
-    uint32_t connected_seconds = wifi_connection_get_connected_duration_seconds();
-
-    if (status_text == NULL || status_size == 0) {
-        return;
-    }
-
-    snprintf(status_text,
-             status_size,
-             "wifi on: %lu sec",
-             (unsigned long)connected_seconds);
-}
-
-static void cyd_system_apps_format_wifi_duration_high_water(char *status_text, size_t status_size)
-{
-    uint32_t high_water_seconds = wifi_connection_get_connected_duration_high_water_seconds();
-
-    if (status_text == NULL || status_size == 0) {
-        return;
-    }
-
-    snprintf(status_text,
-             status_size,
-             "wifi max on: %lu sec",
-             (unsigned long)high_water_seconds);
-}
-
-static void cyd_system_apps_format_wifi_warning(char *status_text, size_t status_size)
-{
-    if (status_text == NULL || status_size == 0) {
-        return;
-    }
-
-    snprintf(status_text,
-             status_size,
-             "wifi warn: %s",
-             cyd_system_apps_wifi_warning_text(wifi_connection_get_warning()));
-}
-
-static const char *cyd_info_app_next_page_label(void)
-{
-    switch (s_info_page) {
-    case CYD_INFO_PAGE_INFO:
-        return "DIAG";
-    case CYD_INFO_PAGE_DIAG:
-        return "DIAG2";
-    case CYD_INFO_PAGE_DIAG2:
-        return "RSSI";
-    case CYD_INFO_PAGE_RSSI:
-        return "NVS";
-    case CYD_INFO_PAGE_NVS:
-    default:
-        return "INFO";
-    }
-}
-
-static const char *cyd_system_apps_wifi_failure_text(esp32_wifi_sta_failure_reason_t reason)
+static system_info_view_failure_t cyd_info_view_failure(esp32_wifi_sta_failure_reason_t reason)
 {
     switch (reason) {
-    case ESP32_WIFI_STA_FAILURE_NO_SAVED_PROFILE:
-        return "no saved profile";
-    case ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE:
-        return "saved AP not found";
-    case ESP32_WIFI_STA_FAILURE_AUTH:
-        return "auth failed";
-    case ESP32_WIFI_STA_FAILURE_TIMEOUT:
-        return "connect timeout";
-    case ESP32_WIFI_STA_FAILURE_CONNECT:
-        return "connect failed";
-    case ESP32_WIFI_STA_FAILURE_NONE:
-    default:
-        return "none";
+    case ESP32_WIFI_STA_FAILURE_NO_SAVED_PROFILE: return SYSTEM_INFO_VIEW_FAILURE_NO_SAVED_PROFILE;
+    case ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE: return SYSTEM_INFO_VIEW_FAILURE_NO_AP_IN_RANGE;
+    case ESP32_WIFI_STA_FAILURE_AUTH: return SYSTEM_INFO_VIEW_FAILURE_AUTH;
+    case ESP32_WIFI_STA_FAILURE_TIMEOUT: return SYSTEM_INFO_VIEW_FAILURE_TIMEOUT;
+    case ESP32_WIFI_STA_FAILURE_CONNECT: return SYSTEM_INFO_VIEW_FAILURE_CONNECT;
+    default: return SYSTEM_INFO_VIEW_FAILURE_NONE;
     }
+}
+
+static void cyd_info_fill_overview(system_info_view_model_t *m)
+{
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    esp_chip_info_t chip_info = { 0 };
+
+    esp_chip_info(&chip_info);
+    m->app_name = app_desc->project_name;
+    m->app_version = app_desc->version;
+    m->idf_version = app_desc->idf_ver;
+    m->chip_revision = chip_info.revision;
+    m->chip_cores = chip_info.cores;
+    m->heap_free = (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    m->wifi = cyd_system_apps_view_wifi();
+}
+
+static void cyd_info_fill_diag(system_info_view_model_t *m)
+{
+    wifi_profile_store_entry_t profiles[WIFI_PROFILE_STORE_MAX_ENTRIES];
+    size_t profile_count = 0;
+
+    m->heap_free = (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    m->heap_min_free = (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+    m->heap_largest_block = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    m->wifi_failure = cyd_info_view_failure(wifi_connection_get_last_failure_reason());
+    m->sync = cyd_system_apps_view_sync(time_sync_get_state());
+    m->sync_last = cyd_system_apps_view_sync_last(&m->last_sync_at);
+    m->profiles_readable = wifi_profile_store_load_entries(profiles, WIFI_PROFILE_STORE_MAX_ENTRIES,
+                                                           &profile_count) == ESP_OK;
+    m->profile_count = (unsigned)profile_count;
+    if (cyd_input_has_saved_touch_calibration()) {
+        m->touch_calib = SYSTEM_INFO_VIEW_TOUCH_CALIB_SAVED;
+    } else if (cyd_input_has_touch_calibration()) {
+        m->touch_calib = SYSTEM_INFO_VIEW_TOUCH_CALIB_DEFAULT;
+    } else {
+        m->touch_calib = SYSTEM_INFO_VIEW_TOUCH_CALIB_NONE;
+    }
+}
+
+static void cyd_info_fill_wifi(system_info_view_model_t *m)
+{
+    m->wifi = cyd_system_apps_view_wifi();
+    m->wifi_users = wifi_connection_get_active_users();
+    m->wifi_users_is_radio_manager = m->wifi_users == WIFI_CONNECTION_USER_RADIO_MANAGER;
+    m->wifi_last_user_is_radio_manager = wifi_connection_get_last_user() == WIFI_CONNECTION_USER_RADIO_MANAGER;
+    m->wifi_on_seconds = wifi_connection_get_connected_duration_seconds();
+    m->wifi_max_on_seconds = wifi_connection_get_connected_duration_high_water_seconds();
+    m->wifi_connected_too_long = wifi_connection_get_warning() == WIFI_CONNECTION_WARNING_CONNECTED_TOO_LONG;
+    m->wifi_failure = cyd_info_view_failure(wifi_connection_get_last_failure_reason());
+}
+
+static void cyd_info_fill_rssi(system_info_view_model_t *m)
+{
+    const int16_t *samples = NULL;
+    uint16_t sample_count = 0;
+    uint16_t revision = 0;
+    int16_t latest_rssi = 0;
+    bool has_history = wifi_rssi_history_get(&samples, &sample_count, &revision);
+
+    m->has_rssi = wifi_rssi_history_get_latest(&latest_rssi);
+    m->rssi_now = latest_rssi;
+    m->rssi_samples = sample_count;
+    if (has_history) {
+        m->rssi_graph = (cyd_display_sparkline_t){
+            .samples = samples,
+            .count = sample_count,
+            .revision = revision,
+            .min_value = CYD_INFO_RSSI_MIN_DBM,
+            .max_value = CYD_INFO_RSSI_MAX_DBM,
+            .fill = true,
+            .has_baseline = true,
+            .baseline_value = CYD_INFO_RSSI_WEAK_DBM,
+            .baseline_color = CYD_UI_THEME_DANGER,
+            .has_gap_value = true,
+            .gap_value = WIFI_RSSI_HISTORY_GAP_DBM,
+        };
+        s_info_rssi_shown_revision = revision;
+    }
+    s_info_rssi_has_history = has_history;
 }
 
 /*
- * Rows that fit between the title and the bottom button strip.
  * The walk reads flash, so a namespace no component opens any more still shows
  * up here -- which is the point: that is how leftovers from a replaced app are
  * spotted.
  */
-#define CYD_INFO_NVS_VISIBLE_MAX 10
-
-typedef struct {
-    char lines[CYD_INFO_NVS_VISIBLE_MAX][CYD_DISPLAY_TEXT_MAX_LEN + 1];
-    size_t count;
-    size_t total;
-} cyd_info_nvs_scan_t;
-
 static bool cyd_info_nvs_collect(const nvs_schema_namespace_info_t *info, void *ctx)
 {
-    cyd_info_nvs_scan_t *scan = (cyd_info_nvs_scan_t *)ctx;
+    system_info_view_model_t *m = (system_info_view_model_t *)ctx;
 
-    ++scan->total;
-    if (scan->count >= CYD_INFO_NVS_VISIBLE_MAX) {
-        return true;   /* keep counting so the total stays honest */
+    ++m->nvs_total;
+    if (m->nvs_count >= SYSTEM_INFO_VIEW_NVS_MAX) {
+        return true; /* keep counting so the total stays honest */
     }
-
-    snprintf(scan->lines[scan->count],
-             sizeof(scan->lines[scan->count]),
-             "%-15s %-7s %3u",
-             info->name,
-             nvs_schema_scope_name(info->scope),
-             (unsigned)info->entry_count);
-    ++scan->count;
+    snprintf(s_info_nvs_names[m->nvs_count], sizeof(s_info_nvs_names[0]), "%s", info->name);
+    m->nvs[m->nvs_count] = (system_info_view_nvs_row_t){
+        .name = s_info_nvs_names[m->nvs_count],
+        .scope = nvs_schema_scope_name(info->scope),
+        .entries = (unsigned)info->entry_count,
+    };
+    ++m->nvs_count;
     return true;
 }
 
-static esp_err_t cyd_info_app_show_page_nav(cyd_display_screen_t *screen)
+static void cyd_info_fill_nvs(system_info_view_model_t *m)
 {
-    const char *toggle_label = cyd_info_app_next_page_label();
+    esp_err_t err = nvs_schema_for_each_namespace(cyd_info_nvs_collect, m);
 
-    ESP_RETURN_ON_FALSE(screen != NULL, ESP_ERR_INVALID_ARG, TAG, "screen is null");
-
-    cyd_ui_add_button(screen,
-                      toggle_label,
-                      26,
-                      25,
-                      12,
-                      3,
-                      CYD_UI_COLOR_DIMGREY,
-                      CYD_UI_COLOR_LIGHTGREY,
-                      CYD_INFO_APP_ACTION_TOGGLE_PAGE);
-    return ESP_OK;
+    m->nvs_scan_failed = err != ESP_OK;
+    m->nvs_error = err != ESP_OK ? esp_err_to_name(err) : NULL;
 }
 
 static esp_err_t cyd_info_app_show(void)
 {
-    if (s_info_page == CYD_INFO_PAGE_DIAG) {
-        char heap_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char min_heap_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char wifi_fail_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char sync_state_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char sync_last_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char profiles_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char touch_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        wifi_profile_store_entry_t profiles[WIFI_PROFILE_STORE_MAX_ENTRIES];
-        size_t profile_count = 0;
-        cyd_display_screen_t *screen = &s_info_screen;
+    system_info_view_model_t *m = &s_info_model;
 
-        snprintf(heap_line,
-                 sizeof(heap_line),
-                 "heap 8bit: %u",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
-        snprintf(min_heap_line,
-                 sizeof(min_heap_line),
-                 "heap min/max: %u/%u",
-                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-        snprintf(wifi_fail_line,
-                 sizeof(wifi_fail_line),
-                 "wifi fail: %s",
-                 cyd_system_apps_wifi_failure_text(wifi_connection_get_last_failure_reason()));
-        snprintf(sync_state_line,
-                 sizeof(sync_state_line),
-                 "sync state: %s",
-                 cyd_system_apps_time_sync_state_text(time_sync_get_state()));
-        cyd_system_apps_format_sync_attempt(sync_last_line, sizeof(sync_last_line));
-
-        if (wifi_profile_store_load_entries(profiles,
-                                            WIFI_PROFILE_STORE_MAX_ENTRIES,
-                                            &profile_count) == ESP_OK) {
-            snprintf(profiles_line, sizeof(profiles_line), "saved SSIDs: %u", (unsigned)profile_count);
-        } else {
-            snprintf(profiles_line, sizeof(profiles_line), "saved SSIDs: unavailable");
-        }
-
-        snprintf(touch_line,
-                 sizeof(touch_line),
-                 "touch calib: %s",
-                 cyd_input_has_saved_touch_calibration() ? "saved" :
-                 (cyd_input_has_touch_calibration() ? "default" : "not saved"));
-
-        cyd_ui_screen_clear(screen);
-        cyd_ui_add_settings_title(screen, "DIAG");
-        cyd_ui_add_text(screen, heap_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, min_heap_line, 2, 8, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, wifi_fail_line, 2, 11, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, sync_state_line, 2, 14, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, sync_last_line, 2, 17, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, profiles_line, 2, 20, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, touch_line, 2, 23, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
-
-        return cyd_ui_submit(screen);
+    *m = (system_info_view_model_t){ .page = s_info_page };
+    switch (s_info_page) {
+    case SYSTEM_INFO_VIEW_DIAG:
+        cyd_info_fill_diag(m);
+        break;
+    case SYSTEM_INFO_VIEW_WIFI:
+        cyd_info_fill_wifi(m);
+        break;
+    case SYSTEM_INFO_VIEW_RSSI:
+        cyd_info_fill_rssi(m);
+        break;
+    case SYSTEM_INFO_VIEW_NVS:
+        cyd_info_fill_nvs(m);
+        break;
+    default:
+        cyd_info_fill_overview(m);
+        break;
     }
-
-    if (s_info_page == CYD_INFO_PAGE_DIAG2) {
-        char wifi_state_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char wifi_users_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char wifi_last_user_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char wifi_on_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char wifi_max_on_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char wifi_warn_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        char wifi_fail_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        cyd_display_screen_t *screen = &s_info_screen;
-
-        cyd_system_apps_format_wifi_status(wifi_state_line, sizeof(wifi_state_line));
-        cyd_system_apps_format_wifi_users(wifi_users_line, sizeof(wifi_users_line));
-        cyd_system_apps_format_wifi_last_user(wifi_last_user_line, sizeof(wifi_last_user_line));
-        cyd_system_apps_format_wifi_duration(wifi_on_line, sizeof(wifi_on_line));
-        cyd_system_apps_format_wifi_duration_high_water(wifi_max_on_line, sizeof(wifi_max_on_line));
-        cyd_system_apps_format_wifi_warning(wifi_warn_line, sizeof(wifi_warn_line));
-        snprintf(wifi_fail_line,
-                 sizeof(wifi_fail_line),
-                 "wifi fail: %s",
-                 cyd_system_apps_wifi_failure_text(wifi_connection_get_last_failure_reason()));
-
-        cyd_ui_screen_clear(screen);
-        cyd_ui_add_settings_title(screen, "DIAG2");
-        cyd_ui_add_text(screen, wifi_state_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, wifi_users_line, 2, 8, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, wifi_last_user_line, 2, 11, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, wifi_on_line, 2, 14, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, wifi_max_on_line, 2, 17, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, wifi_warn_line, 2, 20, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        cyd_ui_add_text(screen, wifi_fail_line, 2, 23, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-        ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
-
-        return cyd_ui_submit(screen);
-    }
-
-    if (s_info_page == CYD_INFO_PAGE_NVS) {
-        cyd_display_screen_t *screen = &s_info_screen;
-        cyd_info_nvs_scan_t scan = { 0 };
-        char summary[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-
-        esp_err_t scan_err = nvs_schema_for_each_namespace(cyd_info_nvs_collect, &scan);
-        if (scan_err != ESP_OK) {
-            snprintf(summary, sizeof(summary), "scan failed: %s", esp_err_to_name(scan_err));
-        } else if (scan.total > scan.count) {
-            snprintf(summary, sizeof(summary), "%u found, %u shown",
-                     (unsigned)scan.total, (unsigned)scan.count);
-        } else {
-            snprintf(summary, sizeof(summary), "%u namespaces in flash", (unsigned)scan.total);
-        }
-
-        cyd_ui_screen_clear(screen);
-        cyd_ui_add_settings_title(screen, "NVS");
-        cyd_ui_add_text(screen, summary, 2, 3, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-
-        for (size_t i = 0; i < scan.count; ++i) {
-            cyd_ui_add_text(screen,
-                            scan.lines[i],
-                            2,
-                            (uint8_t)(5 + (i * 2)),
-                            36,
-                            2,
-                            CYD_DISPLAY_ALIGN_LEFT,
-                            1,
-                            CYD_UI_COLOR_WHITE);
-        }
-
-        ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
-
-        return cyd_ui_submit(screen);
-    }
-
-    if (s_info_page == CYD_INFO_PAGE_RSSI) {
-        cyd_display_screen_t *screen = &s_info_screen;
-        const int16_t *samples = NULL;
-        uint16_t sample_count = 0;
-        uint16_t revision = 0;
-        int16_t latest_rssi = 0;
-        char rssi_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-        bool has_history = wifi_rssi_history_get(&samples, &sample_count, &revision);
-
-        if (wifi_rssi_history_get_latest(&latest_rssi)) {
-            snprintf(rssi_line,
-                     sizeof(rssi_line),
-                     "now %d dBm  (%u samples)",
-                     (int)latest_rssi,
-                     (unsigned)sample_count);
-        } else {
-            /* This page never powers the radio up, so say plainly that Wi-Fi is
-               off instead of implying the graph is about to start. */
-            snprintf(rssi_line, sizeof(rssi_line), "Wi-Fi is off");
-        }
-
-        cyd_ui_screen_clear(screen);
-        cyd_ui_add_settings_title(screen, "RSSI");
-        cyd_ui_add_text(screen, rssi_line, 2, 5, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-
-        if (has_history) {
-            cyd_display_sparkline_t graph = {
-                .samples = samples,
-                .count = sample_count,
-                .revision = revision,
-                .min_value = CYD_INFO_RSSI_MIN_DBM,
-                .max_value = CYD_INFO_RSSI_MAX_DBM,
-                .fill = true,
-                .has_baseline = true,
-                .baseline_value = CYD_INFO_RSSI_WEAK_DBM,
-                .baseline_color = CYD_UI_COLOR_RED,
-                .has_gap_value = true,
-                .gap_value = WIFI_RSSI_HISTORY_GAP_DBM,
-            };
-            cyd_ui_add_sparkline(screen,
-                                 2,
-                                 9,
-                                 36,
-                                 13,
-                                 &graph,
-                                 CYD_UI_COLOR_GREEN,
-                                 CYD_UI_COLOR_BLACK,
-                                 CYD_UI_COLOR_DARKGREY);
-            cyd_ui_add_text(screen, "-30", 2, 8, 6, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_DARKGREY);
-            cyd_ui_add_text(screen, "-100", 2, 22, 6, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_DARKGREY);
-            s_info_rssi_shown_revision = revision;
-        }
-        s_info_rssi_has_history = has_history;
-
-        ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-        cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
-
-        return cyd_ui_submit(screen);
-    }
-
-    const esp_app_desc_t *app_desc = esp_app_get_description();
-    esp_chip_info_t chip_info = { 0 };
-    char app_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char idf_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char chip_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char heap_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char wifi_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    cyd_display_screen_t *screen = &s_info_screen;
-
-    esp_chip_info(&chip_info);
-    snprintf(app_line, sizeof(app_line), "app: %.20s %.12s", app_desc->project_name, app_desc->version);
-    snprintf(idf_line, sizeof(idf_line), "idf: %.28s", app_desc->idf_ver);
-    snprintf(chip_line,
-             sizeof(chip_line),
-             "chip: rev%u %u cores",
-             (unsigned)chip_info.revision,
-             (unsigned)chip_info.cores);
-    snprintf(heap_line, sizeof(heap_line), "heap: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
-    cyd_system_apps_format_wifi_status(wifi_line, sizeof(wifi_line));
-
-    cyd_ui_screen_clear(screen);
-    cyd_ui_add_settings_title(screen, "INFO");
-    cyd_ui_add_text(screen, app_line, 2, 8, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-    cyd_ui_add_text(screen, idf_line, 2, 11, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-    cyd_ui_add_text(screen, chip_line, 2, 14, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-    cyd_ui_add_text(screen, heap_line, 2, 17, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-    cyd_ui_add_text(screen, wifi_line, 2, 20, 36, 2, CYD_DISPLAY_ALIGN_LEFT, 1, CYD_UI_COLOR_WHITE);
-    ESP_RETURN_ON_ERROR(cyd_info_app_show_page_nav(screen), TAG, "add info page nav failed");
-    cyd_ui_add_settings_back(screen, CYD_INFO_APP_ACTION_BACK);
-
-    return cyd_ui_submit(screen);
+    system_info_view_build(&s_info_screen, m);
+    return cyd_ui_submit(&s_info_screen);
 }
 
 static esp_err_t cyd_info_app_enter(void *ctx, const app_shell_app_t *from_app)
@@ -460,7 +193,7 @@ static esp_err_t cyd_info_app_enter(void *ctx, const app_shell_app_t *from_app)
     if (from_app != NULL) {
         s_info_return_app = from_app;
     }
-    s_info_page = CYD_INFO_PAGE_INFO;
+    s_info_page = SYSTEM_INFO_VIEW_OVERVIEW;
     s_info_touch_tracker = (cyd_system_apps_touch_tracker_t){ 0 };
     return cyd_info_app_show();
 }
@@ -473,9 +206,14 @@ static esp_err_t cyd_info_app_step(void *ctx)
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(CYD_SYSTEM_APPS_INPUT_POLL_MS)) == ESP_OK) {
         uint16_t action_id = 0;
         if (cyd_system_apps_touch_confirmed_action(&s_info_screen, &event, &s_info_touch_tracker, &action_id)) {
-            if (action_id == CYD_INFO_APP_ACTION_TOGGLE_PAGE) {
-                s_info_page = (cyd_info_page_t)(((int)s_info_page + 1) % (int)CYD_INFO_PAGE_COUNT);
-                            return cyd_info_app_show();
+            /* Like the settings pages, navigation stops at both ends. */
+            if (action_id == CYD_INFO_APP_ACTION_PREV_PAGE && s_info_page > SYSTEM_INFO_VIEW_OVERVIEW) {
+                s_info_page = (system_info_view_page_t)((int)s_info_page - 1);
+                return cyd_info_app_show();
+            }
+            if (action_id == CYD_INFO_APP_ACTION_NEXT_PAGE && s_info_page + 1 < SYSTEM_INFO_VIEW_PAGE_COUNT) {
+                s_info_page = (system_info_view_page_t)((int)s_info_page + 1);
+                return cyd_info_app_show();
             }
             if (action_id == CYD_INFO_APP_ACTION_BACK) {
                 ESP_RETURN_ON_ERROR(app_shell_return_to(s_info_return_app), TAG, "switch back from info failed");
@@ -489,7 +227,7 @@ static esp_err_t cyd_info_app_step(void *ctx)
      * revisions (rather than redrawing every poll) keeps the dirty-rect diff
      * doing the work it was built for.
      */
-    if (s_info_page == CYD_INFO_PAGE_RSSI) {
+    if (s_info_page == SYSTEM_INFO_VIEW_RSSI) {
         uint16_t revision = 0;
         bool has_history = wifi_rssi_history_get(NULL, NULL, &revision);
         if (has_history != s_info_rssi_has_history ||

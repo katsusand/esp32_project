@@ -279,6 +279,10 @@ LEGACY 以外はアンチエイリアスの日本語フォントです。フォ�
 
 English contract: the scale fields are ignored by anti-aliased faces. Wording that only fits after shrinking or ellipsizing is a layout bug; a screen's host test checks for it with `ui_test_check_screen()` (`test/host/ui_test_support.h`).
 
+タッチ補正の画面 (`cyd_display_show_touch_calibration_screen()`) は、widget を使わずパネルへ直接描きます。案内文 (「タッチ位置の補正」「四隅の印を順にタッチしてください」) もアンチエイリアス書体ですが、下地が黒一色と分かっているので、`cyd_display_draw_aa_text()` に `solid_bg` を渡してその色と混色します。パネルからの読み戻しは基板によっては使えないため、直接描くときは読み戻しに頼りません。
+
+English supplement: `cyd_display_draw_aa_text()` blends edge pixels with what it reads back from the target unless `solid_bg` is given. Strip sprites can always be read; the panel itself may not support reads (`CONFIG_CYD_DISPLAY_READABLE`), so direct drawing passes the known background colour.
+
 ### Text Storage
 
 テキストは `cyd_display_widget_set_text()` で設定します (`cyd_ui` の関数は内部でこれを使います)。

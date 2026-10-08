@@ -104,7 +104,8 @@ static void test_stepper(void)
     cyd_ui_screen_clear(&s_screen);
     ui_test_check(cyd_ui_add_stepper_row(&s_screen, &row) == ESP_OK, "a 32px stepper row builds");
     ui_test_check_screen("32px stepper row", &s_screen);
-    ui_test_check(find_action(&s_screen, 10)->font == CYD_DISPLAY_FONT_TITLE, "its buttons use 24px text");
+    ui_test_check(find_action(&s_screen, 10)->font == CYD_DISPLAY_FONT_BODY_BOLD,
+                  "its buttons use 16px bold, like the rest of a settings screen");
     ui_test_check(!find_action(&s_screen, 11)->enabled, "a limit disables its button");
 
     /* system_settings_app.c's current geometry: 24x16px buttons. */

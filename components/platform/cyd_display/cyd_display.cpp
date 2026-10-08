@@ -942,19 +942,24 @@ extern "C" esp_err_t cyd_display_show_touch_calibration_screen(void)
     ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
     ESP_RETURN_ON_ERROR(cyd_display_check_owner(), TAG, "display owner required");
 
+    /* Drawn straight onto the panel, between the targets in the corners. The
+       background is plain black, so the text blends against that colour
+       rather than reading pixels back. */
+    static const uint16_t black = TFT_BLACK;
+    const cyd_ui_font_t *title = cyd_display_font_table(CYD_DISPLAY_FONT_TITLE);
+    const cyd_ui_font_t *body = cyd_display_font_table(CYD_DISPLAY_FONT_BODY);
+    const char *title_text = "タッチ位置の補正";
+    const char *body_text = "四隅の印を順にタッチしてください";
+
     s_display.fillScreen(TFT_BLACK);
-    cyd_display_draw_centered_line(s_display,
-                                   "Touch Calibration",
-                                   s_display.width() / 2,
-                                   s_display.height() / 2 - 18,
-                                   2,
-                                   TFT_YELLOW);
-    cyd_display_draw_centered_line(s_display,
-                                   "Tap the 4 targets",
-                                   s_display.width() / 2,
-                                   s_display.height() / 2 + 18,
-                                   1,
-                                   TFT_WHITE);
+    s_display.startWrite();
+    cyd_display_draw_aa_text(s_display, *title, title_text,
+                             (s_display.width() - cyd_ui_font_text_width(title, title_text)) / 2,
+                             s_display.height() / 2 - 30, TFT_YELLOW, &black);
+    cyd_display_draw_aa_text(s_display, *body, body_text,
+                             (s_display.width() - cyd_ui_font_text_width(body, body_text)) / 2,
+                             s_display.height() / 2 + 8, TFT_WHITE, &black);
+    s_display.endWrite();
     return ESP_OK;
 }
 

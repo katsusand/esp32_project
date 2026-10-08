@@ -8,19 +8,20 @@
  * CYD_UI_SETTINGS_CONTENT_LAST_ROW (26); the chrome owns the rest.
  *
  * A stepper row is 4 rows (32px) high:
- *   cols 1-12 label | 13-17 [−] | 18-32 value | 33-37 [+]
- * The label column holds six 16px kanji, the value column "29分50秒" in 24px.
+ *   cols 1-12 label | 14-18 [−] | 19-33 value | 34-38 [+]
+ * The empty column 13 keeps a six-kanji label off the button.
+ * Everything is 16px: next to 16px rows, larger text reads as unbalanced.
  * The buttons are 40x32px.
  */
 #define VIEW_APP_TITLE "設定"
 #define VIEW_ROW_ROWS 4
 #define VIEW_LABEL_COL 1
 #define VIEW_LABEL_COLS 12
-#define VIEW_MINUS_COL 13
+#define VIEW_MINUS_COL 14
 #define VIEW_BUTTON_COLS 5
-#define VIEW_VALUE_COL 18
+#define VIEW_VALUE_COL 19
 #define VIEW_VALUE_COLS 15
-#define VIEW_PLUS_COL 33
+#define VIEW_PLUS_COL 34
 /* Full-width action buttons and text lines. */
 #define VIEW_WIDE_COL 2
 #define VIEW_WIDE_COLS 36
@@ -108,7 +109,7 @@ static void view_format_minutes(char *out, size_t out_size, uint16_t minutes)
     }
 }
 
-static const char *view_wifi_text(system_settings_view_wifi_t wifi)
+const char *system_settings_view_wifi_text(system_settings_view_wifi_t wifi)
 {
     switch (wifi) {
     case SYSTEM_SETTINGS_VIEW_WIFI_STOPPED: return "停止中";
@@ -124,7 +125,7 @@ static const char *view_wifi_text(system_settings_view_wifi_t wifi)
     }
 }
 
-static uint16_t view_wifi_color(system_settings_view_wifi_t wifi)
+uint16_t system_settings_view_wifi_color(system_settings_view_wifi_t wifi)
 {
     switch (wifi) {
     case SYSTEM_SETTINGS_VIEW_WIFI_CONNECTED: return CYD_UI_THEME_SUCCESS_SOFT;
@@ -134,7 +135,7 @@ static uint16_t view_wifi_color(system_settings_view_wifi_t wifi)
     }
 }
 
-static const char *view_sync_text(system_settings_view_sync_t sync)
+const char *system_settings_view_sync_text(system_settings_view_sync_t sync)
 {
     switch (sync) {
     case SYSTEM_SETTINGS_VIEW_SYNC_IDLE: return "待機中";
@@ -142,6 +143,28 @@ static const char *view_sync_text(system_settings_view_sync_t sync)
     case SYSTEM_SETTINGS_VIEW_SYNC_SYNCING: return "同期中…";
     case SYSTEM_SETTINGS_VIEW_SYNC_RETRY_WAIT: return "再試行待ち";
     default: return "停止中";
+    }
+}
+
+void system_settings_view_format_sync_last(char *out, size_t out_size, system_settings_view_sync_last_t last,
+                                           const struct tm *at, bool with_prefix)
+{
+    const char *prefix = with_prefix ? "前回: " : "";
+
+    switch (last) {
+    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED:
+        snprintf(out, out_size, "%s失敗", prefix);
+        break;
+    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK:
+        snprintf(out, out_size, "%s成功", prefix);
+        break;
+    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK_AT:
+        snprintf(out, out_size, "%s%d/%d %02d:%02d 成功", prefix, at->tm_mon + 1, at->tm_mday, at->tm_hour,
+                 at->tm_min);
+        break;
+    default:
+        snprintf(out, out_size, "%sまだありません", prefix);
+        break;
     }
 }
 
@@ -216,6 +239,16 @@ static void view_line(cyd_display_screen_t *screen, const char *text, uint8_t ro
                      CYD_DISPLAY_ALIGN_LEFT, font, color);
 }
 
+/* "name  value" on one line, the name in the stepper label column. */
+static void view_item(cyd_display_screen_t *screen, const char *name, const char *value, uint8_t row,
+                      uint16_t value_color)
+{
+    cyd_ui_add_label(screen, name, VIEW_LABEL_COL, row, VIEW_LABEL_COLS, VIEW_TEXT_ROWS,
+                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_SUBTEXT);
+    cyd_ui_add_label(screen, value, VIEW_MINUS_COL, row, CYD_DISPLAY_GRID_COLS - 1 - VIEW_MINUS_COL, VIEW_TEXT_ROWS,
+                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, value_color);
+}
+
 static void view_page_nav(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
 {
     if (m->page_count > 0 && m->page_index < m->page_count) {
@@ -226,8 +259,8 @@ static void view_page_nav(cyd_display_screen_t *screen, const system_settings_vi
 }
 
 /*
- * A confirm dialog: the question in 24px (12 characters at most), up to two
- * lines of consequences, and
+ * A confirm dialog: the question in 16px bold (18 characters at most), up to
+ * two lines of consequences, and
  * [やめる] / [action] at opposite edges so a slip cannot hit the wrong one.
  * The destructive button is the only solid red element on the screen.
  */
@@ -240,8 +273,8 @@ static void view_confirm(cyd_display_screen_t *screen,
                          uint16_t cancel_action,
                          uint16_t confirm_action)
 {
-    cyd_ui_add_label(screen, question, VIEW_WIDE_COL, 6, VIEW_WIDE_COLS, 4,
-                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_TEXT);
+    cyd_ui_add_label(screen, question, VIEW_WIDE_COL, 7, VIEW_WIDE_COLS, VIEW_TEXT_ROWS,
+                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_TEXT);
     if (detail1 != NULL) {
         view_line(screen, detail1, 11, CYD_DISPLAY_FONT_BODY, detail1_color);
     }
@@ -250,12 +283,12 @@ static void view_confirm(cyd_display_screen_t *screen,
     }
     if (cancel_action != 0) {
         cyd_ui_add_styled_button(screen, "やめる", VIEW_CONFIRM_CANCEL_COL, VIEW_CONFIRM_ROW, VIEW_CONFIRM_COLS,
-                                 VIEW_CONFIRM_ROWS, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_PRIMARY_SOFT,
+                                 VIEW_CONFIRM_ROWS, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_PRIMARY_SOFT,
                                  CYD_UI_THEME_SURFACE, CYD_UI_THEME_PRIMARY, CYD_UI_THEME_BORDER_PX,
                                  cancel_action, true);
     }
     cyd_ui_add_styled_button(screen, action_label, VIEW_CONFIRM_ACTION_COL, VIEW_CONFIRM_ROW, VIEW_CONFIRM_COLS,
-                             VIEW_CONFIRM_ROWS, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_ON_DANGER,
+                             VIEW_CONFIRM_ROWS, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_ON_DANGER,
                              CYD_UI_THEME_DANGER, CYD_UI_THEME_DANGER, 0, confirm_action, true);
 }
 
@@ -289,28 +322,20 @@ static void view_time(cyd_display_screen_t *screen, const system_settings_view_m
     snprintf(date, sizeof(date), "%d年%d月%d日（%s）", t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
              weekdays[(unsigned)t->tm_wday % 7U]);
 
-    cyd_ui_add_label(screen, clock, VIEW_WIDE_COL, 4, VIEW_WIDE_COLS, 6,
-                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_CLOCK_MEDIUM, CYD_UI_THEME_TEXT);
-    view_line(screen, date, 10, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_TEXT);
+    view_item(screen, "時刻", clock, 5, CYD_UI_THEME_TEXT);
+    view_item(screen, "日付", date, 8, CYD_UI_THEME_TEXT);
     if (m->clock_set) {
-        view_line(screen, "時計は設定済みです", 13, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+        view_line(screen, "時計は設定済みです", 11, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
     } else {
-        view_line(screen, "時計がまだ合っていません", 13, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_WARNING);
+        view_line(screen, "時計がまだ合っていません", 11, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_WARNING);
     }
-    /* Country names run long ("ニュージーランド"), so the label sits on its own
-       line and the value gets the whole width between the buttons. */
-    view_line(screen, "タイムゾーン", 16, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_SUBTEXT);
-    view_stepper_at(screen, "", view_text(m->timezone_label), 19, 0, VIEW_LABEL_COL, VIEW_LABEL_COL + 5, 26,
-                    VIEW_LABEL_COL + 31, CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN, CYD_SETTINGS_APP_ACTION_TIMEZONE_UP,
-                    m->can_timezone_down, m->can_timezone_up);
+    view_stepper(screen, "タイムゾーン", view_text(m->timezone_label), 16, CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN,
+                 CYD_SETTINGS_APP_ACTION_TIMEZONE_UP, m->can_timezone_down, m->can_timezone_up);
 }
 
 static void view_network1(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
 {
-    cyd_ui_add_label(screen, "Wi-Fi", VIEW_WIDE_COL, 5, 7, VIEW_TEXT_ROWS,
-                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_SUBTEXT);
-    cyd_ui_add_label(screen, view_wifi_text(m->wifi), 9, 4, 29, 4,
-                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_TITLE, view_wifi_color(m->wifi));
+    view_item(screen, "Wi-Fi", system_settings_view_wifi_text(m->wifi), 5, system_settings_view_wifi_color(m->wifi));
     view_wide_button(screen, "保存済みのネットワーク", 10, 5, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
                      CYD_SETTINGS_APP_ACTION_STORED_SSIDS, true);
     cyd_ui_add_styled_button(screen, "Wi-Fi を設定する", VIEW_WIDE_COL, 17, VIEW_WIDE_COLS, 5,
@@ -327,22 +352,8 @@ static void view_network2(cyd_display_screen_t *screen, const system_settings_vi
 
     view_format_minutes(interval, sizeof(interval), m->sync_interval_minutes);
     view_format_seconds(idle, sizeof(idle), m->wifi_idle_seconds);
-    snprintf(state, sizeof(state), "時刻同期: %s", view_sync_text(m->sync));
-    switch (m->sync_last) {
-    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED:
-        snprintf(last, sizeof(last), "前回: 失敗");
-        break;
-    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK:
-        snprintf(last, sizeof(last), "前回: 成功");
-        break;
-    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK_AT:
-        snprintf(last, sizeof(last), "前回: %d/%d %02d:%02d 成功", m->last_sync_at.tm_mon + 1,
-                 m->last_sync_at.tm_mday, m->last_sync_at.tm_hour, m->last_sync_at.tm_min);
-        break;
-    default:
-        snprintf(last, sizeof(last), "前回: まだありません");
-        break;
-    }
+    snprintf(state, sizeof(state), "時刻同期: %s", system_settings_view_sync_text(m->sync));
+    system_settings_view_format_sync_last(last, sizeof(last), m->sync_last, &m->last_sync_at, true);
 
     view_stepper(screen, "同期の間隔", interval, 4, CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN,
                  CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP, m->can_sync_interval_down, m->can_sync_interval_up);
@@ -446,8 +457,8 @@ static void view_clear_nvs(cyd_display_screen_t *screen, const system_settings_v
 static void view_message(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
 {
     cyd_ui_add_panel(screen, 1, 7, 38, 14, CYD_UI_THEME_SURFACE, CYD_UI_THEME_LINE, 1, 8);
-    cyd_ui_add_label(screen, view_text(m->message_title), VIEW_WIDE_COL, 9, VIEW_WIDE_COLS, 4,
-                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_TEXT);
+    cyd_ui_add_label(screen, view_text(m->message_title), VIEW_WIDE_COL, 10, VIEW_WIDE_COLS, VIEW_TEXT_ROWS,
+                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_TEXT);
     cyd_ui_add_label(screen, view_text(m->message_detail), VIEW_WIDE_COL, 15, VIEW_WIDE_COLS, 3,
                      CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
 }

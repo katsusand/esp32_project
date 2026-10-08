@@ -134,7 +134,7 @@ English supplement: the files listed above were reshaped so that a derived proje
 ### Layout Rules
 
 - 画面は背景の板 (`cyd_ui_add_panel` で全面) から始める。差分描画が全面を描き直さずに済む
-- 設定画面の行: 見出し 16px 太字、値 24px 太字、増減ボタンは 40px 角以上。コンテンツ領域 (4〜26 行目、184px) に 1 ページ 3〜4 項目まで
+- 設定画面の行: 文字はすべて 16px (標準と太字)、増減ボタンは 40px 角以上。コンテンツ領域 (4〜26 行目、184px) に 1 ページ 3〜4 項目まで
 - 危険操作 (NVS 初期化、アプリデータ消去、再起動) の確認ダイアログは `CYD_UI_THEME_DANGER` を使い、「実行」ボタンと「やめる」ボタンを左右に離して置く
 - 動的な数値 (ヒープ、RSSI、IP アドレス) は ASCII のまま。見出しだけ日本語にする
 
@@ -163,7 +163,7 @@ English contract: a view function takes a model struct and a screen, calls only 
 | 1 | (完了) 区画の `factory` 化。描画基盤の移植 (`cyd_display`、`cyd_ui`、`cyd_ui_fonts`、`scripts/ui_fonts`、`tools/cyd_sim` の書体見本、`test_ui_text.c`)。フォントのプロファイル切り替えを追加。画面はまだ変えない | ビルド、ホストテスト、シミュレーターの見本、アプリサイズ |
 | 2 | (完了) 共通部品: `cyd_ui_add_settings_chrome` (戻る、見出し、ページ送り)、`cyd_ui_add_stepper_row`、`cyd_text_input` の見出しと操作ボタン (「保存」「削除」「空白」など)。キー自体は ASCII だがアンチエイリアス書体で描く | シミュレーター、ホストテスト |
 | 3 | (完了) `system_settings_app` の view 分割と日本語化、`cyd_wifi_setup` | シミュレーター (全ページ・全確認ダイアログ)、ホストテスト |
-| 4 | `system_info_app`、タッチ較正、`cyd_system_apps_common.c` の状態文言 | ビルド |
+| 4 | (完了) `system_info_app`、タッチ較正、`cyd_system_apps_common.c` の状態文言 | ビルド |
 | 5 | ランチャー、時計、時計設定、アラーム。アプリ名 (`app_registry` の `title`) の日本語化 | シミュレーター (ランチャー)、ビルド |
 | 6 | 旧 API に「新規使用禁止」の注記、docs の更新 | — |
 
@@ -226,6 +226,32 @@ English contract: a view function takes a model struct and a screen, calls only 
 - docs: `cyd_system_apps.md` の設定画面の節、`cyd_wifi_setup.md`、`nvs_storage.md` の表、`app_shell.md` の 1 行を更新した。ほかの docs に残る英語のボタン名 (`SYNC NOW`、`Clear App Data` など) は段階 6 で直す
 
 実機で確かめること: 設定の全ページ (増減ボタンの長押し、前へ・次へ、戻る)、各確認ダイアログの「やめる」と実行、保存済みのネットワーク (一番上にする、削除)、Wi-Fi の設定 (一覧、再検索、ページ送り、パスワード入力、接続成功、パスワード違いでの失敗表示)。
+
+## Phase 4 Results
+
+2026-10-08 時点:
+
+- `system_info_app` の画面を `system_info_view.c` に分けた。見出しと項目名は日本語、値と専門用語 (heap、RSSI、NVS の namespace 名、エラー名) は英語のまま
+- ページ送りを、「次のページ名」のボタン 1 つで巡回する形から、設定画面と同じ「前へ」「次へ」(端で止まる) に揃えた。ページ名は 概要 / 診断 / Wi-Fi 診断 / 電波 (RSSI) / NVS
+- Wi-Fi・時刻同期の状態の文言は、設定の view と共有した。`cyd_system_apps_common.c` の英語の状態文言 (`cyd_system_apps_format_wifi_status()` など) は使われなくなったので削除し、view の enum へ変換する共通関数 (`cyd_system_apps_view_wifi()` など) に置き換えた
+- NVS ページの要約が見出しの帯に重なる問題 (段階 2 で記録) は、組み直しで解消した。読み取り失敗のときはエラー名を別の行に出す (40 バイトに収まらないため)
+- タッチ補正の案内文を日本語のアンチエイリアス書体にした。補正画面はパネルへ直接描くので、`cyd_display_draw_aa_text()` に下地の色 (`solid_bg`) を渡す引数を足し、パネルから読み戻さずに混色する。描画の共有コード (`cyd_display_render.hpp`、`cyd_display.cpp`) の変更なので、子へもそのまま取り込まれる
+- ビルド: 成功、警告なし。アプリ 1,328,976 バイト (段階 3 から約 16KB 増)。静的 DRAM +448 バイト (システム情報の model と NVS の namespace 名を static に置いた)
+- ホストテスト: 全件成功 (`test_system_info_view.c` 44 件を追加)
+- シミュレーター: `info_*` 6 シーンを追加して目視確認。タッチ補正の画面はパネルへ直接描くのでシミュレーターでは確認できない
+
+旧 API の画面で残っているのは、ランチャーと時計 (段階 5)、`app_shell` のサンプル (`hello_app`)、Wi-Fi 無効ビルドのスタブ (`cyd_wifi_setup_stub.c`) だけ。
+
+実機で確かめること: システム情報の全ページ (前へ・次へ、戻る、電波グラフの更新)、タッチ補正の案内文の見え方 (文字の縁が黒く浮かないか、印と重ならないか)。
+
+## Device Check 1
+
+2026-10-08、段階 1〜4 (#13〜#16) を実機で確認した。
+
+- 設定系の画面 (設定、システム情報、Wi-Fi の設定、キーボード) の文字は 16px に揃える、とユーザーが決めた。項目の多い画面では、24px の文字は収まっても周りの 16px の行と釣り合わないため
+- 対応 (#16 のブランチで実施): 共通枠の見出し、増減行の値と「−」「+」、Wi-Fi の状態、確認画面の問いかけとボタン、お知らせ、Wi-Fi 設定の見出し・お知らせ・OK を 16px 太字にした。時刻ページの 48px の時計は「時刻」「日付」の行にした
+- 増減行は、項目名 (6 文字) とボタンの間に 1 列空けた (12 列の項目名、14〜18 列「−」、19〜33 列の値、34〜38 列「+」)
+- 大きな書体 (24px、数字の 48px・64px) は、子の打刻結果のように「一目で読ませる」画面にだけ使う
 
 ## Agreed Choices
 

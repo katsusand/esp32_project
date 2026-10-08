@@ -396,9 +396,12 @@ bool cyd_ui_add_panel(cyd_display_screen_t *screen,
 }
 
 /*
- * The largest face in which `text` fits a button of the given size: 24px bold,
- * then 16px bold, then the legacy ASCII font. Small legacy-sized buttons keep
- * a readable "-" instead of an ellipsis until their page is laid out again.
+ * 16px bold when `text` fits a button of the given size, else the legacy ASCII
+ * font. Small legacy-sized buttons keep a readable "-" instead of an ellipsis
+ * until their page is laid out again.
+ *
+ * Settings screens stay at 16px on purpose: they carry many rows, and a 24px
+ * value or button next to 16px rows reads as unbalanced even where it fits.
  */
 static cyd_display_font_t cyd_ui_button_font_for(const char *text, uint8_t span_cols, uint8_t span_rows)
 {
@@ -406,9 +409,6 @@ static cyd_display_font_t cyd_ui_button_font_for(const char *text, uint8_t span_
     const int32_t inner_w = (int32_t)span_cols * CYD_DISPLAY_GRID_CELL_PX - 2 * 6;
     const int32_t h = (int32_t)span_rows * CYD_DISPLAY_GRID_CELL_PX;
 
-    if (h >= 24 && cyd_display_text_width(CYD_DISPLAY_FONT_TITLE, text) <= inner_w) {
-        return CYD_DISPLAY_FONT_TITLE;
-    }
     if (h >= 16 && cyd_display_text_width(CYD_DISPLAY_FONT_BODY_BOLD, text) <= inner_w) {
         return CYD_DISPLAY_FONT_BODY_BOLD;
     }
@@ -423,11 +423,8 @@ esp_err_t cyd_ui_add_stepper_row(cyd_display_screen_t *screen,
     ESP_RETURN_ON_FALSE(row->label_text != NULL, ESP_ERR_INVALID_ARG, TAG, "row label is null");
     ESP_RETURN_ON_FALSE(row->value_text != NULL, ESP_ERR_INVALID_ARG, TAG, "row value is null");
 
-    /* The *_scale fields belong to the legacy font and are ignored here. The
-       value uses 24px text when the row is tall enough for it. */
-    const cyd_display_font_t value_font = row->button_span_rows * CYD_DISPLAY_GRID_CELL_PX >= 24
-                                              ? CYD_DISPLAY_FONT_TITLE
-                                              : CYD_DISPLAY_FONT_BODY_BOLD;
+    /* The *_scale fields belong to the legacy font and are ignored here. */
+    const cyd_display_font_t value_font = CYD_DISPLAY_FONT_BODY_BOLD;
     const cyd_display_font_t button_font =
         cyd_ui_button_font_for("−", row->button_span_cols, row->button_span_rows);
     /* The legacy font has no U+2212. */
@@ -550,7 +547,7 @@ void cyd_ui_add_settings_title(cyd_display_screen_t *screen, const char *app_tit
                      CYD_UI_SETTINGS_TITLE_SPAN_COLS,
                      CYD_UI_SETTINGS_HEADER_ROWS,
                      CYD_DISPLAY_ALIGN_LEFT,
-                     CYD_DISPLAY_FONT_TITLE,
+                     CYD_DISPLAY_FONT_BODY_BOLD,
                      CYD_UI_THEME_TEXT);
 }
 

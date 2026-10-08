@@ -1,4 +1,5 @@
 idf_component_register(SRCS "cyd_system_apps_common.c"
+                            "system_info_view.c"
                             "system_settings_view.c"
                             "system_info_app.c"
                             "system_settings_app.c"

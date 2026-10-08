@@ -87,7 +87,7 @@ rows 27-29  [前へ]     ページ名 n/N     [次へ]
 - 見出しの帯は `cyd_ui_add_settings_title()` が描くので、ページの中身より先に呼ぶ
 - ページ名が長いときは文字境界で切り、` n/N` は必ず残す
 
-増減行 (`cyd_ui_add_stepper_row()`) は、項目名を 16px 太字、値を 24px 太字 (行の高さが 24px 未満なら 16px 太字) で描きます。`−` / `+` のボタンは、入る中で一番大きい書体を使います。旧寸法の小さいボタン (幅 24px、高さ 16px) と、16px 太字に入らない項目名は旧 ASCII 書体に戻すので、ページを日本語化するまでも読めます。新しく作る行は、抵抗膜タッチのため高さ 4 行 (32px) 以上にしてください。
+増減行 (`cyd_ui_add_stepper_row()`) は、項目名・値・`−` / `+` のボタンをすべて 16px 太字で描きます。設定画面は項目が多いので、24px の値やボタンは収まっても周りの行と釣り合いません。旧寸法の小さいボタン (幅 24px、高さ 16px) と、16px 太字に入らない項目名は旧 ASCII 書体に戻すので、ページを日本語化するまでも読めます。共通枠の見出しも 16px 太字です。新しく作る行は、抵抗膜タッチのため高さ 4 行 (32px) 以上にしてください。
 
 English supplement: the chrome deliberately leaves the background to the page. Pages are converted one at a time; a themed background under a legacy page would show its text boxes as black blocks.
 

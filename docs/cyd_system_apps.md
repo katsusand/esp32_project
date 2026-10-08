@@ -16,7 +16,7 @@ English supplement: These apps are intentionally lightweight shell apps. They sh
 
 公開 API は `include/cyd_system_apps.h` にまとめたまま、実装は app の責務ごとに分離しています。
 
-- `system_info_app.c`: `INFO` / `DIAG` / `DIAG2` / `RSSI` の描画と lifecycle
+- `system_info_app.c` / `system_info_view.c`: 概要・診断・Wi-Fi 診断・電波・NVS の各ページの値の取得と描画、lifecycle
 - `system_settings_app.c`: settings の state、描画、action dispatch、direct-view API
 - `system_touch_calibration_app.c`: touch calibration の実行と戻り遷移
 - `cyd_system_apps_common.c`: info / settings が共有する入力確定処理と状態表示整形
@@ -81,28 +81,27 @@ English supplement: Direct-view selection is one-shot and thread-safe; callers s
 
 ## Info App
 
-`info app` は参照用の情報画面です。
+`info app` は参照用の情報画面です。見出しと項目名は日本語、値と専門用語 (heap のバイト数、RSSI、NVS の namespace 名、エラー名) は英語のままです。
 
-- app 名 / version
-- ESP-IDF version
-- chip revision / core count
-- free heap
-- Wi-Fi manager state / active users / last user
-- Wi-Fi connected duration / max duration / warning / last failure
-- Wi-Fi RSSI トレンドグラフ
-- フラッシュ上の NVS namespace 一覧
+| 表示名 | 内容 |
+|---|---|
+| 概要 | アプリ名、バージョン、ESP-IDF、チップ (rev / cores)、空きヒープ、Wi-Fi の状態 |
+| 診断 | 空きヒープ、最小/最大塊、Wi-Fi の失敗理由、時刻同期の状態と前回の結果、保存SSID の件数、タッチ補正 |
+| Wi-Fi 診断 | 状態、利用中、最後の利用、接続時間、最長の接続、警告、失敗の理由 |
+| 電波 (RSSI) | 現在の RSSI とトレンドグラフ |
+| NVS | フラッシュ上の NVS namespace 一覧 |
 
-ページは `INFO -> DIAG -> DIAG2 -> RSSI -> NVS` の順に、画面下部のボタンで巡回します。
+ページは画面下部の「前へ」「次へ」で切り替えます。設定画面と同じく端で止まります (以前は「次のページ名」のボタン 1 つで巡回していました)。左上の「戻る」で、`enter()` の `from_app` として受け取った return app へ戻ります。
 
-左上の `<<` ボタンで、`enter()` の `from_app` として受け取った return app へ戻ります。
+画面の組み立ては `system_info_view.c` にあり、`system_info_app.c` はサービスの値を model (`system_info_view_model_t`) に集めて渡すだけです。Wi-Fi・時刻同期の状態の文言は設定画面の view (`system_settings_view_wifi_text()` など) と共有します。シミュレーターの `info_*` シーンと `test/host/test_system_info_view.c` が全ページを確認します。
 
 ### RSSI Page
 
-`RSSI` ページは `wifi_rssi_history` が集めた RSSI を sparkline widget で描きます。スケールは -100 〜 -30 dBm 固定で、-75 dBm に赤の基準線を引いています。自動スケールにしないのは、時間をまたいで見比べられるようにするためです。
+「電波 (RSSI)」ページは `wifi_rssi_history` が集めた RSSI を sparkline widget で描きます。スケールは -100 〜 -30 dBm 固定で、-75 dBm に赤の基準線を引いています。自動スケールにしないのは、時間をまたいで見比べられるようにするためです。
 
 他のページがタッチ時にしか再描画しないのに対し、このページだけは `step()` で `wifi_rssi_history_get()` の `revision` を監視し、変化があったときだけ再描画します。毎回描き直さないことで、dirty-rect 差分がそのまま効きます。
 
-**この page は Wi-Fi を起動しません。** 未接続時は `Wi-Fi is off` と表示し、それまでの履歴があればグラフはそのまま描きます。グラフを見るためだけに radio を起こすのは過剰という判断です。
+**この page は Wi-Fi を起動しません。** 未接続時は「Wi-Fi はオフです」と表示し、それまでの履歴があればグラフはそのまま描きます。グラフを見るためだけに radio を起こすのは過剰という判断です。
 
 Wi-Fi を長く保ちたい場合は設定の「ネットワーク2」page の「Wi-Fi切断」を使ってください。
 
@@ -114,7 +113,7 @@ English supplement: the RSSI page is the reference example of a live graph drive
 
 prefix を持たない namespace は `unknown` になります。ここには ESP-IDF 自身の `phy` と `nvs.net80211` も含まれるため、`unknown` は「消してよいもの」を意味しません。詳細は `docs/nvs_storage.md` を参照してください。
 
-表示は `CYD_INFO_NVS_VISIBLE_MAX`（10 件）までで、超えると `N found, M shown` と出ます。
+表示は `SYSTEM_INFO_VIEW_NVS_MAX` (10 件) までで、超えると「namespace 12 個 (10 個を表示)」のように出ます。
 
 ## Settings App
 
@@ -125,7 +124,7 @@ prefix を持たない namespace は `unknown` になります。ここには ES
 | 表示名 | page ID | 内容 |
 |---|---|---|
 | 一般 | `GENERAL` | 「画面の明るさ」「無操作で戻る」の増減、「タッチ位置の補正」(touch calibration app へ) |
-| 時刻 | `TIME` | 現在時刻 (48px)、日付と曜日、時計が合っているか、「タイムゾーン」の増減 |
+| 時刻 | `TIME` | 現在時刻、日付と曜日、時計が合っているか、「タイムゾーン」の増減 |
 | ネットワーク1 | `NETWORK1` | Wi-Fi の状態、「保存済みのネットワーク」(サブ画面)、「Wi-Fi を設定する」(`wifi_setup app` へ) |
 | ネットワーク2 | `NETWORK2` | 「同期の間隔」「Wi-Fi切断」の増減、「今すぐ時刻を合わせる」、時刻同期の状態と前回の結果 |
 | 初期化 | `NVS` | 「タッチ補正を消去」「アプリのデータを消去」「すべて初期化」 |
@@ -154,7 +153,9 @@ prefix を持たない namespace は `unknown` になります。ここには ES
 
 「タッチ補正を消去」は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。「すべて初期化」は確認画面を経て `nvs_flash_erase()` を実行し、保存済み Wi-Fi profile や各種設定値も含めて初期化したうえで再起動します。
 
-確認画面は、問いかけ (24px、12 文字まで) と影響の説明を出し、「やめる」を左端、実行ボタン (赤の塗り) を右端に離して置きます。
+確認画面は、問いかけ (16px 太字、18 文字まで) と影響の説明を出し、「やめる」を左端、実行ボタン (赤の塗り) を右端に離して置きます。
+
+設定・システム情報・Wi-Fi の設定の画面は、文字をすべて 16px (標準と太字) にしています。項目の多い画面では、24px の文字は収まっても周りの 16px の行と釣り合わないためです (2026-10-08、実機確認でのユーザーの判断)。ボタンや行の高さは、抵抗膜タッチのため 32〜40px のままです。
 
 NVS blob の version / size / 文字列終端などが現在 firmware の想定フォーマットと一致しない場合は、起動時に「保存データが読めません」の確認画面へ強制遷移します。この画面には「やめる」が無く、「初期化する」のあとの再起動が必要です。原因 (`nvs_health_get_summary()`、英語) は小さく表示します。
 
