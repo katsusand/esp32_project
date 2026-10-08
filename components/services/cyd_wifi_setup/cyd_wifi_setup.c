@@ -13,26 +13,17 @@
 #include "cyd_ui.h"
 #include "esp32_wifi_sta.h"
 #include "cyd_wifi_setup.h"
+#include "cyd_wifi_setup_view.h"
 #include "time_sync.h"
 #include "wifi_connection.h"
 
-#define WIFI_SCAN_STATUS_LINE_COUNT 10
+#define WIFI_SCAN_STATUS_LINE_COUNT CYD_WIFI_SETUP_VIEW_APS_PER_PAGE
 #define WIFI_SCAN_RECORD_CAPACITY CONFIG_ESP32_WIFI_STA_SCAN_LIST_SIZE
-#define WIFI_SCREEN_FIRST_LINE_ROW 4
-#define WIFI_SCREEN_LINE_HEIGHT_ROWS 2
-#define WIFI_BACK_COL           0
-#define WIFI_BACK_ROW           0
-#define WIFI_BACK_WIDTH_COLS    6
-#define WIFI_BACK_HEIGHT_ROWS   3
-#define WIFI_TITLE_COL          8
-#define WIFI_TITLE_ROW          0
-#define WIFI_TITLE_WIDTH_COLS   32
-#define WIFI_TITLE_HEIGHT_ROWS  2
-#define WIFI_ACTION_SCAN_BASE   0x0100
-#define WIFI_ACTION_SCAN_BACK   0x030a
-#define WIFI_ACTION_SCAN_REFRESH 0x030b
-#define WIFI_ACTION_SCAN_PREV   0x030c
-#define WIFI_ACTION_SCAN_NEXT   0x030d
+#define WIFI_ACTION_SCAN_BASE   CYD_WIFI_SETUP_VIEW_ACTION_AP_BASE
+#define WIFI_ACTION_SCAN_BACK   CYD_WIFI_SETUP_VIEW_ACTION_BACK
+#define WIFI_ACTION_SCAN_REFRESH CYD_WIFI_SETUP_VIEW_ACTION_RESCAN
+#define WIFI_ACTION_SCAN_PREV   CYD_WIFI_SETUP_VIEW_ACTION_PREV
+#define WIFI_ACTION_SCAN_NEXT   CYD_WIFI_SETUP_VIEW_ACTION_NEXT
 #define WIFI_IDLE_POLL_MS       250
 
 #ifndef CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS
@@ -125,16 +116,6 @@ static bool wifi_touch_event_confirmed_action(const cyd_input_event_t *event,
     }
 }
 
-static void wifi_format_scan_line(char *line, size_t line_size, const esp32_wifi_sta_scan_record_t *record)
-{
-    snprintf(line,
-             line_size,
-             "%-24s %4d ch%02u",
-             record->ssid,
-             record->rssi,
-             (unsigned)record->channel);
-}
-
 static size_t wifi_scan_session_page_count(const wifi_scan_session_t *session)
 {
     if (session == NULL || session->record_count == 0) {
@@ -143,33 +124,18 @@ static size_t wifi_scan_session_page_count(const wifi_scan_session_t *session)
     return (session->record_count + WIFI_SCAN_STATUS_LINE_COUNT - 1) / WIFI_SCAN_STATUS_LINE_COUNT;
 }
 
-static void wifi_add_scan_control_button(cyd_display_screen_t *screen,
-                                         const char *text,
-                                         uint8_t col,
-                                         uint16_t action_id,
-                                         bool enabled)
-{
-    cyd_ui_add_button_with_fg_enabled(screen,
-                                      text,
-                                      col,
-                                      26,
-                                      12,
-                                      3,
-                                      CYD_UI_COLOR_WHITE,
-                                      CYD_UI_COLOR_BLUE,
-                                      CYD_UI_COLOR_CYAN,
-                                      action_id,
-                                      enabled);
-}
-
+/* `title` names the refresh in the log only; the view owns the wording. */
 static esp_err_t wifi_show_scan_screen(const char *title,
                                        esp_err_t scan_ret,
                                        wifi_scan_session_t *session,
                                        bool scanning)
 {
-    cyd_display_screen_t *screen = &s_wifi_setup_screen;
-    char line_storage[WIFI_SCAN_STATUS_LINE_COUNT][CYD_DISPLAY_TEXT_MAX_LEN + 1];
-    char title_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+    cyd_wifi_setup_view_model_t model = {
+        .screen = CYD_WIFI_SETUP_VIEW_SCAN,
+        .scanning = scanning,
+        .scan_failed = scan_ret != ESP_OK,
+        .scan_error = scan_ret != ESP_OK ? esp_err_to_name(scan_ret) : NULL,
+    };
     size_t page_count = 1;
     size_t first_record = 0;
 
@@ -182,63 +148,21 @@ static esp_err_t wifi_show_scan_screen(const char *title,
     }
     first_record = session->page_index * WIFI_SCAN_STATUS_LINE_COUNT;
 
-    cyd_ui_screen_clear(screen);
-
-    snprintf(title_line,
-             sizeof(title_line),
-             "%s %u/%u",
-             title,
-             (unsigned)(session->page_index + 1),
-             (unsigned)page_count);
-    cyd_ui_add_text(screen,
-                    title_line,
-                    WIFI_TITLE_COL,
-                    WIFI_TITLE_ROW,
-                    WIFI_TITLE_WIDTH_COLS,
-                    WIFI_TITLE_HEIGHT_ROWS,
-                    CYD_DISPLAY_ALIGN_RIGHT,
-                    2,
-                    CYD_UI_COLOR_YELLOW);
-
-    if (scan_ret != ESP_OK) {
-        snprintf(line_storage[0], sizeof(line_storage[0]), "scan error: %s", esp_err_to_name(scan_ret));
-        cyd_ui_add_text(screen, line_storage[0], 1, 14, CYD_DISPLAY_GRID_COLS - 2, 1, CYD_DISPLAY_ALIGN_CENTER, 1, CYD_UI_COLOR_WHITE);
-    } else {
-        if (scanning) {
-            cyd_ui_add_text(screen, "searching...", 1, 14, CYD_DISPLAY_GRID_COLS - 2, 1, CYD_DISPLAY_ALIGN_CENTER, 1, CYD_UI_COLOR_WHITE);
-        } else if (session->record_count == 0) {
-            cyd_ui_add_text(screen, "no AP found", 1, 14, CYD_DISPLAY_GRID_COLS - 2, 1, CYD_DISPLAY_ALIGN_CENTER, 1, CYD_UI_COLOR_WHITE);
-        } else {
-            size_t remaining_count = session->record_count - first_record;
-            size_t count = remaining_count < WIFI_SCAN_STATUS_LINE_COUNT ? remaining_count : WIFI_SCAN_STATUS_LINE_COUNT;
-            for (size_t i = 0; i < count; ++i) {
-                wifi_format_scan_line(line_storage[i], sizeof(line_storage[i]), &session->records[first_record + i]);
-                cyd_ui_add_button(screen,
-                                line_storage[i],
-                                1,
-                                (uint8_t)(WIFI_SCREEN_FIRST_LINE_ROW + i * WIFI_SCREEN_LINE_HEIGHT_ROWS),
-                                CYD_DISPLAY_GRID_COLS - 2,
-                                WIFI_SCREEN_LINE_HEIGHT_ROWS,
-                                CYD_UI_COLOR_DARKGREY,
-                                CYD_UI_COLOR_LIGHTGREY,
-                                (uint16_t)(WIFI_ACTION_SCAN_BASE + i));
-            }
-            session->visible_count = count;
+    if (scan_ret == ESP_OK && !scanning && session->record_count > 0) {
+        size_t remaining_count = session->record_count - first_record;
+        size_t count = remaining_count < WIFI_SCAN_STATUS_LINE_COUNT ? remaining_count : WIFI_SCAN_STATUS_LINE_COUNT;
+        for (size_t i = 0; i < count; ++i) {
+            model.aps[i] = (cyd_wifi_setup_view_ap_t){
+                .ssid = session->records[first_record + i].ssid,
+                .rssi = session->records[first_record + i].rssi,
+            };
         }
+        model.ap_count = count;
+        session->visible_count = count;
     }
-
-    cyd_ui_add_button(screen,
-                      "<<",
-                      WIFI_BACK_COL,
-                      WIFI_BACK_ROW,
-                      WIFI_BACK_WIDTH_COLS,
-                      WIFI_BACK_HEIGHT_ROWS,
-                      CYD_UI_COLOR_BLUE,
-                      CYD_UI_COLOR_CYAN,
-                      WIFI_ACTION_SCAN_BACK);
-    wifi_add_scan_control_button(screen, "SCAN", 1, WIFI_ACTION_SCAN_REFRESH, !scanning);
-    wifi_add_scan_control_button(screen, "<", 14, WIFI_ACTION_SCAN_PREV, !scanning && session->page_index > 0);
-    wifi_add_scan_control_button(screen, ">", 27, WIFI_ACTION_SCAN_NEXT, !scanning && session->page_index + 1 < page_count);
+    model.page_index = session->page_index;
+    model.page_count = page_count;
+    cyd_wifi_setup_view_build(&s_wifi_setup_screen, &model);
 
     ESP_LOGI(TAG,
              "%s refresh %" PRIu32 ": %u APs page=%u/%u",
@@ -247,7 +171,7 @@ static esp_err_t wifi_show_scan_screen(const char *title,
              (unsigned)session->record_count,
              (unsigned)(session->page_index + 1),
              (unsigned)page_count);
-    return cyd_ui_submit(screen);
+    return cyd_ui_submit(&s_wifi_setup_screen);
 }
 
 static esp_err_t wifi_refresh_scan_session(wifi_scan_session_t *session)
@@ -291,11 +215,22 @@ static void wifi_discard_pending_input(wifi_scan_session_t *session)
     (void)cyd_input_discard_pending_events();
 }
 
+static esp_err_t wifi_show_notice(cyd_wifi_setup_view_screen_t screen, const char *ssid)
+{
+    const cyd_wifi_setup_view_model_t model = {
+        .screen = screen,
+        .ssid = ssid,
+    };
+    cyd_wifi_setup_view_build(&s_wifi_setup_screen, &model);
+    return cyd_ui_submit(&s_wifi_setup_screen);
+}
+
 static esp_err_t wifi_test_connect_and_save(const char *ssid,
                                             const char *password,
-                                            wifi_auth_mode_t authmode)
+                                            wifi_auth_mode_t authmode,
+                                            esp32_wifi_sta_failure_reason_t *failure_reason)
 {
-    ESP_RETURN_ON_ERROR(cyd_display_show_text(&s_wifi_setup_screen, "Wi-Fi", "Connecting..."),
+    ESP_RETURN_ON_ERROR(wifi_show_notice(CYD_WIFI_SETUP_VIEW_CONNECTING, ssid),
                         TAG,
                         "show connecting failed");
     ESP_RETURN_ON_ERROR(wifi_connection_connect_and_save(
@@ -303,25 +238,40 @@ static esp_err_t wifi_test_connect_and_save(const char *ssid,
                             password,
                             authmode,
                             pdMS_TO_TICKS(CONFIG_ESP32_WIFI_STA_CONNECT_TIMEOUT_MS),
-                            NULL),
+                            failure_reason),
                         TAG,
                         "Wi-Fi connect test failed");
-    return cyd_display_show_text(&s_wifi_setup_screen, "Wi-Fi", "Saved");
+    return wifi_show_notice(CYD_WIFI_SETUP_VIEW_SAVED, ssid);
 }
 
-static void wifi_wait_ok_dialog(const char *title, const char *message)
+static cyd_wifi_setup_view_failure_t wifi_view_failure(esp32_wifi_sta_failure_reason_t reason)
 {
-    const char *lines[] = { message };
-    const char *buttons[] = { "OK" };
+    switch (reason) {
+    case ESP32_WIFI_STA_FAILURE_AUTH: return CYD_WIFI_SETUP_VIEW_FAILURE_AUTH;
+    case ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE: return CYD_WIFI_SETUP_VIEW_FAILURE_NOT_FOUND;
+    case ESP32_WIFI_STA_FAILURE_TIMEOUT: return CYD_WIFI_SETUP_VIEW_FAILURE_TIMEOUT;
+    default: return CYD_WIFI_SETUP_VIEW_FAILURE_OTHER;
+    }
+}
+
+static void wifi_wait_failed_dialog(const char *ssid, esp_err_t err, esp32_wifi_sta_failure_reason_t reason)
+{
+    const cyd_wifi_setup_view_model_t model = {
+        .screen = CYD_WIFI_SETUP_VIEW_FAILED,
+        .ssid = ssid,
+        .failure = wifi_view_failure(reason),
+        .error = esp_err_to_name(err),
+    };
     wifi_touch_action_tracker_t touch_tracker = { 0 };
 
     /* Built into s_wifi_setup_screen, so taps are tested against the dialog.
        The scan screen is rebuilt there when the scan session restarts. */
-    esp_err_t err = cyd_display_show_mode_screen(&s_wifi_setup_screen, title, lines, 1, buttons, 1, 0);
-    if (err != ESP_OK) {
+    cyd_wifi_setup_view_build(&s_wifi_setup_screen, &model);
+    esp_err_t submit_err = cyd_ui_submit(&s_wifi_setup_screen);
+    if (submit_err != ESP_OK) {
         /* Not ESP_ERROR_CHECK: a failed draw must not reboot the device. With no
            OK button on screen there is nothing to wait for, so skip the dialog. */
-        ESP_LOGW(TAG, "show OK dialog failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "show failure dialog failed: %s", esp_err_to_name(submit_err));
         return;
     }
     while (true) {
@@ -334,8 +284,9 @@ static void wifi_wait_ok_dialog(const char *title, const char *message)
         }
 
         uint16_t action_id = 0;
-        if (wifi_touch_event_confirmed_action(&event, &touch_tracker, &action_id)) {
-            return; /* the only button is OK */
+        if (wifi_touch_event_confirmed_action(&event, &touch_tracker, &action_id) &&
+            action_id == CYD_WIFI_SETUP_VIEW_ACTION_OK) {
+            return;
         }
     }
 }
@@ -421,10 +372,10 @@ esp_err_t cyd_wifi_setup_poll_scan_session(const cyd_input_event_t *event,
 void cyd_wifi_setup_begin_password_session(const esp32_wifi_sta_scan_record_t *record)
 {
     cyd_text_input_config_t config = {
-        .title = "Wi-Fi Password",
-        .context_label = "SSID:",
+        .title = "Wi-Fi のパスワード",
+        .context_label = "SSID",
         .context_value = record != NULL ? record->ssid : "",
-        .input_label = "PASS:",
+        .input_label = "パスワード",
         .initial_text = "",
         .max_len = 64,
         .obscure_input = true,
@@ -465,16 +416,18 @@ esp_err_t cyd_wifi_setup_poll_password_session(const cyd_input_event_t *event,
         return ESP_OK;
     }
     if (input_result == CYD_TEXT_INPUT_RESULT_SAVED) {
+        esp32_wifi_sta_failure_reason_t reason = ESP32_WIFI_STA_FAILURE_NONE;
         esp_err_t err = wifi_test_connect_and_save(s_password_session.record.ssid,
                                                    password,
-                                                   s_password_session.record.authmode);
+                                                   s_password_session.record.authmode,
+                                                   &reason);
         if (err == ESP_OK) {
             vTaskDelay(pdMS_TO_TICKS(800));
             *result = CYD_WIFI_SETUP_PASSWORD_CONNECTED;
             return ESP_OK;
         }
         ESP_LOGW(TAG, "Wi-Fi SAVE failed: %s", esp_err_to_name(err));
-        wifi_wait_ok_dialog("Wi-Fi Failed", esp_err_to_name(err));
+        wifi_wait_failed_dialog(s_password_session.record.ssid, err, reason);
         *result = CYD_WIFI_SETUP_PASSWORD_CANCELLED;
         return ESP_OK;
     }

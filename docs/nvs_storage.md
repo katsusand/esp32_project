@@ -112,7 +112,7 @@ esp_err_t nvs_schema_erase_scope(nvs_schema_scope_t scope, size_t *erased_count)
 
 ### scope 単位の消去
 
-`SETTINGS` の `NVS` page にある `Clear App Data` が `app_` scope だけを消し、再起動します。
+設定の「初期化」page にある「アプリのデータを消去」(`Clear App Data`) が `app_` scope だけを消し、再起動します。
 
 **再起動は必須です。** app は起動時に自分の NVS データを読むため、消したあとも動き続けていると古い状態を保持したままになります。
 
@@ -124,9 +124,9 @@ esp_err_t nvs_schema_erase_scope(nvs_schema_scope_t scope, size_t *erased_count)
 
 | 操作 | 消える範囲 | 再起動 |
 |---|---|---|
-| `Clear Touch Calib` | `sys_input` のタッチ補正 key のみ | あり |
-| `Clear App Data` | `app_` scope の namespace 全部 | あり |
-| `Initialize NVS` | `nvs_flash_erase()` で全部 | あり |
+| 「タッチ補正を消去」(`Clear Touch Calib`) | `sys_input` のタッチ補正 key のみ | あり |
+| 「アプリのデータを消去」(`Clear App Data`) | `app_` scope の namespace 全部 | あり |
+| 「すべて初期化」(`Initialize NVS`) | `nvs_flash_erase()` で全部 | あり |
 
 `Initialize NVS` は `phy` と `nvs.net80211` も消しますが、どちらも起動時に再生成されます。
 

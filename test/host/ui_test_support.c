@@ -56,13 +56,10 @@ static int32_t inset_for(const cyd_display_widget_t *w)
     return w->type == CYD_DISPLAY_WIDGET_BUTTON ? 6 : 0;
 }
 
-void ui_test_check_screen(const char *name, const cyd_display_screen_t *screen)
+/* True when every anti-aliased label fits its box; prints why not when `name` is set. */
+static bool labels_fit(const char *name, const cyd_display_screen_t *screen)
 {
-    char what[160];
     bool all_fit = true;
-
-    snprintf(what, sizeof(what), "%s: %u widgets fit the screen buffer", name, (unsigned)screen->widget_count);
-    ui_test_check(screen->widget_count < CYD_DISPLAY_MAX_WIDGETS, what);
 
     for (size_t i = 0; i < screen->widget_count; ++i) {
         const cyd_display_widget_t *w = &screen->widgets[i];
@@ -75,17 +72,35 @@ void ui_test_check_screen(const char *name, const cyd_display_screen_t *screen)
         int32_t box = (int32_t)w->span_cols * CYD_DISPLAY_GRID_CELL_PX - 2 * inset_for(w);
         int32_t width = cyd_ui_font_text_width(font, text);
         if (width > box) {
-            printf("  FAIL %s: \"%s\" is %ldpx in a %ldpx box\n", name, text, (long)width, (long)box);
+            if (name != NULL) {
+                printf("  FAIL %s: \"%s\" is %ldpx in a %ldpx box\n", name, text, (long)width, (long)box);
+            }
             all_fit = false;
         }
         int32_t height = (int32_t)w->span_rows * CYD_DISPLAY_GRID_CELL_PX;
         if (font->line_height > height) {
-            printf("  FAIL %s: \"%s\" box is shorter than its line\n", name, text);
+            if (name != NULL) {
+                printf("  FAIL %s: \"%s\" box is shorter than its line\n", name, text);
+            }
             all_fit = false;
         }
     }
+    return all_fit;
+}
+
+bool ui_test_screen_fits(const cyd_display_screen_t *screen)
+{
+    return screen->widget_count < CYD_DISPLAY_MAX_WIDGETS && labels_fit(NULL, screen);
+}
+
+void ui_test_check_screen(const char *name, const cyd_display_screen_t *screen)
+{
+    char what[160];
+
+    snprintf(what, sizeof(what), "%s: %u widgets fit the screen buffer", name, (unsigned)screen->widget_count);
+    ui_test_check(screen->widget_count < CYD_DISPLAY_MAX_WIDGETS, what);
     snprintf(what, sizeof(what), "%s: every label fits without shrinking", name);
-    ui_test_check(all_fit, what);
+    ui_test_check(labels_fit(name, screen), what);
 }
 
 int ui_test_finish(void)

@@ -162,7 +162,7 @@ English contract: a view function takes a model struct and a screen, calls only 
 |---|---|---|
 | 1 | (完了) 区画の `factory` 化。描画基盤の移植 (`cyd_display`、`cyd_ui`、`cyd_ui_fonts`、`scripts/ui_fonts`、`tools/cyd_sim` の書体見本、`test_ui_text.c`)。フォントのプロファイル切り替えを追加。画面はまだ変えない | ビルド、ホストテスト、シミュレーターの見本、アプリサイズ |
 | 2 | (完了) 共通部品: `cyd_ui_add_settings_chrome` (戻る、見出し、ページ送り)、`cyd_ui_add_stepper_row`、`cyd_text_input` の見出しと操作ボタン (「保存」「削除」「空白」など)。キー自体は ASCII だがアンチエイリアス書体で描く | シミュレーター、ホストテスト |
-| 3 | `system_settings_app` の view 分割と日本語化、`cyd_wifi_setup` | シミュレーター (全ページ・全確認ダイアログ)、ホストテスト |
+| 3 | (完了) `system_settings_app` の view 分割と日本語化、`cyd_wifi_setup` | シミュレーター (全ページ・全確認ダイアログ)、ホストテスト |
 | 4 | `system_info_app`、タッチ較正、`cyd_system_apps_common.c` の状態文言 | ビルド |
 | 5 | ランチャー、時計、時計設定、アラーム。アプリ名 (`app_registry` の `title`) の日本語化 | シミュレーター (ランチャー)、ビルド |
 | 6 | 旧 API に「新規使用禁止」の注記、docs の更新 | — |
@@ -206,6 +206,26 @@ English contract: a view function takes a model struct and a screen, calls only 
 残っている見た目の問題: システム情報の NVS ページ (`system_info_app.c`) は、要約の行を 3 行目に置いているので、見出しの帯 (0〜3 行目) に重なる。段階 4 で直す
 
 実機で確かめること: 設定画面 (各ページの見出し・戻る・前へ・次へ・増減ボタン) と、Wi-Fi のパスワード入力 (伏せ字の切り替え、保存、戻る)。
+
+## Phase 3 Results
+
+2026-10-08 時点:
+
+- `system_settings_app` の画面を `system_settings_view.c` に、`cyd_wifi_setup` の画面を `cyd_wifi_setup_view.c` に分けた。どちらも model だけから組み、文言はすべて view にある
+- Wi-Fi・時刻同期の状態は view 独自の enum で渡す。`cyd_system_apps_common.c` の状態文言 (英語) はシステム情報の画面がまだ旧書体で使っているので、段階 4 まで残す
+- 設定画面の寸法: 増減行は高さ 32px、「−」「+」は 40×32px。項目名は 6 文字 (12 列)、値は 15 列 (120px)。ページ送りは 24px のまま (幅 80px で押しやすく、中身の行を減らすほうが不便なため)
+- 確認ダイアログは、問いかけ (24px、12 文字まで) と説明 2 行、「やめる」を左端、赤い実行ボタンを右端に置く
+- 値の書き方: 「同期の間隔」は 2 時間以上のちょうどの時間だけ「N時間」、それ以外は「N分」(「2時間10分」は 24px で入らない)。「無操作で戻る」「Wi-Fi切断」は「しない / N秒 / N分 / N分S秒」
+- タイムゾーンは項目名を上の行に出し、値の欄を 208px にした (「ニュージーランド」が入る)
+- 「アプリ」page は 1 画面 5 件から 4 件にした (ボタンを 32px にしたため)。登録済みの設定画面は時計の 1 件だけ
+- Wi-Fi の一覧は 1 ページ 10 件 (16px) から 5 件 (32px) にした。電波は「強い / ふつう / 弱い」で表し、channel は出さない
+- Wi-Fi の接続に失敗したとき、失敗理由 (`AUTH` など) に応じた一言を出すようにした (以前は `esp_err_to_name()` だけ)
+- ビルド: 成功、警告なし。アプリ 1,313,296 バイト (段階 2 から約 50KB 増。半分以上はフォントの漢字)。静的 DRAM +240 バイト (設定画面の model を static に置いた)
+- ホストテスト: 全件成功 (`test_system_settings_view.c` 79 件、`test_wifi_setup_view.c` 29 件を追加)。増減の全段階の値と全タイムゾーンが枠に収まることも確認した
+- シミュレーター: `sys_*` 20 シーン、`wifi_*` 10 シーンを追加して目視確認
+- docs: `cyd_system_apps.md` の設定画面の節、`cyd_wifi_setup.md`、`nvs_storage.md` の表、`app_shell.md` の 1 行を更新した。ほかの docs に残る英語のボタン名 (`SYNC NOW`、`Clear App Data` など) は段階 6 で直す
+
+実機で確かめること: 設定の全ページ (増減ボタンの長押し、前へ・次へ、戻る)、各確認ダイアログの「やめる」と実行、保存済みのネットワーク (一番上にする、削除)、Wi-Fi の設定 (一覧、再検索、ページ送り、パスワード入力、接続成功、パスワード違いでの失敗表示)。
 
 ## Agreed Choices
 
