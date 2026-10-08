@@ -651,6 +651,9 @@ static void cyd_settings_fill_general_page(system_settings_view_model_t *m)
     m->idle_return_seconds = idle_return_seconds;
     m->can_idle_return_down = idle_return_seconds > 0;
     m->can_idle_return_up = idle_return_seconds < CYD_SETTINGS_IDLE_RETURN_MAX;
+    m->theme_name = cyd_ui_theme_name(cyd_ui_theme_id());
+    m->can_theme_down = cyd_ui_theme_id() > 0;
+    m->can_theme_up = cyd_ui_theme_id() + 1 < CYD_UI_THEME_ID_COUNT;
 }
 
 static void cyd_settings_fill_time_page(system_settings_view_model_t *m)
@@ -724,6 +727,7 @@ static void cyd_settings_fill_profiles(system_settings_view_model_t *m)
 static esp_err_t cyd_settings_save_pending_values(void)
 {
     ESP_RETURN_ON_ERROR(cyd_display_save_brightness(), TAG, "save brightness failed");
+    ESP_RETURN_ON_ERROR(cyd_ui_theme_save(), TAG, "save colour theme failed");
     ESP_RETURN_ON_ERROR(app_shell_save_idle_return_timeout_seconds(), TAG, "save idle return timeout failed");
     ESP_RETURN_ON_ERROR(time_sync_save_interval_minutes(), TAG, "save time sync interval failed");
     ESP_RETURN_ON_ERROR(time_sync_save_timezone(), TAG, "save timezone failed");
@@ -1032,6 +1036,19 @@ static esp_err_t cyd_settings_handle_general_page_action(uint16_t action_id, boo
         ESP_RETURN_ON_ERROR(cyd_display_set_brightness(CYD_SETTINGS_BRIGHTNESS_LEVELS[brightness_index]),
                             TAG,
                             "set brightness failed");
+        ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
+        *handled = true;
+        return ESP_OK;
+    }
+
+    /* An ordinary tap, not a stepper: holding it must not flash through
+       every theme. Saved with the other settings when settings is left. */
+    if (action_id == CYD_SETTINGS_APP_ACTION_THEME_DOWN || action_id == CYD_SETTINGS_APP_ACTION_THEME_UP) {
+        int theme = (int)cyd_ui_theme_id() + (action_id == CYD_SETTINGS_APP_ACTION_THEME_UP ? 1 : -1);
+
+        if (theme >= 0 && theme < (int)CYD_UI_THEME_ID_COUNT) {
+            cyd_ui_set_theme((cyd_ui_theme_id_t)theme);
+        }
         ESP_RETURN_ON_ERROR(cyd_settings_refresh(), TAG, "refresh settings failed");
         *handled = true;
         return ESP_OK;

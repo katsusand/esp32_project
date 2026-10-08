@@ -57,6 +57,8 @@ extern "C" {
 #define CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP 0x2221
 #define CYD_SETTINGS_APP_ACTION_RESTART_CANCEL 0x2222
 #define CYD_SETTINGS_APP_ACTION_RESTART_CONFIRM 0x2223
+#define CYD_SETTINGS_APP_ACTION_THEME_DOWN 0x2224
+#define CYD_SETTINGS_APP_ACTION_THEME_UP 0x2225
 /* + index into the stored profile list */
 #define CYD_SETTINGS_APP_ACTION_STORED_SELECT_BASE 0x2300
 /* + index into the apps page list */
@@ -130,6 +132,9 @@ typedef struct {
     uint16_t idle_return_seconds; /* 0 = never */
     bool can_idle_return_down;
     bool can_idle_return_up;
+    const char *theme_name; /* cyd_ui_theme_name() of the selected theme */
+    bool can_theme_down;
+    bool can_theme_up;
 
     /* TIME */
     struct tm local_time;

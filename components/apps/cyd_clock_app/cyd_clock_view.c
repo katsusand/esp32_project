@@ -130,7 +130,7 @@ static void view_face(cyd_display_screen_t *screen, const cyd_clock_view_model_t
                      CYD_CLOCK_VIEW_TIME_SPAN_ROWS, CYD_DISPLAY_ALIGN_CENTER,
                      CYD_DISPLAY_FONT_CLOCK_MEDIUM, m->time_known ? CYD_UI_THEME_TEXT : CYD_UI_THEME_SUBTEXT);
     cyd_ui_add_label(screen, sync, 1, 18, 38, 2, CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY,
-                     m->sync == CYD_CLOCK_VIEW_SYNC_FAILED ? CYD_UI_THEME_DANGER : CYD_UI_THEME_SUBTEXT);
+                     m->sync == CYD_CLOCK_VIEW_SYNC_FAILED ? CYD_UI_THEME_DANGER_SOFT : CYD_UI_THEME_SUBTEXT);
     cyd_ui_add_label(screen, wifi, 1, 20, 38, 2, CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY,
                      CYD_UI_THEME_SUBTEXT);
 
@@ -156,7 +156,7 @@ static void view_face(cyd_display_screen_t *screen, const cyd_clock_view_model_t
 static void view_wifi_failed(cyd_display_screen_t *screen, const cyd_clock_view_model_t *m)
 {
     view_background(screen);
-    view_centered(screen, "Wi-Fi に接続できません", 6, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_DANGER);
+    view_centered(screen, "Wi-Fi に接続できません", 6, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_DANGER_SOFT);
     view_centered(screen, view_failure_text(m->failure), 10, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_TEXT);
     view_centered(screen, "もう一度試すか、設定してください", 14, CYD_DISPLAY_FONT_BODY,
                   CYD_UI_THEME_SUBTEXT);

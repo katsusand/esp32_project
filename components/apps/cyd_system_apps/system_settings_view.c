@@ -129,7 +129,7 @@ uint16_t system_settings_view_wifi_color(system_settings_view_wifi_t wifi)
 {
     switch (wifi) {
     case SYSTEM_SETTINGS_VIEW_WIFI_CONNECTED: return CYD_UI_THEME_SUCCESS_SOFT;
-    case SYSTEM_SETTINGS_VIEW_WIFI_FAILED: return CYD_UI_THEME_DANGER;
+    case SYSTEM_SETTINGS_VIEW_WIFI_FAILED: return CYD_UI_THEME_DANGER_SOFT;
     case SYSTEM_SETTINGS_VIEW_WIFI_SETUP_REQUIRED: return CYD_UI_THEME_WARNING;
     default: return CYD_UI_THEME_TEXT;
     }
@@ -304,10 +304,13 @@ static void view_general(cyd_display_screen_t *screen, const system_settings_vie
 
     view_stepper(screen, "画面の明るさ", brightness, 5, CYD_SETTINGS_APP_ACTION_BRIGHTNESS_DOWN,
                  CYD_SETTINGS_APP_ACTION_BRIGHTNESS_UP, m->can_dim, m->can_brighten);
-    view_stepper(screen, "無操作で戻る", idle_return, 10, CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN,
+    /* The whole screen redraws in the new colours the moment it changes. */
+    view_stepper(screen, "配色", view_text(m->theme_name), 10, CYD_SETTINGS_APP_ACTION_THEME_DOWN,
+                 CYD_SETTINGS_APP_ACTION_THEME_UP, m->can_theme_down, m->can_theme_up);
+    view_stepper(screen, "無操作で戻る", idle_return, 15, CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN,
                  CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP, m->can_idle_return_down, m->can_idle_return_up);
-    view_line(screen, "操作がないとメイン画面に戻ります", 14, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
-    view_wide_button(screen, "タッチ位置の補正", 19, 5, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
+    view_line(screen, "操作がないとメイン画面に戻ります", 19, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    view_wide_button(screen, "タッチ位置の補正", 22, 4, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
                      CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE, true);
 }
 
@@ -364,7 +367,7 @@ static void view_network2(cyd_display_screen_t *screen, const system_settings_vi
     view_line(screen, state, 20, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_TEXT);
     view_line(screen, last, 23,
               CYD_DISPLAY_FONT_BODY,
-              m->sync_last == SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED ? CYD_UI_THEME_DANGER : CYD_UI_THEME_SUBTEXT);
+              m->sync_last == SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED ? CYD_UI_THEME_DANGER_SOFT : CYD_UI_THEME_SUBTEXT);
 }
 
 /*
@@ -390,7 +393,7 @@ static void view_nvs(cyd_display_screen_t *screen)
 
     for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i) {
         view_wide_button(screen, actions[i].label, actions[i].row, 4,
-                         actions[i].danger ? CYD_UI_THEME_DANGER : CYD_UI_THEME_WARNING,
+                         actions[i].danger ? CYD_UI_THEME_DANGER_SOFT : CYD_UI_THEME_WARNING,
                          actions[i].danger ? CYD_UI_THEME_DANGER_TINT : CYD_UI_THEME_WARNING_TINT,
                          actions[i].action_id, true);
         cyd_ui_add_label(screen, actions[i].detail, VIEW_WIDE_COL, (uint8_t)(actions[i].row + 4), VIEW_WIDE_COLS, 2,
@@ -434,7 +437,7 @@ static void view_stored_ssids(cyd_display_screen_t *screen, const system_setting
                              CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE, CYD_UI_THEME_PRIMARY,
                              CYD_UI_THEME_BORDER_PX, CYD_SETTINGS_APP_ACTION_STORED_PREFER, count > 0);
     cyd_ui_add_styled_button(screen, "削除", 21, 22, 18, 5, CYD_DISPLAY_FONT_BODY_BOLD,
-                             CYD_UI_THEME_DANGER, CYD_UI_THEME_DANGER_TINT, CYD_UI_THEME_DANGER,
+                             CYD_UI_THEME_DANGER_SOFT, CYD_UI_THEME_DANGER_TINT, CYD_UI_THEME_DANGER_SOFT,
                              CYD_UI_THEME_BORDER_PX, CYD_SETTINGS_APP_ACTION_STORED_DELETE, count > 0);
     cyd_ui_add_settings_back(screen, CYD_SETTINGS_APP_ACTION_BACK);
 }

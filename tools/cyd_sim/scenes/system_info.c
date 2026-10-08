@@ -4,6 +4,7 @@
  */
 #include <stdint.h>
 #include <string.h>
+#include "cyd_ui.h"
 #include "sim_catalog.h"
 #include "system_info_view.h"
 
@@ -76,7 +77,7 @@ static void build_rssi(cyd_display_screen_t *screen, unsigned frame)
     m.rssi_graph = (cyd_display_sparkline_t){
         .samples = samples, .count = 120, .revision = (uint16_t)(frame / 30U), .min_value = -100,
         .max_value = -30, .fill = true, .has_baseline = true, .baseline_value = -75,
-        .baseline_color = 0xea28, .has_gap_value = true, .gap_value = INT16_MIN,
+        .baseline_color = CYD_UI_THEME_DANGER, .has_gap_value = true, .gap_value = INT16_MIN,
     };
     system_info_view_build(screen, &m);
 }

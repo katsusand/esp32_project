@@ -6,6 +6,91 @@
 
 #define TAG "cyd_ui"
 
+/*
+ * Theme tables. The hex comments are the design colours; the values are those
+ * colours rounded to RGB565, which is what the contrast test measures.
+ */
+static const cyd_ui_theme_t k_cyd_ui_themes[CYD_UI_THEME_ID_COUNT] = {
+    /* Pure colours on black: what the CYD's TN panel shows most clearly. */
+    [CYD_UI_THEME_ID_HIGH_CONTRAST] = {
+        .bg = 0x0000, .surface = 0x0000, .line = 0xffff,         /* #000000 #000000 #ffffff */
+        .text = 0xffff, .subtext = 0xffff, .disabled = 0x8c71,    /* #ffffff #ffffff #8c8c8c */
+        .success = 0x07e0, .success_soft = 0x07e0, .on_success = 0x0000, /* #00ff00 */
+        .primary = 0x07ff, .primary_soft = 0x07ff, .on_primary = 0x0000, /* #00ffff */
+        .warning = 0xffe0, .warning_tint = 0x0000, .on_warning = 0x0000, /* #ffff00 */
+        .info = 0x07ff, .info_tint = 0x0000, .on_info = 0x0000,          /* #00ffff */
+        .danger = 0xfb8e, .danger_soft = 0xfb8e, .danger_tint = 0x0000, .on_danger = 0x0000, /* #ff7070 */
+    },
+    [CYD_UI_THEME_ID_STANDARD] = {
+        .bg = 0x0884, .surface = 0x1106, .line = 0x5b51,         /* #0a1020 #172033 #5b6b88 */
+        .text = 0xf7bf, .subtext = 0x9517, .disabled = 0x9517,    /* #f1f4f9 #94a3ba #94a3ba */
+        .success = 0x262b, .success_soft = 0x7f14, .on_success = 0x0101, /* #22c55e #7ee2a0 #06210f */
+        .primary = 0x231d, .primary_soft = 0x8ddf, .on_primary = 0xffff, /* #2563eb #8fb8ff #ffffff */
+        .warning = 0xf4e1, .warning_tint = 0x2901, .on_warning = 0x28c0, /* #f59e0b #2b2108 #2b1a00 */
+        .info = 0x269d, .info_tint = 0x0988, .on_info = 0x0126,          /* #22d3ee #0d3340 #032530 */
+        .danger = 0xd924, .danger_soft = 0xfc51, .danger_tint = 0x3882, .on_danger = 0xffff,
+        /* #dc2626 #ff8a8a #3a1114 #ffffff */
+    },
+    [CYD_UI_THEME_ID_LIGHT] = {
+        .bg = 0xffff, .surface = 0xef9e, .line = 0x5b2e,         /* #ffffff #eef1f5 #5a6472 */
+        .text = 0x0000, .subtext = 0x31c8, .disabled = 0x6b90,    /* #000000 #333a44 #6b7380 */
+        .success = 0x0345, .success_soft = 0x0345, .on_success = 0xffff, /* #006b2e */
+        .primary = 0x0237, .primary_soft = 0x0237, .on_primary = 0xffff, /* #0046b8 */
+        .warning = 0x8a40, .warning_tint = 0xff9a, .on_warning = 0xffff, /* #8a4b00 #fff1d6 */
+        .info = 0x02ee, .info_tint = 0xe79e, .on_info = 0xffff,          /* #005f73 #e1f3f7 */
+        .danger = 0xb004, .danger_soft = 0xb004, .danger_tint = 0xff3c, .on_danger = 0xffff, /* #b00020 #ffe4e6 */
+    },
+    /* Okabe-Ito hues for colour vision deficiency: success is bluish green,
+       danger vermillion, warning yellow and info reddish purple, so no
+       meaning rests on telling red from green. */
+    [CYD_UI_THEME_ID_COLOR_SAFE] = {
+        .bg = 0x0000, .surface = 0x18c3, .line = 0xa514,         /* #000000 #1a1a1a #a0a0a0 */
+        .text = 0xffff, .subtext = 0xd69a, .disabled = 0x8c71,    /* #ffffff #d0d0d0 #8c8c8c */
+        .success = 0x04ee, .success_soft = 0x2e33, .on_success = 0x0000, /* #009e73 #2fc59a */
+        .primary = 0x0396, .primary_soft = 0x55bd, .on_primary = 0xffff, /* #0072b2 #56b4e9 */
+        .warning = 0xf728, .warning_tint = 0x2120, .on_warning = 0x0000, /* #f0e442 #262400 */
+        .info = 0xd457, .info_tint = 0x2864, .on_info = 0x0000,          /* #d68ab8 #2a0f20 */
+        .danger = 0xe323, .danger_soft = 0xebc5, .danger_tint = 0x28a0, .on_danger = 0x0000,
+        /* #e0661a #ef7a2a #2e1400 */
+    },
+};
+
+static const char *const k_cyd_ui_theme_names[CYD_UI_THEME_ID_COUNT] = {
+    [CYD_UI_THEME_ID_HIGH_CONTRAST] = "高コントラスト",
+    [CYD_UI_THEME_ID_STANDARD] = "標準",
+    [CYD_UI_THEME_ID_LIGHT] = "ライト",
+    [CYD_UI_THEME_ID_COLOR_SAFE] = "色覚配慮",
+};
+
+/* Read by every screen builder, written only from the settings flow. A torn
+   read is impossible for an aligned enum on the ESP32. */
+static cyd_ui_theme_id_t s_cyd_ui_theme_id = CYD_UI_THEME_ID_DEFAULT;
+
+const cyd_ui_theme_t *cyd_ui_theme_colors(cyd_ui_theme_id_t id)
+{
+    return &k_cyd_ui_themes[(unsigned)id < CYD_UI_THEME_ID_COUNT ? id : CYD_UI_THEME_ID_DEFAULT];
+}
+
+const cyd_ui_theme_t *cyd_ui_theme(void)
+{
+    return cyd_ui_theme_colors(s_cyd_ui_theme_id);
+}
+
+cyd_ui_theme_id_t cyd_ui_theme_id(void)
+{
+    return s_cyd_ui_theme_id;
+}
+
+void cyd_ui_set_theme(cyd_ui_theme_id_t id)
+{
+    s_cyd_ui_theme_id = (unsigned)id < CYD_UI_THEME_ID_COUNT ? id : CYD_UI_THEME_ID_DEFAULT;
+}
+
+const char *cyd_ui_theme_name(cyd_ui_theme_id_t id)
+{
+    return (unsigned)id < CYD_UI_THEME_ID_COUNT ? k_cyd_ui_theme_names[id] : "";
+}
+
 void cyd_ui_screen_clear(cyd_display_screen_t *screen)
 {
     if (screen != NULL) {
@@ -355,9 +440,9 @@ bool cyd_ui_add_styled_button(cyd_display_screen_t *screen,
         .align = CYD_DISPLAY_ALIGN_CENTER,
         .scale_x = 1,
         .scale_y = 1,
-        .fg_color = enabled ? fg_color : CYD_UI_THEME_SUBTEXT,
+        .fg_color = enabled ? fg_color : CYD_UI_THEME_DISABLED,
         .bg_color = enabled ? bg_color : CYD_UI_THEME_SURFACE,
-        .border_color = enabled ? border_color : CYD_UI_THEME_LINE,
+        .border_color = enabled ? border_color : CYD_UI_THEME_DISABLED,
         .action_id = action_id,
         .enabled = enabled,
         .font = (uint8_t)font,

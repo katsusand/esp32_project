@@ -61,6 +61,7 @@ prefix が 4 文字なので、component 側に使えるのは 11 文字です�
 |---|---|---|
 | `sys_display` | system | `cyd_display` |
 | `sys_input` | system | `cyd_input` |
+| `sys_ui` | system | `cyd_ui` (配色のテーマ。key `theme`、u8) |
 | `sys_shell` | system | `app_shell` |
 | `ftr_radio` | feature | `radio_manager` |
 | `ftr_sched` | feature | `app_scheduler` |

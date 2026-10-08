@@ -25,37 +25,102 @@ extern "C" {
 #define CYD_UI_COLOR_DISABLED_BORDER CYD_UI_COLOR_DARKGREY
 
 /*
- * Theme for the anti-aliased Japanese UI (RGB565).
+ * Colour themes for the anti-aliased Japanese UI (RGB565).
  *
  * Screens built with the label / styled-button calls below take their colours
- * from here so every app reads as one product. Semantic colours (success,
- * warning, danger) carry meaning and are not decoration: an app should not
- * reuse DANGER for anything that is not an error or a destructive action.
+ * from the selected theme, so every app reads as one product and follows the
+ * theme the user picks in settings. Semantic colours (success, warning,
+ * danger) carry meaning and are not decoration: an app should not reuse
+ * DANGER for anything that is not an error or a destructive action.
  *
- * English supplement: *_TINT is a dark fill that pairs with the same-named
- * colour as a border or text; ON_* is the text colour to use on a solid fill
- * of that colour.
+ * English supplement: *_TINT is a fill that pairs with the same-named colour
+ * as a border or text (dark in dark themes, pale in the light theme); ON_* is
+ * the text colour on a solid fill of that colour; *_SOFT is that colour as
+ * text on BG or SURFACE. Every pair meets a contrast ratio that
+ * test/host/test_ui_themes.c checks: 7:1 for text in the high-contrast theme,
+ * 4.5:1 for text elsewhere, 3:1 for borders (WCAG 2.x formula, after RGB565).
  */
-#define CYD_UI_THEME_BG           0x0884 /* #0a1020 */
-#define CYD_UI_THEME_SURFACE      0x1106 /* #172033 panels, secondary buttons */
-#define CYD_UI_THEME_LINE         0x29aa /* #2a3650 borders, idle spinner track */
-#define CYD_UI_THEME_TEXT         0xf7bf /* #f1f4f9 */
-#define CYD_UI_THEME_SUBTEXT      0x9517 /* #94a3ba secondary text */
-#define CYD_UI_THEME_SUCCESS      0x262b /* #22c55e */
-#define CYD_UI_THEME_SUCCESS_SOFT 0x7f14 /* #7ee2a0 success text on dark */
-#define CYD_UI_THEME_ON_SUCCESS   0x0101 /* #06210f */
-#define CYD_UI_THEME_PRIMARY      0x3c1e /* #3b82f6 */
-#define CYD_UI_THEME_PRIMARY_SOFT 0x8ddf /* #8fb8ff primary text on dark */
-#define CYD_UI_THEME_ON_PRIMARY   0xffff
-#define CYD_UI_THEME_WARNING      0xf4e1 /* #f59e0b */
-#define CYD_UI_THEME_WARNING_TINT 0x2901 /* #2b2108 */
-#define CYD_UI_THEME_ON_WARNING   0x28c0 /* #2b1a00 */
-#define CYD_UI_THEME_INFO         0x269d /* #22d3ee "do this next" prompts */
-#define CYD_UI_THEME_INFO_TINT    0x0988 /* #0d3340 */
-#define CYD_UI_THEME_ON_INFO      0x0126 /* #032530 */
-#define CYD_UI_THEME_DANGER       0xea28 /* #ef4444 */
-#define CYD_UI_THEME_DANGER_TINT  0x3882 /* #3a1114 */
-#define CYD_UI_THEME_ON_DANGER    0xffff
+typedef struct {
+    uint16_t bg;
+    uint16_t surface;  /* panels, secondary buttons */
+    uint16_t line;     /* borders, idle spinner track */
+    uint16_t text;
+    uint16_t subtext;  /* secondary text */
+    uint16_t disabled; /* text and border of a disabled button */
+    uint16_t success;
+    uint16_t success_soft;
+    uint16_t on_success;
+    uint16_t primary;
+    uint16_t primary_soft;
+    uint16_t on_primary;
+    uint16_t warning;
+    uint16_t warning_tint;
+    uint16_t on_warning;
+    uint16_t info;     /* "do this next" prompts */
+    uint16_t info_tint;
+    uint16_t on_info;
+    uint16_t danger;
+    uint16_t danger_soft;
+    uint16_t danger_tint;
+    uint16_t on_danger;
+} cyd_ui_theme_t;
+
+/*
+ * The selectable themes. The value is what the settings store, so existing
+ * values must never be renumbered; add new themes at the end.
+ */
+typedef enum {
+    CYD_UI_THEME_ID_HIGH_CONTRAST = 0, /* default: black, white and pure colours */
+    CYD_UI_THEME_ID_STANDARD,          /* dark navy */
+    CYD_UI_THEME_ID_LIGHT,             /* white background */
+    CYD_UI_THEME_ID_COLOR_SAFE,        /* Okabe-Ito hues: no red/green pair carries meaning */
+    CYD_UI_THEME_ID_COUNT,
+} cyd_ui_theme_id_t;
+
+#define CYD_UI_THEME_ID_DEFAULT CYD_UI_THEME_ID_HIGH_CONTRAST
+
+/* The selected theme's colours. Never NULL. */
+const cyd_ui_theme_t *cyd_ui_theme(void);
+cyd_ui_theme_id_t cyd_ui_theme_id(void);
+/* Selects a theme for screens built from now on; an unknown id selects the default. */
+void cyd_ui_set_theme(cyd_ui_theme_id_t id);
+/* The colours of any theme (an unknown id gives the default's). */
+const cyd_ui_theme_t *cyd_ui_theme_colors(cyd_ui_theme_id_t id);
+/* "高コントラスト", "標準", ...; an unknown id gives "". */
+const char *cyd_ui_theme_name(cyd_ui_theme_id_t id);
+
+/*
+ * The selection is kept in NVS (namespace "sys_ui", system scope, so Clear App
+ * Data keeps it). Load once at boot, after NVS and before the first screen;
+ * save when the setting is committed. A missing or unknown stored value loads
+ * the default. Firmware only (cyd_ui_theme_store.c).
+ */
+esp_err_t cyd_ui_theme_load(void);
+esp_err_t cyd_ui_theme_save(void);
+
+/* Colour names used by the screens: the selected theme's values. */
+#define CYD_UI_THEME_BG           (cyd_ui_theme()->bg)
+#define CYD_UI_THEME_SURFACE      (cyd_ui_theme()->surface)
+#define CYD_UI_THEME_LINE         (cyd_ui_theme()->line)
+#define CYD_UI_THEME_TEXT         (cyd_ui_theme()->text)
+#define CYD_UI_THEME_SUBTEXT      (cyd_ui_theme()->subtext)
+#define CYD_UI_THEME_DISABLED     (cyd_ui_theme()->disabled)
+#define CYD_UI_THEME_SUCCESS      (cyd_ui_theme()->success)
+#define CYD_UI_THEME_SUCCESS_SOFT (cyd_ui_theme()->success_soft)
+#define CYD_UI_THEME_ON_SUCCESS   (cyd_ui_theme()->on_success)
+#define CYD_UI_THEME_PRIMARY      (cyd_ui_theme()->primary)
+#define CYD_UI_THEME_PRIMARY_SOFT (cyd_ui_theme()->primary_soft)
+#define CYD_UI_THEME_ON_PRIMARY   (cyd_ui_theme()->on_primary)
+#define CYD_UI_THEME_WARNING      (cyd_ui_theme()->warning)
+#define CYD_UI_THEME_WARNING_TINT (cyd_ui_theme()->warning_tint)
+#define CYD_UI_THEME_ON_WARNING   (cyd_ui_theme()->on_warning)
+#define CYD_UI_THEME_INFO         (cyd_ui_theme()->info)
+#define CYD_UI_THEME_INFO_TINT    (cyd_ui_theme()->info_tint)
+#define CYD_UI_THEME_ON_INFO      (cyd_ui_theme()->on_info)
+#define CYD_UI_THEME_DANGER       (cyd_ui_theme()->danger)
+#define CYD_UI_THEME_DANGER_SOFT  (cyd_ui_theme()->danger_soft)
+#define CYD_UI_THEME_DANGER_TINT  (cyd_ui_theme()->danger_tint)
+#define CYD_UI_THEME_ON_DANGER    (cyd_ui_theme()->on_danger)
 
 /* Border thickness of outlined buttons and panels in the themed UI. */
 #define CYD_UI_THEME_BORDER_PX 2

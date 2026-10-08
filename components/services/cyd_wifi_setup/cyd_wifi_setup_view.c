@@ -77,7 +77,7 @@ static void view_scan(cyd_display_screen_t *screen, const cyd_wifi_setup_view_mo
     if (m->scanning) {
         view_notice(screen, "探しています…", CYD_UI_THEME_INFO, "近くの Wi-Fi を検索しています", NULL);
     } else if (m->scan_failed) {
-        view_notice(screen, "検索できませんでした", CYD_UI_THEME_DANGER, "再検索を押してください",
+        view_notice(screen, "検索できませんでした", CYD_UI_THEME_DANGER_SOFT, "再検索を押してください",
                     view_text(m->scan_error));
     } else if (m->ap_count == 0) {
         view_notice(screen, "見つかりません", CYD_UI_THEME_WARNING, "近くに Wi-Fi がありません", NULL);
@@ -138,7 +138,7 @@ void cyd_wifi_setup_view_build(cyd_display_screen_t *screen, const cyd_wifi_setu
         break;
     case CYD_WIFI_SETUP_VIEW_FAILED:
         view_header(screen, false);
-        view_notice(screen, "接続できませんでした", CYD_UI_THEME_DANGER, view_failure_text(m->failure),
+        view_notice(screen, "接続できませんでした", CYD_UI_THEME_DANGER_SOFT, view_failure_text(m->failure),
                     view_text(m->error));
         cyd_ui_add_label(screen, view_text(m->ssid), 1, 4, 38, 3,
                          CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_SUBTEXT);

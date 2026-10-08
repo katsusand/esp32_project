@@ -94,7 +94,7 @@ static void view_scheduler(cyd_display_screen_t *screen, const cyd_clock_setting
 
     if (m->schedules_unavailable) {
         cyd_ui_add_label(screen, "スケジューラーを読めません", 1, 4, 38, 2, CYD_DISPLAY_ALIGN_LEFT,
-                         CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_DANGER);
+                         CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_DANGER_SOFT);
         return;
     }
     snprintf(summary, sizeof(summary), "登録 %u / %u 件", (unsigned)m->schedule_count,
