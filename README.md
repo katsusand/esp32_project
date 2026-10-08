@@ -419,27 +419,25 @@ English supplement: `sdkconfig.defaults` is the project baseline. Local `sdkconf
 
 ## Partition Layout
 
-`partitions.csv` は 4 MB flash の dual OTA 構成です。
+`partitions.csv` は 4 MB flash の単一 `factory` アプリ構成です。OTA 更新は使っていないため、OTA の 2 面構成はやめ、アプリ区画を 3MB にしています。日本語 UI のアンチエイリアスフォントを入れるための容量です（[docs/ui_japanese_platform_plan.md](docs/ui_japanese_platform_plan.md)）。
 
 ```text
-nvs,      data, nvs,   0xa000,    140K
-otadata,  data, ota,   0x2d000,     8K
-phy_init, data, phy,   0x2f000,     4K
-ota_0,    app,  ota_0, 0x30000,  1536K
-ota_1,    app,  ota_1, 0x1b0000, 1536K
-storage,  data, fat,   0x330000,  832K
+nvs,      data, nvs,     0xa000,    140K
+phy_init, data, phy,     0x2f000,     4K
+factory,  app,  factory, 0x30000,  3072K
+storage,  data, fat,     0x330000,  832K
 ```
 
-未割り当て領域はありません。app パーティションは 0x10000 境界から始める必要があるため、`ota_0` の手前に生じる隙間を `nvs` に吸収させています（結果として `nvs` は 140K）。
+0x2d000-0x2f000 は旧 `otadata` の位置で、未使用です。ほかの区画を動かさないために空けています。
 
 `storage` の subtype を `fat` にしているのは、SD カード用に FATFS が既にリンクされているためです。追加のファイルシステムを持ち込まずに済み、アプリからは `/sdcard` と同じ扱いにできます。
 
-English supplement: app partitions must be 0x10000-aligned, so `nvs` is sized to fill the gap exactly rather than leaving a hole. `storage` reuses FATFS to avoid linking a second filesystem.
+English supplement: app partitions must be 0x10000-aligned. When the OTA slots were merged into `factory`, every data partition kept its offset and size, so moving from the old dual-OTA layout only needs a normal `flash` (no erase): `nvs` and `storage` survive.
 
-この構成へ移行する際は、一度だけ全消去が必要です。**タッチ補正値、Wi-Fi 認証情報、輝度設定などの NVS データは消えます。**
+旧 dual OTA 構成からの移行は、通常の書き込みで済みます（全消去は不要で、NVS と内部ストレージは残ります）。
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py" erase-flash flash monitor
+source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py" flash monitor
 ```
 
 ## Documentation
@@ -451,6 +449,9 @@ source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py
 - [App Registry](docs/app_registry.md)
 - [App Launcher](docs/app_launcher.md)
 - [CYD UI Helper](docs/cyd_ui.md)
+- [CYD UI Fonts](docs/cyd_ui_fonts.md)
+- [CYD Simulator](docs/cyd_sim.md)
+- [UI Japanese Platform Plan](docs/ui_japanese_platform_plan.md)
 - [CYD Input Driver](docs/cyd_input.md)
 - [Build Feature Switches](docs/build_feature_switches.md)
 - [CYD Wi-Fi Setup](docs/cyd_wifi_setup.md)

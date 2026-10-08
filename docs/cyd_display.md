@@ -132,12 +132,12 @@ typedef struct {
 
 ```c
 typedef struct {
-    cyd_display_widget_type_t type;
+    uint8_t type;          /* cyd_display_widget_type_t */
     uint8_t col;
     uint8_t row;
     uint8_t span_cols;
     uint8_t span_rows;
-    cyd_display_align_t align;
+    uint8_t align;         /* cyd_display_align_t */
     uint8_t scale_x;
     uint8_t scale_y;
     uint16_t fg_color;
@@ -145,7 +145,10 @@ typedef struct {
     uint16_t border_color;
     uint16_t action_id;
     bool enabled;
+    uint8_t font;          /* cyd_display_font_t */
+    uint8_t border_width;
     const cyd_display_bitmap_t *bitmap;
+    const char *text_ref;
     union {
         char text[CYD_DISPLAY_TEXT_MAX_LEN + 1];
         cyd_display_rect_style_t rect;
@@ -164,7 +167,9 @@ typedef struct {
 - `CYD_DISPLAY_WIDGET_BAR`: レベルメーター / ゲージ
 - `CYD_DISPLAY_WIDGET_SPARKLINE`: 時系列折れ線グラフ
 
-テキストは `CYD_DISPLAY_TEXT_MAX_LEN`、つまり 40 文字までです。超える場合は呼び出し側で短くしてください。
+`type` と `align` は enum ではなく 1 バイトで持ちます。`font`、`border_width`、`text_ref` を追加しても `sizeof(cyd_display_widget_t)` を 72 バイトのまま保つためです (ESP32 で計測)。
+
+テキストの持ち方は [Text And Fonts](#text-and-fonts) を参照してください。
 
 ### Payload Union
 
@@ -247,6 +252,50 @@ LovyanGFX は**ポインタの型でソース形式を決めます**。[LGFXBase
 
 English supplement: Widget order is significant for dirty-rect comparison. Keep stable widget ordering between frames when updating only text or colors.
 
+## Text And Fonts
+
+### Font Faces
+
+TEXT / BUTTON widget の `font` で書体を選びます。
+
+| `cyd_display_font_t` | 書体 | 用途 |
+|---|---|---|
+| `CYD_DISPLAY_FONT_LEGACY` (0) | LovyanGFX 内蔵 6x8 ASCII を `scale_x` / `scale_y` 倍 | 従来の画面。`font` を設定しない画面はすべてこれ |
+| `CYD_DISPLAY_FONT_BODY` | 16px 標準 (JIS X 0208 全体を収録) | 本文、注記、バックエンドから届く文言 |
+| `CYD_DISPLAY_FONT_BODY_BOLD` | 16px 太字 | ヘッダー、小さいボタン |
+| `CYD_DISPLAY_FONT_TITLE` | 24px 太字 | 見出し、主ボタン、結果 |
+| `CYD_DISPLAY_FONT_CLOCK_MEDIUM` | 48px 太字 | 数字・`:/-. `・`✓!` のみ |
+| `CYD_DISPLAY_FONT_CLOCK_LARGE` | 64px 太字 | 数字・`:/-. `・`✓!` のみ |
+
+LEGACY 以外はアンチエイリアスの日本語フォントです。フォント表は `cyd_ui_fonts` にあり、flash に置いたまま描画します ([CYD UI Fonts](cyd_ui_fonts.md))。
+
+アンチエイリアス書体の描画規則:
+
+- 文字列は widget の枠内で縦中央に置き、`align` で左右を揃える
+- 枠の外にははみ出さない (枠でクリップする)
+- 枠より長い場合、まず一回り小さい書体に切り替える (`TITLE` → `BODY_BOLD`、`CLOCK_LARGE` → `CLOCK_MEDIUM`)。それでも入らなければ末尾を「…」にする
+- TEXT widget の背景は塗らない。下に描いたものの上に混色して描く
+- フォントに無い文字は、空白ではなく枠 (豆腐) として描く
+
+English contract: the scale fields are ignored by anti-aliased faces. Wording that only fits after shrinking or ellipsizing is a layout bug; a screen's host test checks for it with `ui_test_check_screen()` (`test/host/ui_test_support.h`).
+
+### Text Storage
+
+テキストは `cyd_display_widget_set_text()` で設定します (`cyd_ui` の関数は内部でこれを使います)。
+
+- string literal など読み取り専用領域 (ESP32 では flash の rodata) にある文字列は、コピーせず `text_ref` で参照する。長さの制限はない
+- それ以外 (スタック、ヒープ、書き換え可能な static) の文字列は `text` へコピーする。`CYD_DISPLAY_TEXT_MAX_LEN` (40 バイト) を超える分は、UTF-8 の文字の途中ではなく文字の境界で切る
+
+日本語は 1 文字 3 バイトなので、コピーされる文字列は 13 文字までです。固定の文言は literal のまま渡し、`snprintf` で組み立てる文字列は 40 バイトに収まる短いもの (コード、UID、時刻など) に限ってください。
+
+RAM 上の長い文字列 (バックエンドから届いたお知らせなど) は `cyd_display_widget_set_text_pinned()` で参照させます。ビットマップやスパークラインと同じく、**その画面が表示されているあいだ、文字列を書き換えてはいけません。** 差分判定は前の画面と今の画面の文字列を内容で比べるため、その場で書き換えると両方が新しい内容を指し、変化が描かれません。書き換えるのは、その文字列を使わない画面が表示されているあいだ (その画面に入る直前など) にしてください。
+
+English contract: whether text is referenced or copied is decided by where it lives (`cyd_display_port_text_is_immutable()`), never by the caller - except through `cyd_display_widget_set_text_pinned()`, where the caller takes on the lifetime and no-in-place-edit rules above. The frame diff compares text by content, so a reused buffer whose words changed is redrawn even though its address did not.
+
+### Borders
+
+BUTTON と、塗りつぶしの RECT は `border_width` ピクセルの枠を持てます (0 は従来どおり 1px)。太い枠は、枠の色で塗ってから内側を枠幅ぶん小さく塗るので、角丸の角にすき間が出ません。
+
 ## Grid Layout
 
 このドライバーは 8 px 単位のグリッドを使います。
@@ -296,6 +345,10 @@ English supplement: `cyd_display_log_push()` keeps the view tailing the newest l
 この仕組みにより、毎回全画面を描き直すよりも描画量を抑えます。
 
 English supplement: Dirty rendering relies on comparing current and previous widget structs. Avoid leaving uninitialized bytes in widgets because they may cause unnecessary redraws.
+
+描画と差分判定のコードは `cyd_display_render.hpp` にまとめてあり、FreeRTOS・NVS・パネルに依存しません。実機の `cyd_display.cpp` と Mac 用シミュレーター ([CYD Simulator](cyd_sim.md)) は同じこのファイルで描画します。メモリに関する判定 (ポインタが読めるか、文字列が読み取り専用領域にあるか) だけは `cyd_display_port.h` を通して、それぞれの側が実装します。
+
+English supplement: anything that decides what a pixel looks like or whether a widget is redrawn belongs in `cyd_display_render.hpp`, so the simulator cannot drift from the device.
 
 ## Hit Test Helpers
 

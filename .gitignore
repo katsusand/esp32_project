@@ -83,3 +83,6 @@ Desktop.ini
 *.suo
 # Visual Studio
 *.sln.docstates
+
+# UI font sources (fetched by scripts/ui_fonts/fetch_fonts.sh)
+third_party/fonts/**/*.ttf

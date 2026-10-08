@@ -15,4 +15,8 @@ English supplement: Project-authored source code, documentation, and configurati
 
 English supplement: Keep third-party notices and license files intact when redistributing this repository or firmware source packages.
 
+UI の日本語フォント (`components/support/cyd_ui_fonts/generated/`) は BIZ UDPGothic から必要な文字だけを取り出して作った表で、BIZ UDPGothic の改変版として SIL Open Font License 1.1 に従います。ライセンス本文は `third_party/fonts/biz_udpgothic/OFL.txt` です。ファームウェアやソースを配布する際は同梱してください。
+
+English supplement: the generated font tables are a Modified Version of BIZ UDPGothic under OFL 1.1, not Apache 2.0. Keep `OFL.txt` with any distribution that contains them.
+
 ESP-IDF および ESP-IDF managed components は、それぞれ上流プロジェクトのライセンスに従います。このリポジトリの Apache License 2.0 は、ESP-IDF や外部依存ライブラリのライセンス条件を置き換えるものではありません。

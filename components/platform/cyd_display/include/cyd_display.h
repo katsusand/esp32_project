@@ -44,6 +44,33 @@ typedef enum {
 } cyd_display_align_t;
 
 /*
+ * Text face of a TEXT or BUTTON widget.
+ *
+ * LEGACY is the built-in 6x8 ASCII font scaled by scale_x/scale_y, drawn
+ * exactly as before this enum existed; it is the zero value so every screen
+ * that never sets a font keeps its look. The other faces are the anti-aliased
+ * Japanese UI fonts from cyd_ui_fonts and ignore the scale fields.
+ *
+ * English contract for the anti-aliased faces:
+ *  - Text is centred vertically in the widget box for every alignment, and is
+ *    clipped to the box, so it can never paint over a neighbour.
+ *  - Text wider than the box falls back to the next smaller face of the same
+ *    kind (TITLE -> BODY_BOLD, CLOCK_LARGE -> CLOCK_MEDIUM) and is then cut with
+ *    "…". Nothing is ever silently clipped mid-character.
+ *  - Glyphs are blended over whatever was drawn underneath; the widget's
+ *    bg_color is not painted behind TEXT widgets.
+ */
+typedef enum {
+    CYD_DISPLAY_FONT_LEGACY = 0,
+    CYD_DISPLAY_FONT_BODY,         /* 16px regular; all of JIS X 0208 */
+    CYD_DISPLAY_FONT_BODY_BOLD,    /* 16px bold */
+    CYD_DISPLAY_FONT_TITLE,        /* 24px bold */
+    CYD_DISPLAY_FONT_CLOCK_MEDIUM, /* 48px bold, digits, ":/-. " and "✓!" only */
+    CYD_DISPLAY_FONT_CLOCK_LARGE,  /* 64px bold, digits, ":/-. " and "✓!" only */
+    CYD_DISPLAY_FONT_COUNT,
+} cyd_display_font_t;
+
+/*
  * RGB565 pixel block, referenced by an ICON widget.
  *
  * English contract, and it is load-bearing: neither this struct nor `data` is
@@ -110,12 +137,14 @@ typedef struct {
 } cyd_display_sparkline_t;
 
 typedef struct {
-    cyd_display_widget_type_t type;
+    /* cyd_display_widget_type_t, stored in one byte: see the size note below. */
+    uint8_t type;
     uint8_t col;
     uint8_t row;
     uint8_t span_cols;
     uint8_t span_rows;
-    cyd_display_align_t align;
+    /* cyd_display_align_t */
+    uint8_t align;
     uint8_t scale_x;
     uint8_t scale_y;
     uint16_t fg_color;
@@ -123,7 +152,23 @@ typedef struct {
     uint16_t border_color;
     uint16_t action_id;
     bool enabled;
+    /* cyd_display_font_t; LEGACY (0) unless set. */
+    uint8_t font;
+    /* Border thickness in pixels for BUTTON and RECT; 0 draws the 1px default. */
+    uint8_t border_width;
     const cyd_display_bitmap_t *bitmap;
+    /*
+     * Text that lives in read-only storage (a string literal or other
+     * `static const` data) is referenced here instead of being copied into
+     * `text`, so a label can be longer than CYD_DISPLAY_TEXT_MAX_LEN bytes.
+     * Japanese takes three bytes per character, so most labels need this.
+     *
+     * English contract: set it only through cyd_display_widget_set_text(),
+     * which takes the reference only for immutable storage and copies
+     * anything else. A pointer to a stack or heap buffer here would be read
+     * after submit() returned, on the display task.
+     */
+    const char *text_ref;
     /*
      * Payload is per-type and mutually exclusive. Keeping it in an anonymous
      * union is what stops new widget types from growing all
@@ -137,10 +182,55 @@ typedef struct {
     };
 } cyd_display_widget_t;
 
+/*
+ * Size note: every screen buffer holds CYD_DISPLAY_MAX_WIDGETS widgets and the
+ * firmware keeps a couple of dozen buffers, so each byte here costs about a
+ * kilobyte of RAM. `type` and `align` are bytes rather than enums so that
+ * `font`, `border_width` and `text_ref` fit without growing the struct.
+ */
 typedef struct {
     uint8_t widget_count;
     cyd_display_widget_t widgets[CYD_DISPLAY_MAX_WIDGETS];
 } cyd_display_screen_t;
+
+/*
+ * Sets the text of a TEXT or BUTTON widget.
+ *
+ * Text in immutable storage is referenced (see `text_ref`) and may be any
+ * length. Anything else is copied into the widget's buffer and, when it does
+ * not fit, cut at a UTF-8 character boundary - never mid-character.
+ */
+void cyd_display_widget_set_text(cyd_display_widget_t *widget, const char *text);
+
+/*
+ * Sets the text of a TEXT or BUTTON widget by reference, wherever it lives.
+ *
+ * For text in RAM that is longer than CYD_DISPLAY_TEXT_MAX_LEN bytes, such as
+ * an announcement fetched from the backend. Literals do not need this;
+ * cyd_display_widget_set_text() already references them.
+ *
+ * English contract, same as cyd_display_bitmap_t and sparkline samples: the
+ * text is read later, on the display task. It must stay valid AND unchanged
+ * for as long as any submitted screen references it. Change the buffer only
+ * while the screen on the panel does not use it - for example when entering
+ * the view that shows it - because the frame diff compares the previous and
+ * the current screen by content, and an in-place edit makes both read the new
+ * words, so the change would never be drawn.
+ */
+void cyd_display_widget_set_text_pinned(cyd_display_widget_t *widget, const char *text);
+
+/* The text a TEXT or BUTTON widget shows; never NULL. */
+const char *cyd_display_widget_text(const cyd_display_widget_t *widget);
+
+/*
+ * Copies `src` into `dst` like strlcpy, but never splits a UTF-8 sequence:
+ * when `src` does not fit, the copy stops before the first character that
+ * would be cut. Returns true when the whole string fit.
+ */
+bool cyd_display_utf8_copy(char *dst, size_t dst_size, const char *src);
+
+/* Pixel width `text` takes in an anti-aliased face; 0 for LEGACY. */
+int32_t cyd_display_text_width(cyd_display_font_t font, const char *text);
 
 esp_err_t cyd_display_init(void);
 esp_err_t cyd_display_set_brightness(uint8_t brightness);

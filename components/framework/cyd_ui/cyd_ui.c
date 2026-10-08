@@ -6,19 +6,6 @@
 
 #define TAG "cyd_ui"
 
-static void cyd_ui_copy_text(char *dst, size_t dst_size, const char *src)
-{
-    if (dst == NULL || dst_size == 0) {
-        return;
-    }
-    if (src == NULL) {
-        dst[0] = '\0';
-        return;
-    }
-    strncpy(dst, src, dst_size - 1);
-    dst[dst_size - 1] = '\0';
-}
-
 void cyd_ui_screen_clear(cyd_display_screen_t *screen)
 {
     if (screen != NULL) {
@@ -88,7 +75,7 @@ bool cyd_ui_add_text(cyd_display_screen_t *screen,
         .bg_color = CYD_UI_COLOR_BLACK,
         .enabled = true,
     };
-    cyd_ui_copy_text(widget.text, sizeof(widget.text), text);
+    cyd_display_widget_set_text(&widget, text);
     return cyd_ui_add_widget(screen, &widget);
 }
 
@@ -189,7 +176,7 @@ bool cyd_ui_add_button_with_fg_enabled(cyd_display_screen_t *screen,
         .action_id = action_id,
         .enabled = enabled,
     };
-    cyd_ui_copy_text(widget.text, sizeof(widget.text), text);
+    cyd_display_widget_set_text(&widget, text);
     return cyd_ui_add_widget(screen, &widget);
 }
 
@@ -301,6 +288,124 @@ bool cyd_ui_add_icon(cyd_display_screen_t *screen,
         .span_rows = span_rows,
         .enabled = true,
         .bitmap = bitmap,
+    };
+    return cyd_ui_add_widget(screen, &widget);
+}
+
+static cyd_display_widget_t cyd_ui_label_widget(uint8_t col,
+                                                uint8_t row,
+                                                uint8_t span_cols,
+                                                uint8_t span_rows,
+                                                cyd_display_align_t align,
+                                                cyd_display_font_t font,
+                                                uint16_t fg_color)
+{
+    cyd_display_widget_t widget = {
+        .type = CYD_DISPLAY_WIDGET_TEXT,
+        .col = col,
+        .row = row,
+        .span_cols = span_cols,
+        .span_rows = span_rows,
+        .align = (uint8_t)align,
+        .scale_x = 1,
+        .scale_y = 1,
+        .fg_color = fg_color,
+        .bg_color = CYD_UI_THEME_BG,
+        .enabled = true,
+        .font = (uint8_t)font,
+    };
+    return widget;
+}
+
+bool cyd_ui_add_label(cyd_display_screen_t *screen,
+                      const char *text,
+                      uint8_t col,
+                      uint8_t row,
+                      uint8_t span_cols,
+                      uint8_t span_rows,
+                      cyd_display_align_t align,
+                      cyd_display_font_t font,
+                      uint16_t fg_color)
+{
+    cyd_display_widget_t widget = cyd_ui_label_widget(col, row, span_cols, span_rows, align, font, fg_color);
+    cyd_display_widget_set_text(&widget, text);
+    return cyd_ui_add_widget(screen, &widget);
+}
+
+bool cyd_ui_add_label_pinned(cyd_display_screen_t *screen,
+                             const char *text,
+                             uint8_t col,
+                             uint8_t row,
+                             uint8_t span_cols,
+                             uint8_t span_rows,
+                             cyd_display_align_t align,
+                             cyd_display_font_t font,
+                             uint16_t fg_color)
+{
+    cyd_display_widget_t widget = cyd_ui_label_widget(col, row, span_cols, span_rows, align, font, fg_color);
+    cyd_display_widget_set_text_pinned(&widget, text);
+    return cyd_ui_add_widget(screen, &widget);
+}
+
+bool cyd_ui_add_styled_button(cyd_display_screen_t *screen,
+                              const char *text,
+                              uint8_t col,
+                              uint8_t row,
+                              uint8_t span_cols,
+                              uint8_t span_rows,
+                              cyd_display_font_t font,
+                              uint16_t fg_color,
+                              uint16_t bg_color,
+                              uint16_t border_color,
+                              uint8_t border_width,
+                              uint16_t action_id,
+                              bool enabled)
+{
+    cyd_display_widget_t widget = {
+        .type = CYD_DISPLAY_WIDGET_BUTTON,
+        .col = col,
+        .row = row,
+        .span_cols = span_cols,
+        .span_rows = span_rows,
+        .align = CYD_DISPLAY_ALIGN_CENTER,
+        .scale_x = 1,
+        .scale_y = 1,
+        .fg_color = enabled ? fg_color : CYD_UI_THEME_SUBTEXT,
+        .bg_color = enabled ? bg_color : CYD_UI_THEME_SURFACE,
+        .border_color = enabled ? border_color : CYD_UI_THEME_LINE,
+        .action_id = action_id,
+        .enabled = enabled,
+        .font = (uint8_t)font,
+        .border_width = border_width,
+    };
+    cyd_display_widget_set_text(&widget, text);
+    return cyd_ui_add_widget(screen, &widget);
+}
+
+bool cyd_ui_add_panel(cyd_display_screen_t *screen,
+                      uint8_t col,
+                      uint8_t row,
+                      uint8_t span_cols,
+                      uint8_t span_rows,
+                      uint16_t bg_color,
+                      uint16_t border_color,
+                      uint8_t border_width,
+                      uint8_t radius)
+{
+    cyd_display_widget_t widget = {
+        .type = CYD_DISPLAY_WIDGET_RECT,
+        .col = col,
+        .row = row,
+        .span_cols = span_cols,
+        .span_rows = span_rows,
+        .bg_color = bg_color,
+        .border_color = border_color,
+        .enabled = true,
+        .border_width = border_width,
+        .rect = {
+            .filled = true,
+            .radius = radius,
+        },
     };
     return cyd_ui_add_widget(screen, &widget);
 }

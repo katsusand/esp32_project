@@ -16,6 +16,8 @@
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 #include "cyd_display.h"
+#include "cyd_display_port.h"
+#include "cyd_display_render.hpp"
 
 /* This component owns this data, so the namespace is declared here.
    The "sys_" prefix is what lets nvs_schema classify it by scanning flash. */
@@ -40,8 +42,14 @@ static_assert(sizeof(cyd_display_bar_t) <= (CYD_DISPLAY_TEXT_MAX_LEN + 1),
               "bar payload must fit inside the widget text buffer");
 static_assert(sizeof(cyd_display_sparkline_t) <= (CYD_DISPLAY_TEXT_MAX_LEN + 1),
               "sparkline payload must fit inside the widget text buffer");
+/*
+ * Every screen buffer is CYD_DISPLAY_MAX_WIDGETS of these, and the firmware
+ * keeps a couple of dozen buffers: 8 more bytes here is about 9KB of RAM.
+ * Measured at 72 bytes on the ESP32 when the font fields were added.
+ */
+static_assert(sizeof(void *) != 4 || sizeof(cyd_display_widget_t) <= 72,
+              "cyd_display_widget_t grew; see the size note in cyd_display.h");
 static constexpr uint8_t CYD_DISPLAY_MIN_SAFE_BRIGHTNESS = 13;
-static constexpr int32_t GRID_CELL_PX = CYD_DISPLAY_GRID_CELL_PX;
 static constexpr int32_t SCREEN_MARGIN_X = GRID_CELL_PX;
 static constexpr uint8_t SCREEN_TITLE_ROW = 2;
 static constexpr uint8_t SCREEN_FIRST_LINE_ROW = 6;
@@ -50,7 +58,6 @@ static constexpr size_t SCREEN_MAX_LINE_COUNT = 10;
 static constexpr uint8_t MODE_BUTTON_ROW = 25;
 static constexpr uint8_t MODE_BUTTON_HEIGHT_ROWS = 4;
 static constexpr uint8_t MODE_BUTTON_GAP_COLS = 1;
-static constexpr int32_t MODE_BUTTON_RADIUS = 8;
 static constexpr uint8_t MODE_BUTTON_LEFT_COL = 1;
 static constexpr uint8_t MODE_BUTTON_RIGHT_COL = CYD_DISPLAY_GRID_COLS - 2;
 static constexpr size_t DISPLAY_QUEUE_LENGTH = 3;
@@ -232,13 +239,6 @@ static esp_err_t cyd_display_write_brightness(uint8_t brightness)
 static bool s_strip_sprite_ready = false;
 static size_t s_strip_count = 0;
 
-typedef struct {
-    int32_t x;
-    int32_t y;
-    int32_t w;
-    int32_t h;
-} cyd_display_dirty_rect_t;
-
 typedef enum {
     CYD_DISPLAY_LOG_CMD_SHOW = 0,
     CYD_DISPLAY_LOG_CMD_HIDE,
@@ -273,47 +273,18 @@ static cyd_display_log_state_t s_log_state = {
 };
 
 template <typename TDisplay>
-static void cyd_display_draw_centered_line(TDisplay &display,
-                                           const std::string &text,
-                                           int32_t center_x,
-                                           int32_t y,
-                                           uint8_t text_size,
-                                           uint16_t color);
-template <typename TDisplay>
-static void cyd_display_draw_left_line(TDisplay &display,
-                                       const std::string &text,
-                                       int32_t x,
-                                       int32_t y,
-                                       uint8_t text_size,
-                                       uint16_t color);
-template <typename TDisplay>
 static void cyd_display_draw_calibration_marker(TDisplay &display,
                                                 int32_t x,
                                                 int32_t y,
                                                 int32_t radius,
                                                 uint16_t fg_color,
                                                 uint16_t bg_color);
-static int32_t cyd_display_col_to_px(uint8_t col);
-static int32_t cyd_display_row_to_px(uint8_t row);
 static bool cyd_display_mode_button_rect_for_count(size_t button_count, size_t index, cyd_display_grid_rect_t *rect);
 static void cyd_display_copy_text(char *dst, size_t dst_size, const char *src);
 static bool cyd_display_add_widget(cyd_display_screen_t *screen, const cyd_display_widget_t *widget);
-static bool cyd_display_widget_equals(const cyd_display_widget_t &lhs, const cyd_display_widget_t &rhs);
-static bool cyd_display_widget_bounds_px(const cyd_display_widget_t &widget, cyd_display_dirty_rect_t *rect);
-static bool cyd_display_widget_intersects_rect(const cyd_display_widget_t &widget, const cyd_display_dirty_rect_t &rect);
-static void cyd_display_append_dirty_rect(cyd_display_dirty_rect_t *rects, size_t *rect_count, const cyd_display_dirty_rect_t &rect);
-static void cyd_display_collect_dirty_rects(cyd_display_dirty_rect_t *rects, size_t *rect_count);
-template <typename TDisplay>
-static void cyd_display_render_screen_to_target(TDisplay &display,
-                                                const cyd_display_screen_t &screen,
-                                                int32_t origin_x,
-                                                int32_t origin_y,
-                                                const cyd_display_dirty_rect_t *clip_rect);
-static void cyd_display_mark_dirty_strips(bool *dirty_strips, const cyd_display_dirty_rect_t *rects, size_t rect_count);
 static bool cyd_display_flush_strip(size_t strip_index);
 static void cyd_display_flush_rects(const cyd_display_dirty_rect_t *rects, size_t rect_count);
 static void cyd_display_task(void *arg);
-static uint16_t cyd_display_resolve_bg(const cyd_display_widget_t &widget);
 static void cyd_display_apply_screen(const cyd_display_screen_t &screen);
 static void cyd_display_handle_log_cmd(const cyd_display_log_cmd_t &cmd);
 static void cyd_display_render_log_screen(void);
@@ -322,7 +293,6 @@ static esp_err_t cyd_display_submit_log_cmd(const cyd_display_log_cmd_t *cmd);
 static void cyd_display_log_stack_usage(void);
 static cyd_display_screen_t cyd_display_make_empty_screen(void);
 static cyd_display_widget_t cyd_display_make_widget(cyd_display_widget_type_t type);
-static cyd_display_dirty_rect_t cyd_display_make_empty_dirty_rect(void);
 static cyd_display_grid_rect_t cyd_display_make_empty_grid_rect(void);
 static cyd_display_log_cmd_t cyd_display_make_log_cmd(cyd_display_log_cmd_id_t id, int scroll_delta);
 
@@ -349,11 +319,6 @@ static cyd_display_widget_t cyd_display_make_widget(cyd_display_widget_type_t ty
     cyd_display_widget_t widget = {};
     widget.type = type;
     return widget;
-}
-
-static cyd_display_dirty_rect_t cyd_display_make_empty_dirty_rect(void)
-{
-    return {};
 }
 
 static cyd_display_grid_rect_t cyd_display_make_empty_grid_rect(void)
@@ -387,34 +352,6 @@ static esp_err_t cyd_display_check_owner(void)
                         TAG,
                         "display owner mismatch");
     return ESP_OK;
-}
-
-template <typename TDisplay>
-static void cyd_display_draw_centered_line(TDisplay &display,
-                                           const std::string &text,
-                                           int32_t center_x,
-                                           int32_t y,
-                                           uint8_t text_size,
-                                           uint16_t color)
-{
-    display.setTextDatum(lgfx::middle_center);
-    display.setTextSize(text_size);
-    display.setTextColor(color, TFT_BLACK);
-    display.drawString(text.c_str(), center_x, y);
-}
-
-template <typename TDisplay>
-static void cyd_display_draw_left_line(TDisplay &display,
-                                       const std::string &text,
-                                       int32_t x,
-                                       int32_t y,
-                                       uint8_t text_size,
-                                       uint16_t color)
-{
-    display.setTextDatum(lgfx::top_left);
-    display.setTextSize(text_size);
-    display.setTextColor(color, TFT_BLACK);
-    display.drawString(text.c_str(), x, y);
 }
 
 template <typename TDisplay>
@@ -456,16 +393,6 @@ static void cyd_display_draw_calibration_marker(TDisplay &display,
     display.clearClipRect();
 }
 
-static int32_t cyd_display_col_to_px(uint8_t col)
-{
-    return static_cast<int32_t>(col) * GRID_CELL_PX;
-}
-
-static int32_t cyd_display_row_to_px(uint8_t row)
-{
-    return static_cast<int32_t>(row) * GRID_CELL_PX;
-}
-
 static bool cyd_display_mode_button_rect_for_count(size_t button_count, size_t index, cyd_display_grid_rect_t *rect)
 {
     if (button_count == 0 || button_count > CYD_DISPLAY_MAX_MODE_BUTTONS || index >= button_count || rect == nullptr) {
@@ -498,8 +425,7 @@ static void cyd_display_copy_text(char *dst, size_t dst_size, const char *src)
         return;
     }
 
-    strncpy(dst, src, dst_size - 1);
-    dst[dst_size - 1] = '\0';
+    (void)cyd_display_utf8_copy(dst, dst_size, src);
 }
 
 static bool cyd_display_add_widget(cyd_display_screen_t *screen, const cyd_display_widget_t *widget)
@@ -510,436 +436,6 @@ static bool cyd_display_add_widget(cyd_display_screen_t *screen, const cyd_displ
 
     screen->widgets[screen->widget_count++] = *widget;
     return true;
-}
-
-static uint16_t cyd_display_resolve_bg(const cyd_display_widget_t &widget)
-{
-    return widget.bg_color != 0 ? widget.bg_color : TFT_BLACK;
-}
-
-/*
- * Maps a value onto 0..span_px. Saturates instead of extrapolating so a sample
- * outside [min_value, max_value] cannot draw beyond the widget box.
- */
-/*
- * Screens are queued by value but the pointers inside them are not copied, so a
- * caller that handed over a temporary buffer leaves a dangling pointer for this
- * task to dereference. These checks cannot prove a pointer is still *logically*
- * valid, but they do turn "wild pointer, immediate crash" into a logged warning
- * and a skipped widget, which is the difference between a debuggable device and
- * a reboot loop in the field.
- */
-static bool cyd_display_ptr_readable(const void *p)
-{
-    return p != nullptr && (esp_ptr_in_drom(p) || esp_ptr_byte_accessible(p));
-}
-
-static bool cyd_display_bitmap_is_usable(const cyd_display_bitmap_t *bitmap)
-{
-    if (!cyd_display_ptr_readable(bitmap)) {
-        return false;
-    }
-    if (bitmap->width_px == 0 || bitmap->height_px == 0) {
-        return false;
-    }
-    if (!cyd_display_ptr_readable(bitmap->data)) {
-        return false;
-    }
-
-    /* Last pixel too: a truncated buffer only faults partway through pushImage. */
-    size_t pixel_count = static_cast<size_t>(bitmap->width_px) * bitmap->height_px;
-    return cyd_display_ptr_readable(&bitmap->data[pixel_count - 1U]);
-}
-
-static int32_t cyd_display_map_value(int32_t value, int32_t min_value, int32_t max_value, int32_t span_px)
-{
-    if (max_value <= min_value || span_px <= 0) {
-        return 0;
-    }
-    if (value <= min_value) {
-        return 0;
-    }
-    if (value >= max_value) {
-        return span_px;
-    }
-    return ((value - min_value) * span_px) / (max_value - min_value);
-}
-
-template <typename TDisplay>
-static void cyd_display_draw_bar(TDisplay &display,
-                                 const cyd_display_widget_t &widget,
-                                 int32_t x,
-                                 int32_t y,
-                                 int32_t w,
-                                 int32_t h)
-{
-    display.fillRect(x, y, w, h, cyd_display_resolve_bg(widget));
-
-    if (widget.bar.vertical) {
-        int32_t filled = cyd_display_map_value(widget.bar.value, widget.bar.min_value, widget.bar.max_value, h);
-        if (filled > 0) {
-            display.fillRect(x, y + (h - filled), w, filled, widget.fg_color);
-        }
-    } else {
-        int32_t filled = cyd_display_map_value(widget.bar.value, widget.bar.min_value, widget.bar.max_value, w);
-        if (filled > 0) {
-            display.fillRect(x, y, filled, h, widget.fg_color);
-        }
-    }
-
-    if (widget.border_color != 0) {
-        display.drawRect(x, y, w, h, widget.border_color);
-    }
-}
-
-template <typename TDisplay>
-static void cyd_display_draw_sparkline(TDisplay &display,
-                                       const cyd_display_widget_t &widget,
-                                       int32_t x,
-                                       int32_t y,
-                                       int32_t w,
-                                       int32_t h)
-{
-    const cyd_display_sparkline_t &line = widget.sparkline;
-
-    display.fillRect(x, y, w, h, cyd_display_resolve_bg(widget));
-
-    if (line.has_baseline) {
-        int32_t baseline_y = y + (h - 1) -
-                             cyd_display_map_value(line.baseline_value, line.min_value, line.max_value, h - 1);
-        display.drawFastHLine(x, baseline_y, w, line.baseline_color);
-    }
-
-    if (line.samples != nullptr && !cyd_display_ptr_readable(line.samples)) {
-        ESP_LOGW(TAG, "sparkline samples unreadable (%p); check the lifetime contract", line.samples);
-    } else if (line.samples != nullptr && line.count > 0 && w > 0 && h > 0) {
-        /*
-         * This runs once per strip the widget overlaps, so segments fully above
-         * or below the current target are skipped rather than relying on the
-         * clip inside drawLine.
-         */
-        int32_t target_h = display.height();
-        int32_t prev_x = 0;
-        int32_t prev_y = 0;
-        bool has_prev = false;
-
-        for (uint16_t i = 0; i < line.count; ++i) {
-            /* A dropout breaks the polyline: the next valid sample starts a new
-               segment instead of drawing a line across the missing span. */
-            if (line.has_gap_value && line.samples[i] == line.gap_value) {
-                has_prev = false;
-                continue;
-            }
-
-            int32_t sample_x = (line.count == 1)
-                                   ? x
-                                   : x + ((static_cast<int32_t>(i) * (w - 1)) / (line.count - 1));
-            int32_t sample_y = y + (h - 1) -
-                               cyd_display_map_value(line.samples[i], line.min_value, line.max_value, h - 1);
-
-            if (line.fill) {
-                display.drawFastVLine(sample_x, sample_y, (y + h) - sample_y, widget.fg_color);
-            }
-
-            if (!has_prev) {
-                display.drawPixel(sample_x, sample_y, widget.fg_color);
-            } else if (!((prev_y < 0 && sample_y < 0) ||
-                         (prev_y >= target_h && sample_y >= target_h))) {
-                display.drawLine(prev_x, prev_y, sample_x, sample_y, widget.fg_color);
-            }
-
-            prev_x = sample_x;
-            prev_y = sample_y;
-            has_prev = true;
-        }
-    }
-
-    if (widget.border_color != 0) {
-        display.drawRect(x, y, w, h, widget.border_color);
-    }
-}
-
-template <typename TDisplay>
-static void cyd_display_render_screen_to_target(TDisplay &display,
-                                                const cyd_display_screen_t &screen,
-                                                int32_t origin_x,
-                                                int32_t origin_y,
-                                                const cyd_display_dirty_rect_t *clip_rect)
-{
-    auto px = [origin_x](int32_t value) { return value - origin_x; };
-    auto py = [origin_y](int32_t value) { return value - origin_y; };
-
-    for (size_t i = 0; i < screen.widget_count; ++i) {
-        const cyd_display_widget_t &widget = screen.widgets[i];
-        if (clip_rect != nullptr && !cyd_display_widget_intersects_rect(widget, *clip_rect)) {
-            continue;
-        }
-
-        int32_t x = px(cyd_display_col_to_px(widget.col));
-        int32_t y = py(cyd_display_row_to_px(widget.row));
-        int32_t w = static_cast<int32_t>(widget.span_cols) * GRID_CELL_PX;
-        int32_t h = static_cast<int32_t>(widget.span_rows) * GRID_CELL_PX;
-        int32_t text_x = x;
-        int32_t text_y = y;
-
-        switch (widget.type) {
-            case CYD_DISPLAY_WIDGET_TEXT:
-                if (widget.align == CYD_DISPLAY_ALIGN_LEFT) {
-                    cyd_display_draw_left_line(display,
-                                               widget.text,
-                                               x,
-                                               y,
-                                               widget.scale_y > 0 ? widget.scale_y : 1,
-                                               widget.fg_color);
-                } else if (widget.align == CYD_DISPLAY_ALIGN_RIGHT) {
-                    display.setTextDatum(lgfx::top_right);
-                    display.setTextSize(widget.scale_y > 0 ? widget.scale_y : 1);
-                    display.setTextColor(widget.fg_color, cyd_display_resolve_bg(widget));
-                    display.drawString(widget.text, x + w, y);
-                } else {
-                    text_x = x + (w / 2);
-                    text_y = y + (h / 2);
-                    cyd_display_draw_centered_line(display,
-                                                   widget.text,
-                                                   text_x,
-                                                   text_y,
-                                                   widget.scale_y > 0 ? widget.scale_y : 1,
-                                                   widget.fg_color);
-                }
-                break;
-
-            case CYD_DISPLAY_WIDGET_BUTTON:
-                display.fillRoundRect(x, y, w, h, MODE_BUTTON_RADIUS, cyd_display_resolve_bg(widget));
-                display.drawRoundRect(x,
-                                      y,
-                                      w,
-                                      h,
-                                      MODE_BUTTON_RADIUS,
-                                      widget.border_color != 0 ? widget.border_color : TFT_LIGHTGREY);
-                display.setTextDatum(lgfx::middle_center);
-                display.setTextSize(widget.scale_y > 0 ? widget.scale_y : 1);
-                display.setTextColor(widget.fg_color, cyd_display_resolve_bg(widget));
-                display.drawString(widget.text, x + (w / 2), y + (h / 2));
-                break;
-
-            case CYD_DISPLAY_WIDGET_ICON:
-                if (cyd_display_bitmap_is_usable(widget.bitmap)) {
-                    display.pushImage(x,
-                                      y,
-                                      widget.bitmap->width_px,
-                                      widget.bitmap->height_px,
-                                      widget.bitmap->data);
-                } else if (widget.bitmap != nullptr) {
-                    ESP_LOGW(TAG, "icon bitmap unreadable (%p); check the lifetime contract", widget.bitmap);
-                }
-                break;
-
-            case CYD_DISPLAY_WIDGET_RECT:
-                if (widget.rect.filled) {
-                    if (widget.rect.radius > 0) {
-                        display.fillRoundRect(x, y, w, h, widget.rect.radius, cyd_display_resolve_bg(widget));
-                    } else {
-                        display.fillRect(x, y, w, h, cyd_display_resolve_bg(widget));
-                    }
-                }
-                if (widget.border_color != 0) {
-                    if (widget.rect.radius > 0) {
-                        display.drawRoundRect(x, y, w, h, widget.rect.radius, widget.border_color);
-                    } else {
-                        display.drawRect(x, y, w, h, widget.border_color);
-                    }
-                }
-                break;
-
-            case CYD_DISPLAY_WIDGET_BAR:
-                cyd_display_draw_bar(display, widget, x, y, w, h);
-                break;
-
-            case CYD_DISPLAY_WIDGET_SPARKLINE:
-                cyd_display_draw_sparkline(display, widget, x, y, w, h);
-                break;
-
-            case CYD_DISPLAY_WIDGET_NONE:
-            default:
-                break;
-        }
-    }
-}
-
-/*
- * Payload comparison is per-type on purpose. memcmp over the union would read
- * padding bytes for the non-text variants and report spurious differences.
- */
-static bool cyd_display_widget_payload_equals(const cyd_display_widget_t &lhs, const cyd_display_widget_t &rhs)
-{
-    switch (lhs.type) {
-        case CYD_DISPLAY_WIDGET_RECT:
-            return lhs.rect.filled == rhs.rect.filled &&
-                   lhs.rect.radius == rhs.rect.radius;
-
-        case CYD_DISPLAY_WIDGET_BAR:
-            return lhs.bar.value == rhs.bar.value &&
-                   lhs.bar.min_value == rhs.bar.min_value &&
-                   lhs.bar.max_value == rhs.bar.max_value &&
-                   lhs.bar.vertical == rhs.bar.vertical;
-
-        case CYD_DISPLAY_WIDGET_SPARKLINE:
-            /* revision is what makes in-place sample updates visible here. */
-            return lhs.sparkline.samples == rhs.sparkline.samples &&
-                   lhs.sparkline.count == rhs.sparkline.count &&
-                   lhs.sparkline.revision == rhs.sparkline.revision &&
-                   lhs.sparkline.min_value == rhs.sparkline.min_value &&
-                   lhs.sparkline.max_value == rhs.sparkline.max_value &&
-                   lhs.sparkline.fill == rhs.sparkline.fill &&
-                   lhs.sparkline.has_baseline == rhs.sparkline.has_baseline &&
-                   lhs.sparkline.baseline_value == rhs.sparkline.baseline_value &&
-                   lhs.sparkline.baseline_color == rhs.sparkline.baseline_color &&
-                   lhs.sparkline.has_gap_value == rhs.sparkline.has_gap_value &&
-                   lhs.sparkline.gap_value == rhs.sparkline.gap_value;
-
-        default:
-            return memcmp(lhs.text, rhs.text, sizeof(lhs.text)) == 0;
-    }
-}
-
-static bool cyd_display_widget_equals(const cyd_display_widget_t &lhs, const cyd_display_widget_t &rhs)
-{
-    return lhs.type == rhs.type &&
-           lhs.col == rhs.col &&
-           lhs.row == rhs.row &&
-           lhs.span_cols == rhs.span_cols &&
-           lhs.span_rows == rhs.span_rows &&
-           lhs.align == rhs.align &&
-           lhs.scale_x == rhs.scale_x &&
-           lhs.scale_y == rhs.scale_y &&
-           lhs.fg_color == rhs.fg_color &&
-           lhs.bg_color == rhs.bg_color &&
-           lhs.border_color == rhs.border_color &&
-           lhs.action_id == rhs.action_id &&
-           lhs.enabled == rhs.enabled &&
-           lhs.bitmap == rhs.bitmap &&
-           cyd_display_widget_payload_equals(lhs, rhs);
-}
-
-static bool cyd_display_widget_bounds_px(const cyd_display_widget_t &widget, cyd_display_dirty_rect_t *rect)
-{
-    if (rect == nullptr || widget.type == CYD_DISPLAY_WIDGET_NONE) {
-        return false;
-    }
-
-    rect->x = cyd_display_col_to_px(widget.col);
-    rect->y = cyd_display_row_to_px(widget.row);
-    rect->w = static_cast<int32_t>(widget.span_cols) * GRID_CELL_PX;
-    rect->h = static_cast<int32_t>(widget.span_rows) * GRID_CELL_PX;
-    return rect->w > 0 && rect->h > 0;
-}
-
-static bool cyd_display_widget_intersects_rect(const cyd_display_widget_t &widget, const cyd_display_dirty_rect_t &rect)
-{
-    cyd_display_dirty_rect_t widget_rect = cyd_display_make_empty_dirty_rect();
-    if (!cyd_display_widget_bounds_px(widget, &widget_rect)) {
-        return false;
-    }
-
-    return widget_rect.x < (rect.x + rect.w) &&
-           (widget_rect.x + widget_rect.w) > rect.x &&
-           widget_rect.y < (rect.y + rect.h) &&
-           (widget_rect.y + widget_rect.h) > rect.y;
-}
-
-static void cyd_display_append_dirty_rect(cyd_display_dirty_rect_t *rects, size_t *rect_count, const cyd_display_dirty_rect_t &rect)
-{
-    if (rects == nullptr || rect_count == nullptr || rect.w <= 0 || rect.h <= 0) {
-        return;
-    }
-
-    if (*rect_count >= MAX_DIRTY_RECTS) {
-        rects[0] = {
-            .x = 0,
-            .y = 0,
-            .w = s_display.width(),
-            .h = s_display.height(),
-        };
-        *rect_count = 1;
-        return;
-    }
-
-    rects[*rect_count] = rect;
-    ++(*rect_count);
-}
-
-static void cyd_display_collect_dirty_rects(cyd_display_dirty_rect_t *rects, size_t *rect_count)
-{
-    if (rect_count == nullptr) {
-        return;
-    }
-
-    *rect_count = 0;
-
-    if (!s_has_previous_screen) {
-        cyd_display_append_dirty_rect(rects,
-                                      rect_count,
-                                      {
-                                          .x = 0,
-                                          .y = 0,
-                                          .w = s_display.width(),
-                                          .h = s_display.height(),
-                                      });
-        return;
-    }
-
-    size_t max_widgets = s_current_screen.widget_count > s_previous_screen.widget_count
-                             ? s_current_screen.widget_count
-                             : s_previous_screen.widget_count;
-
-    for (size_t i = 0; i < max_widgets; ++i) {
-        const cyd_display_widget_t *current_widget = i < s_current_screen.widget_count ? &s_current_screen.widgets[i] : nullptr;
-        const cyd_display_widget_t *previous_widget = i < s_previous_screen.widget_count ? &s_previous_screen.widgets[i] : nullptr;
-
-        if (current_widget != nullptr && previous_widget != nullptr && cyd_display_widget_equals(*current_widget, *previous_widget)) {
-            continue;
-        }
-
-        cyd_display_dirty_rect_t rect = cyd_display_make_empty_dirty_rect();
-        if (previous_widget != nullptr && cyd_display_widget_bounds_px(*previous_widget, &rect)) {
-            cyd_display_append_dirty_rect(rects, rect_count, rect);
-        }
-        if (current_widget != nullptr && cyd_display_widget_bounds_px(*current_widget, &rect)) {
-            cyd_display_append_dirty_rect(rects, rect_count, rect);
-        }
-    }
-}
-
-static void cyd_display_mark_dirty_strips(bool *dirty_strips, const cyd_display_dirty_rect_t *rects, size_t rect_count)
-{
-    if (dirty_strips == nullptr) {
-        return;
-    }
-
-    memset(dirty_strips, 0, sizeof(bool) * MAX_STRIP_COUNT);
-    if (rects == nullptr) {
-        return;
-    }
-
-    for (size_t i = 0; i < rect_count; ++i) {
-        const cyd_display_dirty_rect_t &rect = rects[i];
-        if (rect.w <= 0 || rect.h <= 0) {
-            continue;
-        }
-
-        int32_t start_strip = rect.y / STRIP_HEIGHT_PX;
-        int32_t end_strip = (rect.y + rect.h - 1) / STRIP_HEIGHT_PX;
-        if (start_strip < 0) {
-            start_strip = 0;
-        }
-        if (end_strip >= static_cast<int32_t>(s_strip_count)) {
-            end_strip = static_cast<int32_t>(s_strip_count) - 1;
-        }
-
-        for (int32_t strip = start_strip; strip <= end_strip; ++strip) {
-            dirty_strips[strip] = true;
-        }
-    }
 }
 
 static bool cyd_display_flush_strip(size_t strip_index)
@@ -973,7 +469,7 @@ static void cyd_display_flush_rects(const cyd_display_dirty_rect_t *rects, size_
     }
 
     bool dirty_strips[MAX_STRIP_COUNT];
-    cyd_display_mark_dirty_strips(dirty_strips, rects, rect_count);
+    cyd_display_mark_dirty_strips(dirty_strips, s_strip_count, STRIP_HEIGHT_PX, rects, rect_count);
 
     for (size_t strip = 0; strip < s_strip_count; ++strip) {
         if (dirty_strips[strip]) {
@@ -986,7 +482,14 @@ static void cyd_display_apply_screen(const cyd_display_screen_t &screen)
 {
     s_current_screen = screen;
     size_t dirty_rect_count = 0;
-    cyd_display_collect_dirty_rects(s_dirty_rects, &dirty_rect_count);
+    cyd_display_collect_dirty_rects(s_previous_screen,
+                                    s_has_previous_screen,
+                                    s_current_screen,
+                                    s_display.width(),
+                                    s_display.height(),
+                                    s_dirty_rects,
+                                    MAX_DIRTY_RECTS,
+                                    &dirty_rect_count);
     cyd_display_flush_rects(s_dirty_rects, dirty_rect_count);
     s_previous_screen = s_current_screen;
     s_has_previous_screen = true;
@@ -1178,6 +681,25 @@ static void cyd_display_task(void *arg)
 
 }  // namespace
 
+/*
+ * Screens are queued by value but the pointers inside them are not copied, so a
+ * caller that handed over a temporary buffer leaves a dangling pointer for this
+ * task to dereference. These checks cannot prove a pointer is still *logically*
+ * valid, but they do turn "wild pointer, immediate crash" into a logged warning
+ * and a skipped widget, which is the difference between a debuggable device and
+ * a reboot loop in the field.
+ */
+extern "C" bool cyd_display_port_ptr_readable(const void *p)
+{
+    return p != nullptr && (esp_ptr_in_drom(p) || esp_ptr_byte_accessible(p));
+}
+
+/* String literals and other `static const` data live in flash rodata (DROM). */
+extern "C" bool cyd_display_port_text_is_immutable(const char *p)
+{
+    return p != nullptr && esp_ptr_in_drom(p);
+}
+
 extern "C" bool cyd_display_touch_to_grid(int16_t x, int16_t y, uint8_t *col, uint8_t *row)
 {
     if (x < 0 || y < 0 || x >= s_display.width() || y >= s_display.height()) {
@@ -1204,21 +726,7 @@ extern "C" bool cyd_display_screen_hit_test(const cyd_display_screen_t *screen,
         return false;
     }
 
-    size_t count = screen->widget_count < CYD_DISPLAY_MAX_WIDGETS ? screen->widget_count : CYD_DISPLAY_MAX_WIDGETS;
-    for (size_t i = 0; i < count; ++i) {
-        const cyd_display_widget_t &widget = screen->widgets[i];
-        if (widget.type != CYD_DISPLAY_WIDGET_BUTTON || !widget.enabled) {
-            continue;
-        }
-        if (col >= widget.col && col < (widget.col + widget.span_cols) &&
-            row >= widget.row && row < (widget.row + widget.span_rows)) {
-            if (action_id != nullptr) {
-                *action_id = widget.action_id;
-            }
-            return true;
-        }
-    }
-    return false;
+    return cyd_display_hit_test_cell(*screen, col, row, action_id);
 }
 
 extern "C" bool cyd_display_get_mode_button_bounds(size_t button_count,
