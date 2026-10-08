@@ -153,6 +153,13 @@ SYSTEM_APPS="${PROJECT_ROOT}/components/apps/cyd_system_apps"
 
 run_case "System settings screens" "${BUILD_DIR}/test_system_settings_view"
 
+# System information: every page with the longest values, measured with the real fonts
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_APPS}" \
+    "${UI_TEST_SRCS[@]}" "${SYSTEM_APPS}/system_settings_view.c" "${SYSTEM_APPS}/system_info_view.c" \
+    "${SCRIPT_DIR}/test_system_info_view.c" -o "${BUILD_DIR}/test_system_info_view"
+
+run_case "System information screens" "${BUILD_DIR}/test_system_info_view"
+
 # Wi-Fi setup: the network list, notices and failure dialog
 WIFI_SETUP="${PROJECT_ROOT}/components/services/cyd_wifi_setup"
 "${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${WIFI_SETUP}" \

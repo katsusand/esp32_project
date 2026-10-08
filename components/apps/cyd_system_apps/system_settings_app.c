@@ -640,38 +640,6 @@ static void cyd_settings_fill_page_nav(system_settings_view_model_t *m)
     m->page_count = s_settings_active_page_count;
 }
 
-static system_settings_view_wifi_t cyd_settings_view_wifi(void)
-{
-    wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
-
-    if (wifi_connection_get_state(&state) != ESP_OK) {
-        return SYSTEM_SETTINGS_VIEW_WIFI_UNAVAILABLE;
-    }
-    switch (state) {
-    case WIFI_CONNECTION_STATE_STOPPED: return SYSTEM_SETTINGS_VIEW_WIFI_STOPPED;
-    case WIFI_CONNECTION_STATE_INIT: return SYSTEM_SETTINGS_VIEW_WIFI_INIT;
-    case WIFI_CONNECTION_STATE_OFF: return SYSTEM_SETTINGS_VIEW_WIFI_OFF;
-    case WIFI_CONNECTION_STATE_CONNECTING: return SYSTEM_SETTINGS_VIEW_WIFI_CONNECTING;
-    case WIFI_CONNECTION_STATE_CONNECTED: return SYSTEM_SETTINGS_VIEW_WIFI_CONNECTED;
-    case WIFI_CONNECTION_STATE_RECONNECTING: return SYSTEM_SETTINGS_VIEW_WIFI_RECONNECTING;
-    case WIFI_CONNECTION_STATE_FAILED: return SYSTEM_SETTINGS_VIEW_WIFI_FAILED;
-    case WIFI_CONNECTION_STATE_SETUP_REQUIRED: return SYSTEM_SETTINGS_VIEW_WIFI_SETUP_REQUIRED;
-    case WIFI_CONNECTION_STATE_SETUP_RUNNING: return SYSTEM_SETTINGS_VIEW_WIFI_SETUP_RUNNING;
-    default: return SYSTEM_SETTINGS_VIEW_WIFI_UNAVAILABLE;
-    }
-}
-
-static system_settings_view_sync_t cyd_settings_view_sync(time_sync_state_t state)
-{
-    switch (state) {
-    case TIME_SYNC_STATE_IDLE: return SYSTEM_SETTINGS_VIEW_SYNC_IDLE;
-    case TIME_SYNC_STATE_WAITING_WIFI: return SYSTEM_SETTINGS_VIEW_SYNC_WAITING_WIFI;
-    case TIME_SYNC_STATE_SYNCING: return SYSTEM_SETTINGS_VIEW_SYNC_SYNCING;
-    case TIME_SYNC_STATE_RETRY_WAIT: return SYSTEM_SETTINGS_VIEW_SYNC_RETRY_WAIT;
-    default: return SYSTEM_SETTINGS_VIEW_SYNC_STOPPED;
-    }
-}
-
 static void cyd_settings_fill_general_page(system_settings_view_model_t *m)
 {
     size_t brightness_index = cyd_settings_find_brightness_index(cyd_display_get_brightness());
@@ -700,7 +668,7 @@ static void cyd_settings_fill_time_page(system_settings_view_model_t *m)
 
 static void cyd_settings_fill_network1_page(system_settings_view_model_t *m)
 {
-    m->wifi = cyd_settings_view_wifi();
+    m->wifi = cyd_system_apps_view_wifi();
 }
 
 static void cyd_settings_fill_network2_page(system_settings_view_model_t *m)
@@ -708,8 +676,6 @@ static void cyd_settings_fill_network2_page(system_settings_view_model_t *m)
     uint16_t wifi_idle_seconds = radio_manager_get_idle_timeout_seconds();
     size_t wifi_idle_index = cyd_settings_find_wifi_idle_index(wifi_idle_seconds);
     uint16_t time_sync_minutes = time_sync_get_interval_minutes();
-    esp_err_t last_status = ESP_OK;
-    time_t last_success_at = 0;
 
     m->sync_interval_minutes = time_sync_minutes;
     m->can_sync_interval_down = time_sync_minutes > CYD_SETTINGS_TIME_SYNC_MINUTES_MIN;
@@ -718,18 +684,8 @@ static void cyd_settings_fill_network2_page(system_settings_view_model_t *m)
     m->can_wifi_idle_down = wifi_idle_index > 0;
     m->can_wifi_idle_up = wifi_idle_index + 1 < CYD_SETTINGS_WIFI_IDLE_COUNT;
     m->sync_now_enabled = cyd_settings_sync_now_enabled();
-    m->sync = cyd_settings_view_sync(time_sync_get_state());
-
-    if (!time_sync_get_last_attempt_status(&last_status)) {
-        m->sync_last = SYSTEM_SETTINGS_VIEW_SYNC_LAST_NONE;
-    } else if (last_status != ESP_OK) {
-        m->sync_last = SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED;
-    } else if (!time_sync_get_last_success_at(&last_success_at)) {
-        m->sync_last = SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK;
-    } else {
-        m->sync_last = SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK_AT;
-        localtime_r(&last_success_at, &m->last_sync_at);
-    }
+    m->sync = cyd_system_apps_view_sync(time_sync_get_state());
+    m->sync_last = cyd_system_apps_view_sync_last(&m->last_sync_at);
 }
 
 static void cyd_settings_fill_nvs_page(system_settings_view_model_t *m)

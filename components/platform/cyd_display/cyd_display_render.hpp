@@ -122,6 +122,10 @@ static uint16_t cyd_display_blend565(uint16_t fg, uint16_t bg, uint32_t alpha)
  * Draws one line of text with its line box's top-left at (x, y) and returns
  * the pen position after it. Only pixels inside the target's clip rect are
  * touched; the caller sets that to the widget box.
+ *
+ * Edge pixels are blended with what is under them, read back from the target.
+ * A caller drawing straight onto the panel over a known solid colour passes it
+ * as `solid_bg` instead: panels need not support reads.
  */
 template <typename TDisplay>
 static int32_t cyd_display_draw_aa_text(TDisplay &display,
@@ -129,7 +133,8 @@ static int32_t cyd_display_draw_aa_text(TDisplay &display,
                                         const char *text,
                                         int32_t x,
                                         int32_t y,
-                                        uint16_t color)
+                                        uint16_t color,
+                                        const uint16_t *solid_bg = nullptr)
 {
     int32_t clip_x = 0;
     int32_t clip_y = 0;
@@ -177,7 +182,7 @@ static int32_t cyd_display_draw_aa_text(TDisplay &display,
                 if (alpha == 15U) {
                     display.drawPixel(px, py, color);
                 } else {
-                    uint16_t under = display.readPixel(px, py);
+                    uint16_t under = solid_bg != nullptr ? *solid_bg : display.readPixel(px, py);
                     display.drawPixel(px, py, cyd_display_blend565(color, under, alpha));
                 }
             }

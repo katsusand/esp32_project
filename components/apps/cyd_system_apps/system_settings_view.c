@@ -108,7 +108,7 @@ static void view_format_minutes(char *out, size_t out_size, uint16_t minutes)
     }
 }
 
-static const char *view_wifi_text(system_settings_view_wifi_t wifi)
+const char *system_settings_view_wifi_text(system_settings_view_wifi_t wifi)
 {
     switch (wifi) {
     case SYSTEM_SETTINGS_VIEW_WIFI_STOPPED: return "停止中";
@@ -124,7 +124,7 @@ static const char *view_wifi_text(system_settings_view_wifi_t wifi)
     }
 }
 
-static uint16_t view_wifi_color(system_settings_view_wifi_t wifi)
+uint16_t system_settings_view_wifi_color(system_settings_view_wifi_t wifi)
 {
     switch (wifi) {
     case SYSTEM_SETTINGS_VIEW_WIFI_CONNECTED: return CYD_UI_THEME_SUCCESS_SOFT;
@@ -134,7 +134,7 @@ static uint16_t view_wifi_color(system_settings_view_wifi_t wifi)
     }
 }
 
-static const char *view_sync_text(system_settings_view_sync_t sync)
+const char *system_settings_view_sync_text(system_settings_view_sync_t sync)
 {
     switch (sync) {
     case SYSTEM_SETTINGS_VIEW_SYNC_IDLE: return "待機中";
@@ -142,6 +142,28 @@ static const char *view_sync_text(system_settings_view_sync_t sync)
     case SYSTEM_SETTINGS_VIEW_SYNC_SYNCING: return "同期中…";
     case SYSTEM_SETTINGS_VIEW_SYNC_RETRY_WAIT: return "再試行待ち";
     default: return "停止中";
+    }
+}
+
+void system_settings_view_format_sync_last(char *out, size_t out_size, system_settings_view_sync_last_t last,
+                                           const struct tm *at, bool with_prefix)
+{
+    const char *prefix = with_prefix ? "前回: " : "";
+
+    switch (last) {
+    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED:
+        snprintf(out, out_size, "%s失敗", prefix);
+        break;
+    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK:
+        snprintf(out, out_size, "%s成功", prefix);
+        break;
+    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK_AT:
+        snprintf(out, out_size, "%s%d/%d %02d:%02d 成功", prefix, at->tm_mon + 1, at->tm_mday, at->tm_hour,
+                 at->tm_min);
+        break;
+    default:
+        snprintf(out, out_size, "%sまだありません", prefix);
+        break;
     }
 }
 
@@ -309,8 +331,8 @@ static void view_network1(cyd_display_screen_t *screen, const system_settings_vi
 {
     cyd_ui_add_label(screen, "Wi-Fi", VIEW_WIDE_COL, 5, 7, VIEW_TEXT_ROWS,
                      CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_SUBTEXT);
-    cyd_ui_add_label(screen, view_wifi_text(m->wifi), 9, 4, 29, 4,
-                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_TITLE, view_wifi_color(m->wifi));
+    cyd_ui_add_label(screen, system_settings_view_wifi_text(m->wifi), 9, 4, 29, 4,
+                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_TITLE, system_settings_view_wifi_color(m->wifi));
     view_wide_button(screen, "保存済みのネットワーク", 10, 5, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
                      CYD_SETTINGS_APP_ACTION_STORED_SSIDS, true);
     cyd_ui_add_styled_button(screen, "Wi-Fi を設定する", VIEW_WIDE_COL, 17, VIEW_WIDE_COLS, 5,
@@ -327,22 +349,8 @@ static void view_network2(cyd_display_screen_t *screen, const system_settings_vi
 
     view_format_minutes(interval, sizeof(interval), m->sync_interval_minutes);
     view_format_seconds(idle, sizeof(idle), m->wifi_idle_seconds);
-    snprintf(state, sizeof(state), "時刻同期: %s", view_sync_text(m->sync));
-    switch (m->sync_last) {
-    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED:
-        snprintf(last, sizeof(last), "前回: 失敗");
-        break;
-    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK:
-        snprintf(last, sizeof(last), "前回: 成功");
-        break;
-    case SYSTEM_SETTINGS_VIEW_SYNC_LAST_OK_AT:
-        snprintf(last, sizeof(last), "前回: %d/%d %02d:%02d 成功", m->last_sync_at.tm_mon + 1,
-                 m->last_sync_at.tm_mday, m->last_sync_at.tm_hour, m->last_sync_at.tm_min);
-        break;
-    default:
-        snprintf(last, sizeof(last), "前回: まだありません");
-        break;
-    }
+    snprintf(state, sizeof(state), "時刻同期: %s", system_settings_view_sync_text(m->sync));
+    system_settings_view_format_sync_last(last, sizeof(last), m->sync_last, &m->last_sync_at, true);
 
     view_stepper(screen, "同期の間隔", interval, 4, CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN,
                  CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP, m->can_sync_interval_down, m->can_sync_interval_up);
