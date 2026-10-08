@@ -32,6 +32,9 @@ void ui_test_set_all_text_immutable(bool immutable);
  */
 void ui_test_check_screen(const char *name, const cyd_display_screen_t *screen);
 
+/* ui_test_check_screen() without printing or counting, for long sweeps. */
+bool ui_test_screen_fits(const cyd_display_screen_t *screen);
+
 /* Prints the summary; returns the process exit code. */
 int ui_test_finish(void);
 

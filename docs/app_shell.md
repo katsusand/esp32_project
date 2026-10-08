@@ -61,7 +61,7 @@ home復帰timeoutは `app_shell_get_idle_return_timeout_seconds()` と
 `app_shell_set_idle_return_timeout_seconds()` で実行時に参照・変更できます。
 `app_shell_save_idle_return_timeout_seconds()` を呼ぶとNVSへ保存され、次回起動時はKconfig初期値よりNVS値が優先されます。`0` は自動復帰無効です。
 
-この 3 つは `system_settings_app` の `GENERAL` page にある `IdleReturn` から使われます。10 秒刻みで 0〜1800 秒、`0` は `never` 表示です。
+この 3 つは `system_settings_app` の「一般」page にある「無操作で戻る」から使われます。10 秒刻みで 0〜1800 秒、`0` は「しない」表示です。
 
 **この経路は長く死んでいました。** `set` / `save` の呼び出し元が無く、versioned blob も NVS 連携も実装されているのに Kconfig 既定値しか効かない状態で、`sys_shell` namespace すら作られていませんでした。設定 UI を足して初めて繋がっています。
 

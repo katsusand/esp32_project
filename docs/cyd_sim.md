@@ -80,6 +80,8 @@ English contract: the shared simulator sources (`sim_main.cpp`, `sim_catalog.h`,
 
 - `settings_*`: 設定画面の共通枠と増減行。`settings_legacy_mix` は、旧書体のままのページが新しい枠の中でどう見えるか
 - `keyboard_*`: キーボード画面 (`cyd_text_input`) の全状態 (パスワード、大文字、記号 2 種、URL、数字だけ)
+- `sys_*`: システム設定 (`system_settings_view.c`) の全ページ、主な状態、全ダイアログ
+- `wifi_*`: Wi-Fi 設定 (`cyd_wifi_setup_view.c`) の一覧・検索中・見つからない・エラー・接続中・保存・失敗 (理由別)
 - `specimen_*`: 書体見本、テーマ色とボタン、はみ出しの扱い
 
 ## Writing Simulator-Friendly Apps

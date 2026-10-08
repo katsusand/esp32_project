@@ -145,6 +145,22 @@ CYD_TEXT_INPUT="${PROJECT_ROOT}/components/framework/cyd_text_input"
 
 run_case "Japanese UI shared parts" "${BUILD_DIR}/test_ui_common"
 
+# System settings: every page, dialog and stepper value, measured with the real fonts
+SYSTEM_APPS="${PROJECT_ROOT}/components/apps/cyd_system_apps"
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_APPS}" \
+    "${UI_TEST_SRCS[@]}" "${SYSTEM_APPS}/system_settings_view.c" "${SCRIPT_DIR}/test_system_settings_view.c" \
+    -o "${BUILD_DIR}/test_system_settings_view"
+
+run_case "System settings screens" "${BUILD_DIR}/test_system_settings_view"
+
+# Wi-Fi setup: the network list, notices and failure dialog
+WIFI_SETUP="${PROJECT_ROOT}/components/services/cyd_wifi_setup"
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${WIFI_SETUP}" \
+    "${UI_TEST_SRCS[@]}" "${WIFI_SETUP}/cyd_wifi_setup_view.c" "${SCRIPT_DIR}/test_wifi_setup_view.c" \
+    -o "${BUILD_DIR}/test_wifi_setup_view"
+
+run_case "Wi-Fi setup screens" "${BUILD_DIR}/test_wifi_setup_view"
+
 if [[ "${status}" -eq 0 ]]; then
     echo "all host tests passed"
 else

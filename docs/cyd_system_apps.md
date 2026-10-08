@@ -48,22 +48,22 @@ English supplement: Return apps come from the `from_app` pointer passed to `ente
 
 戻る操作は `app_shell_return_to()` を通します。`from_app` が NULL のときは home app へフォールバックするため、戻り先が無い画面でも `<<` が死にません。
 
-settings の root page の `<<` は、**settings にどう入ったか**で振る舞いが変わります。
+settings の root page の「戻る」は、**settings にどう入ったか**で振る舞いが変わります。
 
-| 入り方 | `from_app` | root の `<<` |
+| 入り方 | `from_app` | root の「戻る」 |
 |---|---|---|
-| 起動時のタッチ長押し、NVS初期化の強制 | `NULL` | **再起動確認画面** を開く。`Cancel` で page に戻り、`OK` で保存してから `esp_restart()` |
+| 起動時のタッチ長押し、NVS初期化の強制 | `NULL` | **再起動確認画面** を開く。「やめる」で page に戻り、「再起動する」で保存してから `esp_restart()` |
 | 通常画面からの遷移 | 遷移元 app | これまで通り return app へ戻る |
 
 判定は「return app が記録されていないこと」です。`app_shell_start()` は最初の app の `enter()` を `from_app = NULL` で呼ぶため、起動直後に settings へ入った場合だけこうなります。これは「戻る先が無い」という状態そのものであり、そこで `app_shell_return_to()` に任せると home app へフォールバックしますが、起動時に settings へ来た端末の home app は、たいていこの画面の奥にある Wi-Fi や backend の設定がまだ無くて動けない app です。再起動の方が、今設定した内容を実際に反映させる操作になります。
 
 逆に通常経路では、利用者は動いている画面から来て「戻る」と言っているので、再起動を返すのは答えとしてずれます。
 
-sub-view（`Stored SSIDs` や各確認画面）の `<<` / `Cancel` はこれまで通り、1 階層戻る、あるいは直接遷移で入った場合は return app へ戻ります。
+sub-view (「保存済みのネットワーク」や各確認画面) の「戻る」/「やめる」はこれまで通り、1 階層戻る、あるいは直接遷移で入った場合は return app へ戻ります。
 
-English contract: `<<` on the settings root reboots only when settings is where the device booted to; otherwise it navigates back. Sub-views keep their own back semantics.
+English contract: the back button (「戻る」) on the settings root reboots only when settings is where the device booted to; otherwise it navigates back. Sub-views keep their own back semantics.
 
-settings は「settings 自身が開いた画面」から戻ってきた場合だけ、戻り先を更新しません。判定は `cyd_settings_is_own_subscreen()` で、Wi-Fi Setup、Touch Calibration、登録済み app の固有設定画面が対象です。`cyd_settings_is_app_settings_screen()` は、そのうち app 固有設定画面だけを判定する内部 helper です。registry の app 本体まで対象にすると、clock から settings に入ったときに戻り先が記録されず `<<` が効かなくなります。
+settings は「settings 自身が開いた画面」から戻ってきた場合だけ、戻り先を更新しません。判定は `cyd_settings_is_own_subscreen()` で、Wi-Fi Setup、Touch Calibration、登録済み app の固有設定画面が対象です。`cyd_settings_is_app_settings_screen()` は、そのうち app 固有設定画面だけを判定する内部 helper です。registry の app 本体まで対象にすると、clock から settings に入ったときに戻り先が記録されず「戻る」が効かなくなります。
 
 保存済みSSID一覧、touch calibration消去確認、NVS消去確認は、次のAPIで次回のsettings遷移先として直接指定できます。
 
@@ -104,7 +104,7 @@ English supplement: Direct-view selection is one-shot and thread-safe; callers s
 
 **この page は Wi-Fi を起動しません。** 未接続時は `Wi-Fi is off` と表示し、それまでの履歴があればグラフはそのまま描きます。グラフを見るためだけに radio を起こすのは過剰という判断です。
 
-Wi-Fi を長く保ちたい場合は `NETWORK` page の `WiFiIdleOff` を使ってください。
+Wi-Fi を長く保ちたい場合は設定の「ネットワーク2」page の「Wi-Fi切断」を使ってください。
 
 English supplement: the RSSI page is the reference example of a live graph driven by a sampling service. See `docs/wifi_rssi_history.md`.
 
@@ -118,56 +118,65 @@ prefix を持たない namespace は `unknown` になります。ここには ES
 
 ## Settings App
 
-`settings app` は設定入口です。
+`settings app` は設定入口です。画面の組み立ては `system_settings_view.c` にあり、`system_settings_app.c` はサービスの値を model (`system_settings_view_model_t`) に集めて渡すだけです ([Simulator-Friendly Split](#simulator-friendly-split))。
 
-- `GENERAL` page
-  `LcdBrightness`: LCD バックライトの明るさを変更する
-  `IdleReturn`: 無操作で home app へ復帰するまでの時間
-  `Touch Calib`: touch calibration app へ切り替える
-- `TIME` page
-  現在時刻表示
-  現在日付表示
-  `Timezone`: POSIX timezone 設定をプリセットから切り替える
-  RTC / 内部時計ベースの状態表示
-- `NETWORK1` page
-  現在の Wi-Fi 状態表示
-  `Stored SSIDs`: 保存済みSSID一覧、優先化、削除
-  `Wi-Fi Setup`: `wifi_setup app` へ切り替える
-- `NETWORK2` page
-  `TimeSyncInterval`: NTP 同期間隔を分単位で変更する
-  `WiFiIdleOff`: 無通信で Wi-Fi を落とすまでの時間（`radio_manager` の idle timeout）
-  `SYNC NOW`: その場で同期を要求する
-  NTP / 時刻同期状態表示
-- `NVS` page
-  `Clear Touch Calib`: 保存済みタッチ補正だけ消す
-  `Clear App Data`: `app_` scope の namespace だけ消して再起動する
-  `Initialize NVS`: 保存済み NVS データを全消去して再起動する
-- `APPS` page
-  設定画面を持つ app の一覧。ボタンでその app の設定画面へ遷移する
-  app 自体ではなく **app 固有設定への導線**であり、設定画面を持たない app は出ない
-- `<<`: 起動時に settings へ入った場合は再起動確認画面を開く（`Cancel` で page へ戻り、`OK` で設定を保存してから `esp_restart()`）。通常の遷移で入った場合は `enter()` の `from_app` として受け取った return app へ戻る
+表示名と内部の page ID の対応:
 
-ページ切り替えは画面下部の `<` / `>` ボタンで行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消えます。`APPS` page は、設定画面を持つ app が 1 つも無いときだけ消えます。
+| 表示名 | page ID | 内容 |
+|---|---|---|
+| 一般 | `GENERAL` | 「画面の明るさ」「無操作で戻る」の増減、「タッチ位置の補正」(touch calibration app へ) |
+| 時刻 | `TIME` | 現在時刻 (48px)、日付と曜日、時計が合っているか、「タイムゾーン」の増減 |
+| ネットワーク1 | `NETWORK1` | Wi-Fi の状態、「保存済みのネットワーク」(サブ画面)、「Wi-Fi を設定する」(`wifi_setup app` へ) |
+| ネットワーク2 | `NETWORK2` | 「同期の間隔」「Wi-Fi切断」の増減、「今すぐ時刻を合わせる」、時刻同期の状態と前回の結果 |
+| 初期化 | `NVS` | 「タッチ補正を消去」「アプリのデータを消去」「すべて初期化」 |
+| アプリ | `APPS` | 設定画面を持つ app の一覧。ボタンでその app の設定画面へ |
 
-`LcdBrightness` は `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階です。`TimeSyncInterval` は 1 から 1440 分の範囲で、現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップで増減します。`IdleReturn` は 10 秒刻みで 0〜1800 秒、`0` は `never` です。等差なので `WiFiIdleOff` のような段階テーブルは持たず、加減算で扱います。`WiFiIdleOff` は `never / 30s / 1min / 3min / 5min / 10min / 15min / 20min / 30min / 45min / 60min` の 11 段階です。`never` は `radio_manager` が idle を理由に radio を解放しなくなります（内部的には待ち時間 `portMAX_DELAY`）。`Timezone` は内蔵プリセットから切り替えます。これらは `-` / `+` ボタンで変更すると、その場で反映されます。`SYNC NOW` は `NETWORK` 側から `time_sync` に即時同期要求を送り、進行状況も `NETWORK` page 上に反映されます。`TIME` page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
+- 左上の「戻る」: 起動時に settings へ入った場合は再起動確認画面を開く (「やめる」で page へ戻り、「再起動する」で設定を保存してから `esp_restart()`)。通常の遷移で入った場合は `enter()` の `from_app` として受け取った return app へ戻る
+- 「アプリ」page は app 自体ではなく **app 固有設定への導線**であり、設定画面を持たない app は出ない。1 画面に 4 件まで (`SYSTEM_SETTINGS_VIEW_APPS_MAX`)
 
-`Stored SSIDs` は `NETWORK1` page から入るサブ画面です。保存済みSSIDを優先順で表示し、選択したSSIDを最優先にしたり、削除確認を経て削除したりできます。
+ページ切り替えは画面下部の「前へ」「次へ」で行います。settings は固定ページ列ではなく、有効な page を組み立てて並べます。Wi-Fi build feature が無効な場合は `NETWORK*` page 群が列ごと消えます。`APPS` page は、設定画面を持つ app が 1 つも無いときだけ消えます。
 
-`NVS` page の 3 つは破壊範囲の小さい順に並べています。`Clear App Data` は `app_` scope の namespace だけを消して再起動します。**再起動は必須です** — app は起動時に自分の NVS データを読むため、消したあとも動き続けると古い状態を保持したままになります。
+値の範囲と表示:
 
-`Clear Touch Calib` は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。`Initialize NVS` は確認画面を経て `nvs_flash_erase()` を実行し、保存済み Wi-Fi profile や各種設定値も含めて初期化したうえで再起動します。
+| 項目 | 範囲 | 表示 |
+|---|---|---|
+| 画面の明るさ | `100 / 75 / 50 / 40 / 30 / 25 / 20 / 15 / 10 / 5` の 10 段階 | `75%` |
+| 無操作で戻る | 10 秒刻みで 0〜1800 秒 | `しない` / `50秒` / `5分` / `29分50秒` |
+| 同期の間隔 | 1〜1440 分。現在値に応じて `1 / 5 / 30 / 60 / 180` 分ステップ | 2 時間未満と端数は `90分`、2 時間以上のちょうどの時間は `9時間` |
+| Wi-Fi切断 | `0 / 30s / 1min / 3min / 5min / 10min / 15min / 20min / 30min / 45min / 60min` の 11 段階 | `しない` / `30秒` / `5分` |
+| タイムゾーン | 内蔵プリセット 19 件 | `日本` / `米国東部` など |
 
-NVS blob の version / size / 文字列終端などが現在 firmware の想定フォーマットと一致しない場合は、起動時に warning 付きの `Initialize NVS` 画面へ強制遷移します。この場合、通常の clock home には入らず、`Initialize` 実行後の再起動が必要です。
+「Wi-Fi切断」は無通信で Wi-Fi を落とすまでの時間 (`radio_manager` の idle timeout) です。`しない` は `radio_manager` が idle を理由に radio を解放しなくなります (内部的には待ち時間 `portMAX_DELAY`)。「無操作で戻る」は等差なので段階テーブルは持たず、加減算で扱います。これらは「−」「+」で変更すると、その場で反映されます。「今すぐ時刻を合わせる」は `time_sync` に即時同期要求を送り、進行状況も同じ page に反映されます。「時刻」page はローカル時刻表示と timezone 操作だけを持ち、Wi-Fi 非依存で使えます。保存は `settings app` を離れるタイミングで行われます。
+
+「保存済みのネットワーク」は「ネットワーク1」page から入るサブ画面です。保存済み SSID を優先順で表示し、選択した SSID を「一番上にする」、または削除確認を経て「削除」できます。
+
+「初期化」page の 3 つは破壊範囲の小さい順に並べています。「アプリのデータを消去」は `app_` scope の namespace だけを消して再起動します。**再起動は必須です** — app は起動時に自分の NVS データを読むため、消したあとも動き続けると古い状態を保持したままになります。
+
+「タッチ補正を消去」は、`cyd_input` が保存しているタッチ補正だけを削除します。Wi-Fi profile や他の設定値には触れません。「すべて初期化」は確認画面を経て `nvs_flash_erase()` を実行し、保存済み Wi-Fi profile や各種設定値も含めて初期化したうえで再起動します。
+
+確認画面は、問いかけ (24px、12 文字まで) と影響の説明を出し、「やめる」を左端、実行ボタン (赤の塗り) を右端に離して置きます。
+
+NVS blob の version / size / 文字列終端などが現在 firmware の想定フォーマットと一致しない場合は、起動時に「保存データが読めません」の確認画面へ強制遷移します。この画面には「やめる」が無く、「初期化する」のあとの再起動が必要です。原因 (`nvs_health_get_summary()`、英語) は小さく表示します。
 
 English supplement: Structurally incompatible persistent data now routes the product into a forced initialize flow instead of silently trusting or rewriting the broken payload.
 
-`Wi-Fi Setup` へ入ると、`wifi_setup app` は `from_app` として `settings app` を受け取ります。これにより、Wi-Fi 設定完了後は settings 画面へ戻ります。
+### Simulator-Friendly Split
+
+`system_settings_view.c` は model だけから画面を組み立て、サービスを呼びません。Wi-Fi や時刻同期の状態は view 独自の enum (`system_settings_view_wifi_t` など) で受け取るので、view のヘッダーは `cyd_display` 以外に依存しません。ボタンの action id もこのヘッダーにあります。
+
+文言はすべて view にあります。`cyd_system_apps_common.c` の状態文言 (英語) はシステム情報の画面だけが使っています (段階 4 で日本語化する予定)。
+
+シミュレーターの `sys_*` シーンと `test/host/test_system_settings_view.c` が、全ページ・全ダイアログと、増減の全段階の値が枠に収まるかを確認します。
+
+English contract: `system_settings_view_build()` calls no service, reads no clock and touches no global state.
+
+「Wi-Fi を設定する」で入ると、`wifi_setup app` は `from_app` として `settings app` を受け取ります。これにより、Wi-Fi 設定完了後は settings 画面へ戻ります。
 
 ### Returning From A Sub-Screen
 
-settings が自分で開いた画面（`Wi-Fi Setup` / `Touch Calib` / app 固有設定）から戻ったときは、**離れたときのページを復元**します。判定は `cyd_settings_is_own_subscreen()` です。
+settings が自分で開いた画面 (Wi-Fi の設定 / タッチ位置の補正 / app 固有設定) から戻ったときは、**離れたときのページを復元**します。判定は `cyd_settings_is_own_subscreen()` です。
 
-`Stored SSIDs` のようなサブ*ビュー*は同じ app 内に留まるため `enter()` を通らず、もともとページが保持されていました。一方で別 app へ遷移する `Wi-Fi Setup` や `Clock Settings` は `enter()` を通るため、以前は無条件に `GENERAL` へ戻っていました。`NETWORK1` から Wi-Fi 設定へ入って戻ると 1 ページ目に飛ばされる、という非対称な挙動になっていたのを揃えています。
+「保存済みのネットワーク」のようなサブ*ビュー*は同じ app 内に留まるため `enter()` を通らず、もともとページが保持されていました。一方で別 app へ遷移する Wi-Fi の設定や `Clock Settings` は `enter()` を通るため、以前は無条件に `GENERAL` へ戻っていました。「ネットワーク1」から Wi-Fi 設定へ入って戻ると 1 ページ目に飛ばされる、という非対称な挙動になっていたのを揃えています。
 
 English contract: a sub-screen round trip resumes the page it started from. Entering settings fresh from another app starts at the first page. Preserved pages that became disabled fall back to the first page via the existing enabled check.
 
@@ -175,11 +184,11 @@ app 固有設定がある場合は、app の registry entry に `settings_app` �
 
 設定画面を独立した entry として登録しないのは意図的です。そうすると launcher に `Clock` と `Clock Settings` が対等に並んでしまい、また clock を載せない製品でも設定画面だけ残り得るためです。
 
-以前は `system_settings_set_extension()` という 1 スロットの API で、**設定を拡張できる app は 1 つだけ**でした。registry 化により件数の制限が `CYD_SETTINGS_APPS_VISIBLE_MAX` まで緩和されています。詳細は `docs/app_registry.md` を参照してください。
+以前は `system_settings_set_extension()` という 1 スロットの API で、**設定を拡張できる app は 1 つだけ**でした。registry 化により件数の制限が `SYSTEM_SETTINGS_VIEW_APPS_MAX` (4) まで緩和されています。詳細は `docs/app_registry.md` を参照してください。
 
 時計固有の alarm 設定と scheduler 診断表示は `Clock Settings` 側にあります。`cyd_system_apps` は `app_scheduler` に依存しません。
 
-settings 画面が `wifi_setup app` から戻ってきた場合は、元の return app を保持します。これにより `clock -> settings -> wifi_setup -> settings -> <<` は `clock` へ戻ります。
+settings 画面が `wifi_setup app` から戻ってきた場合は、元の return app を保持します。これにより `clock -> settings -> wifi_setup -> settings -> 戻る` は `clock` へ戻ります。
 
 English supplement: Settings is a menu app, not persistent configuration storage. Add storage-backed settings in dedicated components when values need to survive reboot.
 
@@ -190,12 +199,12 @@ English supplement: Settings is a menu app, not persistent configuration storage
 1. 通常ボタン経路
    `cyd_system_apps_touch_confirmed_action()` が使われます。
    これは `PRESS` 時に候補 action を記録し、`RELEASE` 時に同じボタン上で離された場合だけ確定します。
-   `<<`、`Wi-Fi Setup`、`Stored SSIDs`、ページ移動 `<` / `>` のような普通の button はこの経路です。
+   「戻る」「Wi-Fi を設定する」「保存済みのネットワーク」、ページ移動「前へ」「次へ」のような普通の button はこの経路です。
 
 2. ステッパー経路
    `cyd_settings_touch_stepper_action()` が使われます。
    これは `PRESS` と `REPEAT` をそのまま action として返します。
-   `-` / `+` の長押し連続変更を成立させるため、`RELEASE` を待ちません。
+   「−」「+」の長押し連続変更を成立させるため、`RELEASE` を待ちません。
 
 実装上の入口は `cyd_settings_app_step()` です。最初にステッパー経路を評価し、該当しなければ通常ボタン経路へ進みます。
 
@@ -265,6 +274,6 @@ English supplement: the table count is checked at compile time, required callbac
 
 - Wi-Fi 依存 page は `APP_WIFI_STA_ENABLED` に連動して enable/disable する
 - page title / page count / prev-next navigation は、有効 page 列から動的に決める
-- `Stored SSIDs` の direct view のような network 遷移は、対応 page が enable のときだけ使う
+- 「保存済みのネットワーク」の direct view のような network 遷移は、対応 page が enable のときだけ使う
 
 English supplement: Treat settings pages as a composed list of enabled page definitions. This keeps Wi-Fi-free products natural while allowing future `NETWORK3+` expansion without reworking the navigation model.
