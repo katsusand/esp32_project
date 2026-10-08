@@ -137,6 +137,14 @@ UI_TEST_SRCS=("${CYD_DISPLAY}/cyd_display_text.c" "${CYD_UI_FONTS}/cyd_ui_fonts.
 
 run_case "Japanese UI text" "${BUILD_DIR}/test_ui_text"
 
+# Settings chrome, stepper rows and every keyboard state, measured with the real fonts
+CYD_TEXT_INPUT="${PROJECT_ROOT}/components/framework/cyd_text_input"
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${CYD_TEXT_INPUT}/include" \
+    "${UI_TEST_SRCS[@]}" "${CYD_TEXT_INPUT}/cyd_text_input_view.c" "${SCRIPT_DIR}/test_ui_common.c" \
+    -o "${BUILD_DIR}/test_ui_common"
+
+run_case "Japanese UI shared parts" "${BUILD_DIR}/test_ui_common"
+
 if [[ "${status}" -eq 0 ]]; then
     echo "all host tests passed"
 else

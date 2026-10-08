@@ -109,6 +109,8 @@ English supplement: the generator must be deterministic (same TTF, same freetype
 | `scripts/ui_fonts/gen_ui_fonts.py`、`ui_font_chars.py` | プロファイル対応 | 親の版を採り、`font_profile.json` を `true` にする |
 | `cyd_ui_fonts.h`、docs (`cyd_ui_fonts.md`、`cyd_sim.md`、`cyd_display.md`) | `display_message` への言及を一般化 | 親の版を採る。子の固有の説明は `display_message.md` に残す |
 | `generated/` | 親の文字だけで生成 | `merge_upstream.sh` が作り直す |
+| `cyd_ui.c` / `cyd_ui.h` (Phase 2) | 設定画面の共通枠と増減行を日本語書体にした | 親の版を採る。子の打刻設定画面の英語の見出し・ページ名は ASCII なのでそのまま描ける |
+| `cyd_text_input` (Phase 2) | 子の機能 (`fixed_prefix`、`force_upper`、`digits_only`、区切りの自動挿入) を取り込んだうえで、画面を `cyd_text_input_view.c` に分けて日本語化した | 親の版を採る。子の機能はすべて入っている |
 | `docs/ui_japanese_plan.md` | (衝突しない) 親の計画書は `ui_japanese_platform_plan.md` という別名にした | — |
 
 English supplement: the files listed above were reshaped so that a derived project only ever adds files (scene files, `*_view.c`, its own host tests) instead of editing shared ones. After the first merge, the shared files should merge cleanly.
@@ -159,7 +161,7 @@ English contract: a view function takes a model struct and a screen, calls only 
 | # | 内容 | 確認方法 |
 |---|---|---|
 | 1 | (完了) 区画の `factory` 化。描画基盤の移植 (`cyd_display`、`cyd_ui`、`cyd_ui_fonts`、`scripts/ui_fonts`、`tools/cyd_sim` の書体見本、`test_ui_text.c`)。フォントのプロファイル切り替えを追加。画面はまだ変えない | ビルド、ホストテスト、シミュレーターの見本、アプリサイズ |
-| 2 | 共通部品: `cyd_ui_add_settings_chrome` (戻る、見出し、ページ送り)、`cyd_ui_add_stepper_row`、`cyd_text_input` の見出しと操作ボタン (「保存」「削除」「空白」など)。キー自体は ASCII だがアンチエイリアス書体で描く | シミュレーター、ホストテスト |
+| 2 | (完了) 共通部品: `cyd_ui_add_settings_chrome` (戻る、見出し、ページ送り)、`cyd_ui_add_stepper_row`、`cyd_text_input` の見出しと操作ボタン (「保存」「削除」「空白」など)。キー自体は ASCII だがアンチエイリアス書体で描く | シミュレーター、ホストテスト |
 | 3 | `system_settings_app` の view 分割と日本語化、`cyd_wifi_setup` | シミュレーター (全ページ・全確認ダイアログ)、ホストテスト |
 | 4 | `system_info_app`、タッチ較正、`cyd_system_apps_common.c` の状態文言 | ビルド |
 | 5 | ランチャー、時計、時計設定、アラーム。アプリ名 (`app_registry` の `title`) の日本語化 | シミュレーター (ランチャー)、ビルド |
@@ -187,6 +189,24 @@ English contract: a view function takes a model struct and a screen, calls only 
 
 画面はまだ旧 ASCII 書体のままなので、実機の見た目は変わらない。実機で確かめるのは、区画を変えたファームウェアを通常の `flash` で書き込み、NVS (Wi-Fi 設定、タッチ較正) と内部ストレージが残ること。
 
+## Phase 2 Results
+
+2026-10-08 時点:
+
+- `cyd_text_input` は、まず子の版 (1f8885e) をそのまま取り込み、それから画面を `cyd_text_input_view.c` に分けた。子と親で別々に書き換えると、取り込みのたびに衝突するため
+- 設定画面の共通枠は背景を塗らない。各ページは段階 3 以降に 1 ページずつ日本語化するので、それまでの旧書体の文字 (自分の枠を黒で塗る) がテーマ色の背景の上で黒い箱にならないようにした。背景はページを日本語化するときに塗る
+- 共通枠の寸法は、ページの中身 (4〜26 行目) を動かさない範囲にした。「戻る」は 64×32px、「前へ」「次へ」は 80×24px。ページ送りの高さ 24px は目安の 40px に届かない。段階 3 でページを組み直すときに、コンテンツ領域を詰めて広げるか決める
+- 増減行は、行の寸法に入る一番大きい書体を選ぶ。今の設定ページの小さいボタン (24×16px) と長い英語の項目名は旧書体に戻るので、段階 3 まで読める
+- キーボードのキーは 16px 太字にそろえた。32px のキーで文字に使えるのは 20px で、24px 太字では W・M・@・% が入らないため
+- キーボードの見出しは 16px 太字 (呼び出し側の文字列で長さが一定しない。11 文字まで)
+- ビルド: 成功、警告なし。アプリ 1,262,848 バイト (Phase 1 から約 11KB 増)。静的 DRAM +64 バイト (キーボードの見出し・ラベルのバッファを 40 バイトに広げた分)
+- ホストテスト: 全件成功 (`test_ui_common.c` 41 件を追加)
+- シミュレーター: `settings_*` 3 シーン、`keyboard_*` 6 シーンを追加して目視確認
+
+残っている見た目の問題: システム情報の NVS ページ (`system_info_app.c`) は、要約の行を 3 行目に置いているので、見出しの帯 (0〜3 行目) に重なる。段階 4 で直す
+
+実機で確かめること: 設定画面 (各ページの見出し・戻る・前へ・次へ・増減ボタン) と、Wi-Fi のパスワード入力 (伏せ字の切り替え、保存、戻る)。
+
 ## Agreed Choices
 
 2026-10-08 にユーザーと合意した事項:
@@ -194,4 +214,4 @@ English contract: a view function takes a model struct and a screen, calls only 
 1. 区画: 3MB `factory` にする (上の Partition Layout)
 2. 技術情報の画面 (システム情報の診断値、NVS ページ): 見出しと項目名は日本語、値と専門用語 (NVS、RSSI、ヒープのバイト数) は英語のまま
 3. 子への取り込み: 手順 (上の Merging Into The Child) に加え、子に `scripts/ui_fonts/merge_upstream.sh` を置く。スクリプトは親で書いて子へ取り込まれる形にし、子でだけ実行する
-4. PR は 2 本に分ける: Phase 1〜2 (区画、描画基盤、共通部品) と Phase 3〜6 (各画面)
+4. PR の分け方: 当初は Phase 1〜2 と Phase 3〜6 の 2 本の予定だったが、Phase 1 (katsusand/esp32_project#13) と Phase 2 を別の PR にした (2026-10-08 にユーザーが指示)。Phase 3〜6 は 3 本目
