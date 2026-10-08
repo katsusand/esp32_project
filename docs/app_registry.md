@@ -116,7 +116,7 @@ English contract: register during composition startup, before the shell task run
 `system_settings_app` は、登録された app を一覧する `APPS` ページを持ちます。
 
 - 登録が 0 件のときはページごと出ません（空ページが遷移列に混ざるのを避けるため）
-- 表示できるのは `CYD_SETTINGS_APPS_VISIBLE_MAX` 件までです。スクロールはまだありません
+- 表示できるのは `SYSTEM_SETTINGS_VIEW_APPS_MAX` (4) 件までです。スクロールはまだありません
 - ボタンを押すとその app へ遷移します
 
 以前 `GENERAL` ページに 1 個だけ置いていた拡張ボタンは、このページに移りました。

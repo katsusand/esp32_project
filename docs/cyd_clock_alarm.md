@@ -14,8 +14,8 @@ English contract: the alarm is part of the clock app, not a system feature. Only
 
 アラームを操作する UI は 2 か所あり、どちらも時計に属します。
 
-- 時計画面の `ALARM` ボタン (`cyd_clock_app`): 有効/無効を切り替える
-- `Clock Settings` の `ALARM1` / `ALARM2` page (`cyd_clock_settings_app`): 時刻と曜日を変更する
+- 時計画面のアラームのボタン (`cyd_clock_app`): 有効/無効を切り替える
+- 時計の設定の「アラーム1」「アラーム2」page (`cyd_clock_settings_app`): 時刻と曜日を変更する
 
 どちらもこの component の API だけを使い、scheduler 上の識別子や既定値を知りません。
 

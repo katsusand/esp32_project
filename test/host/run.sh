@@ -168,6 +168,17 @@ WIFI_SETUP="${PROJECT_ROOT}/components/services/cyd_wifi_setup"
 
 run_case "Wi-Fi setup screens" "${BUILD_DIR}/test_wifi_setup_view"
 
+# Launcher, clock and clock settings; the clock face at every minute of the day
+LAUNCHER="${PROJECT_ROOT}/components/apps/app_launcher"
+CLOCK="${PROJECT_ROOT}/components/apps/cyd_clock_app"
+CLOCK_SETTINGS="${PROJECT_ROOT}/components/apps/cyd_clock_settings_app"
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${LAUNCHER}" -I"${CLOCK}" -I"${CLOCK_SETTINGS}" \
+    "${UI_TEST_SRCS[@]}" "${LAUNCHER}/app_launcher_view.c" "${CLOCK}/cyd_clock_view.c" \
+    "${CLOCK_SETTINGS}/cyd_clock_settings_view.c" "${SCRIPT_DIR}/test_launcher_clock_view.c" \
+    -o "${BUILD_DIR}/test_launcher_clock_view"
+
+run_case "Launcher and clock screens" "${BUILD_DIR}/test_launcher_clock_view"
+
 if [[ "${status}" -eq 0 ]]; then
     echo "all host tests passed"
 else

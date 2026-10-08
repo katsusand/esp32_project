@@ -13,6 +13,7 @@
 #include "app_shell.h"
 #include "cyd_clock_alarm.h"
 #include "cyd_clock_app.h"
+#include "cyd_clock_view.h"
 #include "cyd_clock_settings_app.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
@@ -38,17 +39,8 @@
 #define CYD_CLOCK_APP_INPUT_POLL_MS 50
 #define CYD_CLOCK_APP_IDLE_POLL_MS 250
 #define CYD_CLOCK_APP_TAP_SLOP_PX 24
-#define CYD_CLOCK_APP_ACTION_SETTINGS 0x1002
-#define CYD_CLOCK_APP_ACTION_INFO 0x1003
-#define CYD_CLOCK_APP_ACTION_ALARM 0x1004
-#define CYD_CLOCK_APP_TIME_COL 0
-#define CYD_CLOCK_APP_TIME_ROW 10
-#define CYD_CLOCK_APP_TIME_SPAN_COLS CYD_DISPLAY_GRID_COLS
-#define CYD_CLOCK_APP_TIME_SPAN_ROWS 6
 /* The SD card problem icon: two grid cells square, in the top-right corner,
    which the title (row 2 and below) never reaches. */
-#define CYD_CLOCK_APP_SD_ICON_COL 38
-#define CYD_CLOCK_APP_SD_ICON_ROW 0
 
 static cyd_display_screen_t s_clock_screen;
 static bool s_clock_use_24_hour = true;
@@ -106,21 +98,6 @@ static cyd_clock_app_alarm_mode_t cyd_clock_app_alarm_mode(void)
     return CYD_CLOCK_APP_ALARM_MODE_OFF;
 }
 
-static const char *cyd_clock_app_alarm_mode_label(cyd_clock_app_alarm_mode_t mode)
-{
-    switch (mode) {
-    case CYD_CLOCK_APP_ALARM_MODE_1:
-        return "ALARM1 ON";
-    case CYD_CLOCK_APP_ALARM_MODE_2:
-        return "ALARM2 ON";
-    case CYD_CLOCK_APP_ALARM_MODE_1_2:
-        return "ALARM1/2 ON";
-    case CYD_CLOCK_APP_ALARM_MODE_OFF:
-    default:
-        return "ALARM OFF";
-    }
-}
-
 static esp_err_t cyd_clock_app_cycle_alarm_mode(void)
 {
     cyd_clock_app_alarm_mode_t next_mode = CYD_CLOCK_APP_ALARM_MODE_OFF;
@@ -160,7 +137,7 @@ esp_err_t cyd_clock_app_register(void)
      */
     static app_registry_entry_t entry = {
         .id = "clock",
-        .title = "Clock",
+        .title = "時計",
     };
 
     entry.app = cyd_clock_app_get_app();
@@ -242,75 +219,43 @@ static bool cyd_clock_app_has_time_sync_success(void)
     return time_sync_get_last_success_at(&last_success_at);
 }
 
-static void cyd_clock_app_format_sync_status(char *status_text, size_t status_size)
+static cyd_clock_view_sync_t cyd_clock_app_view_sync(struct tm *at)
 {
     esp_err_t last_status = ESP_OK;
     time_t last_success_at = 0;
 
-    if (status_text == NULL || status_size == 0) {
-        return;
-    }
-
     if (!time_sync_get_last_attempt_status(&last_status)) {
-        snprintf(status_text, status_size, "sync: pending");
-        return;
+        return CYD_CLOCK_VIEW_SYNC_NONE;
     }
-
     if (last_status != ESP_OK) {
-        snprintf(status_text, status_size, "sync: failed");
-        return;
+        return CYD_CLOCK_VIEW_SYNC_FAILED;
     }
-
     if (!time_sync_get_last_success_at(&last_success_at)) {
-        snprintf(status_text, status_size, "sync: pending");
-        return;
+        return CYD_CLOCK_VIEW_SYNC_NONE;
     }
-
-    struct tm sync_time = { 0 };
-    localtime_r(&last_success_at, &sync_time);
-    strftime(status_text, status_size, "sync: %m-%d %H:%M OK", &sync_time);
+    localtime_r(&last_success_at, at);
+    return CYD_CLOCK_VIEW_SYNC_OK_AT;
 }
 
-static const char *cyd_clock_app_wifi_state_text(wifi_connection_state_t state)
-{
-    switch (state) {
-    case WIFI_CONNECTION_STATE_STOPPED:
-        return "wifi: stopped";
-    case WIFI_CONNECTION_STATE_INIT:
-        return "wifi: init";
-    case WIFI_CONNECTION_STATE_OFF:
-        return "wifi: off";
-    case WIFI_CONNECTION_STATE_CONNECTING:
-        return "wifi: connecting";
-    case WIFI_CONNECTION_STATE_CONNECTED:
-        return "wifi: connected";
-    case WIFI_CONNECTION_STATE_RECONNECTING:
-        return "wifi: reconnecting";
-    case WIFI_CONNECTION_STATE_FAILED:
-        return "wifi: failed";
-    case WIFI_CONNECTION_STATE_SETUP_REQUIRED:
-        return "wifi: setup needed";
-    case WIFI_CONNECTION_STATE_SETUP_RUNNING:
-        return "wifi: setup";
-    default:
-        return "wifi: unknown";
-    }
-}
-
-static void cyd_clock_app_format_wifi_status(char *status_text, size_t status_size)
+static cyd_clock_view_wifi_t cyd_clock_app_view_wifi(void)
 {
     wifi_connection_state_t state = WIFI_CONNECTION_STATE_STOPPED;
 
-    if (status_text == NULL || status_size == 0) {
-        return;
-    }
-
     if (wifi_connection_get_state(&state) != ESP_OK) {
-        snprintf(status_text, status_size, "wifi: unavailable");
-        return;
+        return CYD_CLOCK_VIEW_WIFI_UNAVAILABLE;
     }
-
-    snprintf(status_text, status_size, "%s", cyd_clock_app_wifi_state_text(state));
+    switch (state) {
+    case WIFI_CONNECTION_STATE_STOPPED: return CYD_CLOCK_VIEW_WIFI_STOPPED;
+    case WIFI_CONNECTION_STATE_INIT: return CYD_CLOCK_VIEW_WIFI_INIT;
+    case WIFI_CONNECTION_STATE_OFF: return CYD_CLOCK_VIEW_WIFI_OFF;
+    case WIFI_CONNECTION_STATE_CONNECTING: return CYD_CLOCK_VIEW_WIFI_CONNECTING;
+    case WIFI_CONNECTION_STATE_CONNECTED: return CYD_CLOCK_VIEW_WIFI_CONNECTED;
+    case WIFI_CONNECTION_STATE_RECONNECTING: return CYD_CLOCK_VIEW_WIFI_RECONNECTING;
+    case WIFI_CONNECTION_STATE_FAILED: return CYD_CLOCK_VIEW_WIFI_FAILED;
+    case WIFI_CONNECTION_STATE_SETUP_REQUIRED: return CYD_CLOCK_VIEW_WIFI_SETUP_REQUIRED;
+    case WIFI_CONNECTION_STATE_SETUP_RUNNING: return CYD_CLOCK_VIEW_WIFI_SETUP_RUNNING;
+    default: return CYD_CLOCK_VIEW_WIFI_UNAVAILABLE;
+    }
 }
 
 static int16_t cyd_clock_app_abs_i16(int16_t value)
@@ -327,9 +272,9 @@ static bool cyd_clock_app_touch_is_time_display(int16_t x, int16_t y)
         return false;
     }
 
-    return col < (CYD_CLOCK_APP_TIME_COL + CYD_CLOCK_APP_TIME_SPAN_COLS) &&
-           row >= CYD_CLOCK_APP_TIME_ROW &&
-           row < (CYD_CLOCK_APP_TIME_ROW + CYD_CLOCK_APP_TIME_SPAN_ROWS);
+    return col < (CYD_CLOCK_VIEW_TIME_COL + CYD_CLOCK_VIEW_TIME_SPAN_COLS) &&
+           row >= CYD_CLOCK_VIEW_TIME_ROW &&
+           row < (CYD_CLOCK_VIEW_TIME_ROW + CYD_CLOCK_VIEW_TIME_SPAN_ROWS);
 }
 
 static bool cyd_clock_app_touch_is_tap(const cyd_input_event_t *event)
@@ -425,121 +370,30 @@ static bool cyd_clock_app_process_time_ticks(void)
 
 static esp_err_t cyd_clock_app_show_clock(void)
 {
+    static const cyd_clock_view_alarm_t alarm_views[] = {
+        [CYD_CLOCK_APP_ALARM_MODE_OFF] = CYD_CLOCK_VIEW_ALARM_OFF,
+        [CYD_CLOCK_APP_ALARM_MODE_1] = CYD_CLOCK_VIEW_ALARM_1,
+        [CYD_CLOCK_APP_ALARM_MODE_2] = CYD_CLOCK_VIEW_ALARM_2,
+        [CYD_CLOCK_APP_ALARM_MODE_1_2] = CYD_CLOCK_VIEW_ALARM_1_2,
+    };
     time_t now = 0;
-    struct tm local_time = { 0 };
-    char time_text[16] = { 0 };
-    char date_text[24] = { 0 };
-    char status_text[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    char wifi_status_text[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
-    cyd_display_screen_t *screen = &s_clock_screen;
-    cyd_clock_app_alarm_mode_t alarm_mode = cyd_clock_app_alarm_mode();
-    const char *alarm_label = cyd_clock_app_alarm_mode_label(alarm_mode);
+    cyd_clock_view_model_t model = {
+        .screen = CYD_CLOCK_VIEW_SCREEN_FACE,
+        .use_24_hour = s_clock_use_24_hour,
+        .alarm = alarm_views[cyd_clock_app_alarm_mode()],
+        /* The clock is drawn again every second, which is also how soon a card
+           pulled or put back shows up here. Nothing is drawn while the card
+           works. */
+        .sd_icon = sd_card_status_icon_for_state(sd_card_status_get_state()),
+    };
 
     time(&now);
-    localtime_r(&now, &local_time);
-
-    if (cyd_clock_app_time_is_synced(&local_time)) {
-        strftime(time_text,
-                 sizeof(time_text),
-                 s_clock_use_24_hour ? "%H:%M:%S" : "%I:%M:%S %p",
-                 &local_time);
-        strftime(date_text, sizeof(date_text), "%Y-%m-%d", &local_time);
-        cyd_clock_app_format_sync_status(status_text, sizeof(status_text));
-        cyd_clock_app_format_wifi_status(wifi_status_text, sizeof(wifi_status_text));
-    } else {
-        snprintf(time_text, sizeof(time_text), "--:--:--");
-        snprintf(date_text, sizeof(date_text), "Waiting for NTP");
-        cyd_clock_app_format_sync_status(status_text, sizeof(status_text));
-        cyd_clock_app_format_wifi_status(wifi_status_text, sizeof(wifi_status_text));
-    }
-    cyd_ui_screen_clear(screen);
-
-    cyd_ui_add_text(screen,
-                    "CYD CLOCK",
-                    0,
-                    2,
-                    CYD_DISPLAY_GRID_COLS,
-                    2,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    2,
-                    CYD_UI_COLOR_YELLOW);
-    cyd_ui_add_text(screen,
-                    date_text,
-                    0,
-                    7,
-                    CYD_DISPLAY_GRID_COLS,
-                    2,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    2,
-                    CYD_UI_COLOR_WHITE);
-    cyd_ui_add_text(screen,
-                    time_text,
-                    CYD_CLOCK_APP_TIME_COL,
-                    CYD_CLOCK_APP_TIME_ROW,
-                    CYD_CLOCK_APP_TIME_SPAN_COLS,
-                    CYD_CLOCK_APP_TIME_SPAN_ROWS,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    4,
-                    CYD_UI_COLOR_CYAN);
-    cyd_ui_add_text(screen,
-                    status_text,
-                    0,
-                    20,
-                    CYD_DISPLAY_GRID_COLS,
-                    2,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    1,
-                    CYD_UI_COLOR_DARKGREY);
-    cyd_ui_add_text(screen,
-                    wifi_status_text,
-                    0,
-                    22,
-                    CYD_DISPLAY_GRID_COLS,
-                    2,
-                    CYD_DISPLAY_ALIGN_CENTER,
-                    1,
-                    CYD_UI_COLOR_DARKGREY);
-    cyd_ui_add_button(screen,
-        "SETTINGS",
-        1,
-        26,
-        12,
-        3,
-        CYD_UI_COLOR_BLUE,
-        CYD_UI_COLOR_CYAN,
-        CYD_CLOCK_APP_ACTION_SETTINGS
-    );
-    cyd_ui_add_button(screen,
-        "INFO",
-        14,
-        26,
-        12,
-        3,
-        CYD_UI_COLOR_BLUE,
-        CYD_UI_COLOR_CYAN,
-        CYD_CLOCK_APP_ACTION_INFO
-    );
-    cyd_ui_add_button_with_fg(screen,
-                              alarm_label,
-                              27,
-                              26,
-                              12,
-                              3,
-                              CYD_UI_COLOR_WHITE,
-                              alarm_mode == CYD_CLOCK_APP_ALARM_MODE_OFF ? CYD_UI_COLOR_DIMGREY : CYD_UI_COLOR_RED,
-                              alarm_mode == CYD_CLOCK_APP_ALARM_MODE_OFF ? CYD_UI_COLOR_LIGHTGREY : CYD_UI_COLOR_YELLOW,
-                              CYD_CLOCK_APP_ACTION_ALARM);
-
-    /*
-     * Last, so the widgets before it keep their positions whether or not it is
-     * there. The clock is drawn again every second, which is also how soon a card
-     * pulled or put back shows up here. Nothing is drawn while the card works.
-     */
-    const cyd_display_bitmap_t *sd_icon = sd_card_status_icon_for_state(sd_card_status_get_state());
-    if (sd_icon != NULL) {
-        (void)cyd_ui_add_icon(screen, sd_icon, CYD_CLOCK_APP_SD_ICON_COL, CYD_CLOCK_APP_SD_ICON_ROW, 2, 2);
-    }
-    return cyd_ui_submit(screen);
+    localtime_r(&now, &model.local_time);
+    model.time_known = cyd_clock_app_time_is_synced(&model.local_time);
+    model.sync = cyd_clock_app_view_sync(&model.last_sync_at);
+    model.wifi = cyd_clock_app_view_wifi();
+    cyd_clock_view_build(&s_clock_screen, &model);
+    return cyd_ui_submit(&s_clock_screen);
 }
 
 static bool cyd_clock_app_should_enter_wifi_setup(void)
@@ -570,22 +424,15 @@ static bool cyd_clock_app_should_show_wifi_failed(void)
     return state == WIFI_CONNECTION_STATE_FAILED;
 }
 
-static const char *cyd_clock_app_wifi_failure_text(esp32_wifi_sta_failure_reason_t reason)
+static cyd_clock_view_failure_t cyd_clock_app_view_failure(esp32_wifi_sta_failure_reason_t reason)
 {
     switch (reason) {
-    case ESP32_WIFI_STA_FAILURE_NO_SAVED_PROFILE:
-        return "No saved Wi-Fi profile";
-    case ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE:
-        return "No saved AP in range";
-    case ESP32_WIFI_STA_FAILURE_AUTH:
-        return "Authentication failed";
-    case ESP32_WIFI_STA_FAILURE_TIMEOUT:
-        return "Connection timeout";
-    case ESP32_WIFI_STA_FAILURE_CONNECT:
-        return "Wi-Fi connect failed";
-    case ESP32_WIFI_STA_FAILURE_NONE:
-    default:
-        return "Wi-Fi unavailable";
+    case ESP32_WIFI_STA_FAILURE_NO_SAVED_PROFILE: return CYD_CLOCK_VIEW_FAILURE_NO_SAVED_PROFILE;
+    case ESP32_WIFI_STA_FAILURE_NO_AP_IN_RANGE: return CYD_CLOCK_VIEW_FAILURE_NO_AP_IN_RANGE;
+    case ESP32_WIFI_STA_FAILURE_AUTH: return CYD_CLOCK_VIEW_FAILURE_AUTH;
+    case ESP32_WIFI_STA_FAILURE_TIMEOUT: return CYD_CLOCK_VIEW_FAILURE_TIMEOUT;
+    case ESP32_WIFI_STA_FAILURE_CONNECT: return CYD_CLOCK_VIEW_FAILURE_CONNECT;
+    default: return CYD_CLOCK_VIEW_FAILURE_UNKNOWN;
     }
 }
 
@@ -608,15 +455,14 @@ static void cyd_clock_app_begin_wifi_setup(void)
 
 static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
 {
-    const char *lines[] = {
-        cyd_clock_app_wifi_failure_text(wifi_connection_get_last_failure_reason()),
-        "Select RETRY or SETUP",
+    const cyd_clock_view_model_t model = {
+        .screen = CYD_CLOCK_VIEW_SCREEN_WIFI_FAILED,
+        .failure = cyd_clock_app_view_failure(wifi_connection_get_last_failure_reason()),
     };
-    const char *buttons[] = { "RETRY", "SETUP" };
     cyd_clock_mode_button_tracker_t tracker = { 0 };
 
-    cyd_clock_app_log_on_error(cyd_display_show_mode_screen(&s_clock_screen, "Wi-Fi failed", lines, 2, buttons, 2, 0),
-                               "show Wi-Fi failed screen");
+    cyd_clock_view_build(&s_clock_screen, &model);
+    cyd_clock_app_log_on_error(cyd_ui_submit(&s_clock_screen), "show Wi-Fi failed screen");
 
     while (true) {
         cyd_input_event_t event = { 0 };
@@ -626,11 +472,9 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
             }
             continue;
         }
-        /* The dialog is a mode screen in s_clock_screen; its buttons carry
-           their index as the action id. */
-        uint16_t button_index = 0;
-        if (cyd_clock_app_touch_confirmed_action(&event, &tracker, &button_index)) {
-            if (button_index == 0) {
+        uint16_t action_id = 0;
+        if (cyd_clock_app_touch_confirmed_action(&event, &tracker, &action_id)) {
+            if (action_id == CYD_CLOCK_APP_ACTION_WIFI_RETRY) {
                 ESP_LOGI(TAG, "retrying saved Wi-Fi profiles");
                 if (wifi_connection_retry_connection_without_setup_async() != ESP_OK) {
                     ESP_LOGW(TAG, "failed to start Wi-Fi retry");
@@ -639,8 +483,10 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
                 time_sync_request_soon_and_release_wifi();
                 return CYD_CLOCK_APP_MODE_WIFI_RETRYING;
             }
-            cyd_clock_app_begin_wifi_setup();
-            return CYD_CLOCK_APP_MODE_CLOCK;
+            if (action_id == CYD_CLOCK_APP_ACTION_WIFI_SETUP) {
+                cyd_clock_app_begin_wifi_setup();
+                return CYD_CLOCK_APP_MODE_CLOCK;
+            }
         }
 
         if (cyd_clock_app_touch_is_tap(&event)) {
@@ -663,20 +509,19 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
         wifi_connection_progress_t progress = wifi_connection_get_progress();
         if (progress.phase != last_progress.phase ||
             strncmp(progress.ssid, last_progress.ssid, sizeof(progress.ssid)) != 0) {
-            const char *lines[2] = { "", "Please wait" };
-            char trying_line[CYD_DISPLAY_TEXT_MAX_LEN + 1] = { 0 };
+            cyd_clock_view_model_t model = {
+                .screen = CYD_CLOCK_VIEW_SCREEN_WIFI_RETRYING,
+                .retry = CYD_CLOCK_VIEW_RETRY_CONNECTING,
+                .retry_ssid = progress.ssid,
+            };
 
             if (progress.phase == WIFI_CONNECTION_PROGRESS_CONNECTING && progress.ssid[0] != '\0') {
-                snprintf(trying_line, sizeof(trying_line), "Trying %.30s", progress.ssid);
-                lines[0] = trying_line;
+                model.retry = CYD_CLOCK_VIEW_RETRY_TRYING;
             } else if (progress.phase == WIFI_CONNECTION_PROGRESS_SEARCHING) {
-                lines[0] = "Searching saved APs";
-            } else {
-                lines[0] = "Connecting Wi-Fi";
+                model.retry = CYD_CLOCK_VIEW_RETRY_SEARCHING;
             }
-
-            cyd_clock_app_log_on_error(cyd_display_show_lines(&s_clock_screen, "Wi-Fi", lines, 2),
-                                       "show Wi-Fi retry screen");
+            cyd_clock_view_build(&s_clock_screen, &model);
+            cyd_clock_app_log_on_error(cyd_ui_submit(&s_clock_screen), "show Wi-Fi retry screen");
             last_progress = progress;
         }
 
