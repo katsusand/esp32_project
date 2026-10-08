@@ -1,0 +1,9 @@
+# UI テキストフォントに必ず含める追加文字。
+# ソースの文字列リテラルに現れない、実行時に組み立てる文字だけをここに書く。
+#
+# English supplement: Lines starting with '#' are comments. Whitespace is
+# ignored. Literals in components/ and main/ are picked up automatically, so
+# only list characters that never appear in a literal.
+
+# 曜日・日付 (strftime の結果を置き換えるときに使う)
+日月火水木金土年時分秒

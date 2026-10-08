@@ -24,6 +24,42 @@ extern "C" {
 #define CYD_UI_COLOR_DISABLED_BG CYD_UI_COLOR_DIMGREY
 #define CYD_UI_COLOR_DISABLED_BORDER CYD_UI_COLOR_DARKGREY
 
+/*
+ * Theme for the anti-aliased Japanese UI (RGB565).
+ *
+ * Screens built with the label / styled-button calls below take their colours
+ * from here so every app reads as one product. Semantic colours (success,
+ * warning, danger) carry meaning and are not decoration: an app should not
+ * reuse DANGER for anything that is not an error or a destructive action.
+ *
+ * English supplement: *_TINT is a dark fill that pairs with the same-named
+ * colour as a border or text; ON_* is the text colour to use on a solid fill
+ * of that colour.
+ */
+#define CYD_UI_THEME_BG           0x0884 /* #0a1020 */
+#define CYD_UI_THEME_SURFACE      0x1106 /* #172033 panels, secondary buttons */
+#define CYD_UI_THEME_LINE         0x29aa /* #2a3650 borders, idle spinner track */
+#define CYD_UI_THEME_TEXT         0xf7bf /* #f1f4f9 */
+#define CYD_UI_THEME_SUBTEXT      0x9517 /* #94a3ba secondary text */
+#define CYD_UI_THEME_SUCCESS      0x262b /* #22c55e */
+#define CYD_UI_THEME_SUCCESS_SOFT 0x7f14 /* #7ee2a0 success text on dark */
+#define CYD_UI_THEME_ON_SUCCESS   0x0101 /* #06210f */
+#define CYD_UI_THEME_PRIMARY      0x3c1e /* #3b82f6 */
+#define CYD_UI_THEME_PRIMARY_SOFT 0x8ddf /* #8fb8ff primary text on dark */
+#define CYD_UI_THEME_ON_PRIMARY   0xffff
+#define CYD_UI_THEME_WARNING      0xf4e1 /* #f59e0b */
+#define CYD_UI_THEME_WARNING_TINT 0x2901 /* #2b2108 */
+#define CYD_UI_THEME_ON_WARNING   0x28c0 /* #2b1a00 */
+#define CYD_UI_THEME_INFO         0x269d /* #22d3ee "do this next" prompts */
+#define CYD_UI_THEME_INFO_TINT    0x0988 /* #0d3340 */
+#define CYD_UI_THEME_ON_INFO      0x0126 /* #032530 */
+#define CYD_UI_THEME_DANGER       0xea28 /* #ef4444 */
+#define CYD_UI_THEME_DANGER_TINT  0x3882 /* #3a1114 */
+#define CYD_UI_THEME_ON_DANGER    0xffff
+
+/* Border thickness of outlined buttons and panels in the themed UI. */
+#define CYD_UI_THEME_BORDER_PX 2
+
 typedef struct {
     const char *label_text;
     const char *value_text;
@@ -220,6 +256,74 @@ bool cyd_ui_add_icon(cyd_display_screen_t *screen,
                      uint8_t row,
                      uint8_t span_cols,
                      uint8_t span_rows);
+
+/*
+ * Anti-aliased text in one of the cyd_display_font_t faces.
+ *
+ * The text is centred vertically in the box, clipped to it, and shrunk or cut
+ * with "…" when too wide (see cyd_display_font_t). String literals are
+ * referenced rather than copied, so a label may be any length; other text is
+ * copied and limited to CYD_DISPLAY_TEXT_MAX_LEN bytes.
+ */
+bool cyd_ui_add_label(cyd_display_screen_t *screen,
+                      const char *text,
+                      uint8_t col,
+                      uint8_t row,
+                      uint8_t span_cols,
+                      uint8_t span_rows,
+                      cyd_display_align_t align,
+                      cyd_display_font_t font,
+                      uint16_t fg_color);
+
+/*
+ * cyd_ui_add_label() for text in RAM that may be longer than
+ * CYD_DISPLAY_TEXT_MAX_LEN bytes. The text is referenced, never copied.
+ *
+ * English contract: see cyd_display_widget_set_text_pinned() - the buffer must
+ * not change while a submitted screen uses it.
+ */
+bool cyd_ui_add_label_pinned(cyd_display_screen_t *screen,
+                             const char *text,
+                             uint8_t col,
+                             uint8_t row,
+                             uint8_t span_cols,
+                             uint8_t span_rows,
+                             cyd_display_align_t align,
+                             cyd_display_font_t font,
+                             uint16_t fg_color);
+
+/*
+ * A button with an anti-aliased label.
+ *
+ * A solid button passes border_color == bg_color; an outlined one passes a
+ * dark fill (a *_TINT or CYD_UI_THEME_SURFACE) with a coloured border and
+ * text. border_width is in pixels; 0 draws 1px. A disabled button is drawn in
+ * the disabled colours and is skipped by hit testing.
+ */
+bool cyd_ui_add_styled_button(cyd_display_screen_t *screen,
+                              const char *text,
+                              uint8_t col,
+                              uint8_t row,
+                              uint8_t span_cols,
+                              uint8_t span_rows,
+                              cyd_display_font_t font,
+                              uint16_t fg_color,
+                              uint16_t bg_color,
+                              uint16_t border_color,
+                              uint8_t border_width,
+                              uint16_t action_id,
+                              bool enabled);
+
+/* A rounded panel or plate with a border of `border_width` pixels. */
+bool cyd_ui_add_panel(cyd_display_screen_t *screen,
+                      uint8_t col,
+                      uint8_t row,
+                      uint8_t span_cols,
+                      uint8_t span_rows,
+                      uint16_t bg_color,
+                      uint16_t border_color,
+                      uint8_t border_width,
+                      uint8_t radius);
 
 esp_err_t cyd_ui_submit(const cyd_display_screen_t *screen);
 

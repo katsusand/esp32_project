@@ -49,6 +49,30 @@ English supplement: Disabled buttons keep their `action_id` for screen state cla
 ESP_ERROR_CHECK(cyd_ui_submit(&screen));
 ```
 
+## Themed Japanese UI
+
+アンチエイリアスの日本語フォントを使う画面は、以下の関数とテーマ色で組み立てます。
+
+```c
+cyd_ui_add_panel(&screen, 0, 0, 40, 30, CYD_UI_THEME_BG, 0, 0, 0);  /* 背景 */
+cyd_ui_add_label(&screen, "カードをタッチ", 2, 19, 36, 8,
+                 CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_INFO);
+cyd_ui_add_styled_button(&screen, "出勤", 1, 4, 18, 9, CYD_DISPLAY_FONT_TITLE,
+                         CYD_UI_THEME_ON_SUCCESS, CYD_UI_THEME_SUCCESS, CYD_UI_THEME_SUCCESS,
+                         0, ACTION_IN, true);
+```
+
+- `cyd_ui_add_label()`: 書体を指定するテキスト。枠内で縦中央、長すぎれば縮小または「…」
+- `cyd_ui_add_label_pinned()`: RAM 上の長い文字列を参照で表示する。表示中は書き換え禁止 ([CYD Display Driver](cyd_display.md#text-storage))
+- `cyd_ui_add_styled_button()`: 書体と枠幅を指定するボタン。塗りのボタンは `border_color == bg_color`、枠線のボタンは暗い塗り (`*_TINT` か `CYD_UI_THEME_SURFACE`) に色付きの枠と文字
+- `cyd_ui_add_panel()`: 枠幅と角丸を指定する塗りの板。`radius` を一辺の半分にすると円になる
+
+色は `CYD_UI_THEME_*` を使います。成功・注意・エラーなどの意味を持つ色は、その意味以外に使わないでください。`*_TINT` は同名の色と組み合わせる暗い塗り、`ON_*` はその色で塗った上に載せる文字色です。
+
+画面全体を背景の板から始めると、画面が切り替わっても最初の widget が同じなので、差分描画が全面を描き直さずに済みます。
+
+English supplement: string literals passed to these calls are referenced, not copied, so they may be any length. Formatted text is copied and capped at `CYD_DISPLAY_TEXT_MAX_LEN` bytes.
+
 ## Graph Widgets
 
 グラフ系は `cyd_ui_add_rect()` / `cyd_ui_add_bar()` / `cyd_ui_add_sparkline()` で追加します。いずれもグリッドで箱を指定し、中身はピクセル精度で描かれます。

@@ -120,6 +120,23 @@ WIFI_CONNECTION="${PROJECT_ROOT}/components/services/wifi_connection"
 
 run_case "radio manager failure reasons" "${BUILD_DIR}/test_radio_manager_failure"
 
+# Japanese UI: the display text rules and font tables every UI test links.
+# A screen's layout test adds its view sources and include path to these.
+CYD_DISPLAY="${PROJECT_ROOT}/components/platform/cyd_display"
+CYD_UI_FONTS="${PROJECT_ROOT}/components/support/cyd_ui_fonts"
+CYD_UI="${PROJECT_ROOT}/components/framework/cyd_ui"
+UI_TEST_INCLUDES=(-I"${CYD_DISPLAY}" -I"${CYD_DISPLAY}/include" -I"${CYD_UI_FONTS}/include"
+                  -I"${CYD_UI}/include")
+UI_TEST_SRCS=("${CYD_DISPLAY}/cyd_display_text.c" "${CYD_UI_FONTS}/cyd_ui_fonts.c"
+              "${CYD_UI_FONTS}"/generated/*.c "${CYD_UI}/cyd_ui.c" "${SCRIPT_DIR}/ui_test_support.c")
+
+# UTF-8 cuts, reference-or-copy, measuring and wrapping with the real fonts
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" \
+    "${UI_TEST_SRCS[@]}" "${SCRIPT_DIR}/test_ui_text.c" \
+    -o "${BUILD_DIR}/test_ui_text"
+
+run_case "Japanese UI text" "${BUILD_DIR}/test_ui_text"
+
 if [[ "${status}" -eq 0 ]]; then
     echo "all host tests passed"
 else
