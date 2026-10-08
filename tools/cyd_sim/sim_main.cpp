@@ -4,6 +4,7 @@
  *   cyd_sim [--scene ID] [--scale N]     window; ←/→ switch scenes, click = tap
  *   cyd_sim --export DIR [--scale N]     PNG per scene + index.html, no window
  *   cyd_sim --list                       scene ids
+ *   --theme N                            colour theme (cyd_ui_theme_id_t), default 0
  *
  * Rendering goes through the same path as cyd_display.cpp: the frame is diffed
  * against the previous one, and only dirty 16px strips are drawn into a strip
@@ -23,6 +24,7 @@
 #include <sys/stat.h>
 
 #include "cyd_display_render.hpp"
+#include "cyd_ui.h"
 #include "sim_catalog.h"
 
 namespace {
@@ -292,11 +294,18 @@ int parse(int argc, char **argv, Options *options)
                 std::fprintf(stderr, "--scale must be 1..6\n");
                 return 1;
             }
+        } else if (arg == "--theme" && i + 1 < argc) {
+            int theme = std::atoi(argv[++i]);
+            if (theme < 0 || theme >= (int)CYD_UI_THEME_ID_COUNT) {
+                std::fprintf(stderr, "--theme must be 0..%d\n", (int)CYD_UI_THEME_ID_COUNT - 1);
+                return 1;
+            }
+            cyd_ui_set_theme((cyd_ui_theme_id_t)theme);
         } else if (arg == "--list") {
             options->list = true;
         } else {
             std::fprintf(stderr,
-                         "usage: cyd_sim [--scene ID] [--scale N] | --export DIR [--scale N] | --list\n");
+                         "usage: cyd_sim [--scene ID] [--scale N] [--theme N] | --export DIR [--scale N] [--theme N] | --list\n");
             return 1;
         }
     }

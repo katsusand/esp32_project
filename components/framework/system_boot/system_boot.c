@@ -10,6 +10,7 @@
 #include "cyd_display.h"
 #include "cyd_input.h"
 #include "cyd_speaker.h"
+#include "cyd_ui.h"
 #include "cyd_status_led.h"
 #include "system_boot.h"
 
@@ -213,6 +214,11 @@ esp_err_t system_boot_start(system_boot_result_t *result)
     ESP_RETURN_ON_ERROR(cyd_status_led_init(), TAG, "status LED init failed");
     ESP_RETURN_ON_ERROR(cyd_speaker_init(), TAG, "speaker init failed");
     ESP_RETURN_ON_ERROR(cyd_display_init(), TAG, "display init failed");
+    /* Before the first themed screen. Not fatal: the default theme is usable. */
+    esp_err_t theme_err = cyd_ui_theme_load();
+    if (theme_err != ESP_OK) {
+        ESP_LOGW(TAG, "loading the colour theme failed: %s; using the default", esp_err_to_name(theme_err));
+    }
 
     ESP_RETURN_ON_ERROR(cyd_input_init(), TAG, "input init failed");
 

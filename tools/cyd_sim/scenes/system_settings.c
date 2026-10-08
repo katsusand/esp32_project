@@ -3,6 +3,7 @@
  * that change its wording or colour, and every dialog.
  */
 #include <string.h>
+#include "cyd_ui.h"
 #include "sim_catalog.h"
 #include "system_settings_view.h"
 
@@ -28,6 +29,9 @@ static void build_general(cyd_display_screen_t *screen, unsigned frame)
     m.idle_return_seconds = 90;
     m.can_idle_return_down = true;
     m.can_idle_return_up = true;
+    m.theme_name = cyd_ui_theme_name(cyd_ui_theme_id()); /* --theme picks it */
+    m.can_theme_down = cyd_ui_theme_id() > 0;
+    m.can_theme_up = cyd_ui_theme_id() + 1 < CYD_UI_THEME_ID_COUNT;
     system_settings_view_build(screen, &m);
 }
 
@@ -39,6 +43,9 @@ static void build_general_limits(cyd_display_screen_t *screen, unsigned frame)
     m.can_dim = true;
     m.idle_return_seconds = 0;
     m.can_idle_return_up = true;
+    m.theme_name = cyd_ui_theme_name(cyd_ui_theme_id()); /* --theme picks it */
+    m.can_theme_down = cyd_ui_theme_id() > 0;
+    m.can_theme_up = cyd_ui_theme_id() + 1 < CYD_UI_THEME_ID_COUNT;
     system_settings_view_build(screen, &m);
 }
 

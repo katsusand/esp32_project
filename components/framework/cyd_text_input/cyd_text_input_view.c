@@ -198,7 +198,7 @@ static void view_add_function_row(cyd_display_screen_t *screen, const cyd_text_i
                       CYD_UI_THEME_TEXT, CYD_UI_THEME_SURFACE,
                       CYD_TEXT_INPUT_VIEW_ACTION_SPACE, letters_enabled);
     view_add_outlined(screen, "削除", 32, VIEW_FUNCTION_ROW, 8, VIEW_FUNCTION_ROWS,
-                      CYD_UI_THEME_DANGER, CYD_UI_THEME_DANGER_TINT,
+                      CYD_UI_THEME_DANGER_SOFT, CYD_UI_THEME_DANGER_TINT,
                       CYD_TEXT_INPUT_VIEW_ACTION_DELETE, true);
 }
 

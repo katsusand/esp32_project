@@ -58,7 +58,7 @@ static void build_theme(cyd_display_screen_t *screen, unsigned frame)
                              CYD_UI_THEME_ON_INFO, CYD_UI_THEME_INFO, CYD_UI_THEME_INFO,
                              0, 5, true);
     cyd_ui_add_styled_button(screen, "きけん", 27, 11, 12, 6, CYD_DISPLAY_FONT_TITLE,
-                             CYD_UI_THEME_DANGER, CYD_UI_THEME_DANGER_TINT, CYD_UI_THEME_DANGER,
+                             CYD_UI_THEME_DANGER_SOFT, CYD_UI_THEME_DANGER_TINT, CYD_UI_THEME_DANGER_SOFT,
                              CYD_UI_THEME_BORDER_PX, 6, true);
     cyd_ui_add_panel(screen, 1, 19, 38, 9, CYD_UI_THEME_INFO_TINT, CYD_UI_THEME_INFO,
                      CYD_UI_THEME_BORDER_PX, 10);

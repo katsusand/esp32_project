@@ -137,6 +137,13 @@ UI_TEST_SRCS=("${CYD_DISPLAY}/cyd_display_text.c" "${CYD_UI_FONTS}/cyd_ui_fonts.
 
 run_case "Japanese UI text" "${BUILD_DIR}/test_ui_text"
 
+# Colour themes: contrast of every text/background pair, after RGB565
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" \
+    "${UI_TEST_SRCS[@]}" "${SCRIPT_DIR}/test_ui_themes.c" -lm \
+    -o "${BUILD_DIR}/test_ui_themes"
+
+run_case "Colour themes" "${BUILD_DIR}/test_ui_themes"
+
 # Settings chrome, stepper rows and every keyboard state, measured with the real fonts
 CYD_TEXT_INPUT="${PROJECT_ROOT}/components/framework/cyd_text_input"
 "${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${CYD_TEXT_INPUT}/include" \

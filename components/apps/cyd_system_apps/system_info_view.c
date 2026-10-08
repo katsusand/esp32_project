@@ -100,7 +100,7 @@ static void view_diag(cyd_display_screen_t *screen, const system_info_view_model
               m->wifi_failure == SYSTEM_INFO_VIEW_FAILURE_NONE ? CYD_UI_THEME_TEXT : CYD_UI_THEME_WARNING);
     view_item(screen, 3, "時刻同期", system_settings_view_sync_text(m->sync), CYD_UI_THEME_TEXT);
     view_item(screen, 4, "前回の同期", sync_last,
-              m->sync_last == SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED ? CYD_UI_THEME_DANGER : CYD_UI_THEME_TEXT);
+              m->sync_last == SYSTEM_SETTINGS_VIEW_SYNC_LAST_FAILED ? CYD_UI_THEME_DANGER_SOFT : CYD_UI_THEME_TEXT);
     view_item(screen, 5, "保存SSID", profiles, CYD_UI_THEME_TEXT);
     view_item(screen, 6, "タッチ補正", view_touch_calib_text(m->touch_calib), CYD_UI_THEME_TEXT);
 }
@@ -173,7 +173,7 @@ static void view_nvs(cyd_display_screen_t *screen, const system_info_view_model_
         snprintf(summary, sizeof(summary), "namespace %u 個", m->nvs_total);
     }
     cyd_ui_add_label(screen, summary, VIEW_NAME_COL, 4, 38, 2, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD,
-                     m->nvs_scan_failed ? CYD_UI_THEME_DANGER : CYD_UI_THEME_TEXT);
+                     m->nvs_scan_failed ? CYD_UI_THEME_DANGER_SOFT : CYD_UI_THEME_TEXT);
 
     /* Ten 16px rows: namespace | scope | entries. */
     for (size_t i = 0; i < count; ++i) {
