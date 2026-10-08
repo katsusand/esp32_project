@@ -38,7 +38,7 @@ static void view_header(cyd_display_screen_t *screen, bool with_back)
     cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
     cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, VIEW_HEADER_ROWS, CYD_UI_THEME_SURFACE, 0, 0, 0);
     cyd_ui_add_label(screen, VIEW_TITLE, 9, 0, 22, VIEW_HEADER_ROWS,
-                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_TEXT);
+                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_TEXT);
     if (with_back) {
         cyd_ui_add_styled_button(screen, "戻る", 0, 0, 8, VIEW_HEADER_ROWS, CYD_DISPLAY_FONT_BODY_BOLD,
                                  CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE, CYD_UI_THEME_PRIMARY,
@@ -50,7 +50,7 @@ static void view_header(cyd_display_screen_t *screen, bool with_back)
 static void view_notice(cyd_display_screen_t *screen, const char *title, uint16_t title_color,
                         const char *detail, const char *technical)
 {
-    cyd_ui_add_label(screen, title, 1, 8, 38, 4, CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_TITLE, title_color);
+    cyd_ui_add_label(screen, title, 1, 9, 38, 3, CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY_BOLD, title_color);
     if (detail != NULL && detail[0] != '\0') {
         cyd_ui_add_label(screen, detail, 1, 13, 38, 3, CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY,
                          CYD_UI_THEME_TEXT);
@@ -142,7 +142,7 @@ void cyd_wifi_setup_view_build(cyd_display_screen_t *screen, const cyd_wifi_setu
                     view_text(m->error));
         cyd_ui_add_label(screen, view_text(m->ssid), 1, 4, 38, 3,
                          CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_SUBTEXT);
-        cyd_ui_add_styled_button(screen, "OK", 10, 22, 20, 5, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_ON_PRIMARY,
+        cyd_ui_add_styled_button(screen, "OK", 10, 22, 20, 5, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_ON_PRIMARY,
                                  CYD_UI_THEME_PRIMARY, CYD_UI_THEME_PRIMARY, 0, CYD_WIFI_SETUP_VIEW_ACTION_OK, true);
         break;
     default:

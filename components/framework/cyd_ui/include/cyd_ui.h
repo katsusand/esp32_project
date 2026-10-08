@@ -63,10 +63,10 @@ extern "C" {
 /*
  * One "label  [−] value [+]" row of a settings page.
  *
- * Drawn with the anti-aliased faces: the label in 16px bold, the value in 24px
- * bold when `button_span_rows` gives it 24px or more (else 16px bold). The
- * "−" / "+" buttons use the largest face that fits them, falling back to the
- * legacy font for legacy-sized buttons. `button_span_rows` is the height of the whole row; for the
+ * Drawn in 16px: the label in subdued bold, the value and the "−" / "+"
+ * buttons in bold. Legacy-sized buttons too small for 16px fall back to the
+ * legacy font. Settings screens keep to 16px even where 24px would fit; next
+ * to 16px rows it reads as unbalanced. `button_span_rows` is the height of the whole row; for the
  * resistive panel, prefer 4 rows (32px) or more.
  * Button colours default to the theme's outlined primary button; a caller sets
  * has_button_*_color only to give a row a different meaning.
