@@ -1,4 +1,5 @@
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include "freertos/FreeRTOS.h"
@@ -895,8 +896,24 @@ extern "C" esp_err_t cyd_display_submit_screen(const cyd_display_screen_t *scree
         return ESP_OK;
     }
 
-    cyd_display_screen_t dropped = {};
-    (void)xQueueReceive(s_display_queue, &dropped, 0);
+    /*
+     * Queue full: drop the oldest screen to make room for this one.
+     *
+     * The dropped screen is received into a heap buffer, only on this path.
+     * A cyd_display_screen_t is about 3.4KB, and as a local it made every call
+     * to this function cost about 3.5KB of stack whether or not the queue was
+     * full. That is the whole main task stack (3584 bytes): system_boot shows
+     * its shortcut prompt from the main task, and a held boot overflowed the
+     * stack and rebooted, over and over while the finger stayed down
+     * (2026-10-12).
+     *
+     * English contract: keep large objects off the stack in this function. Any
+     * task may submit, including ones with small stacks.
+     */
+    cyd_display_screen_t *dropped = static_cast<cyd_display_screen_t *>(malloc(sizeof(cyd_display_screen_t)));
+    ESP_RETURN_ON_FALSE(dropped != nullptr, ESP_ERR_NO_MEM, TAG, "display queue full, no memory to drop a screen");
+    (void)xQueueReceive(s_display_queue, dropped, 0);
+    free(dropped);
     ESP_RETURN_ON_FALSE(xQueueSendToBack(s_display_queue, screen, 0) == pdTRUE,
                         ESP_ERR_TIMEOUT,
                         TAG,

@@ -89,6 +89,8 @@ ESP_ERROR_CHECK(cyd_input_run_touch_calibration());
 ESP_ERROR_CHECK(cyd_input_clear_touch_calibration());
 ```
 
+`cyd_input_init()` の中で呼ぶ `xpt2046_softspi_init()` は、PENIRQ を有効にするコマンドを 1 回送ります。ESP32 だけのリセットの後に XPT2046 が PENIRQ を止めたままになり、電源を切るまでタッチが効かなくなるのを防ぐためです（[System Boot の PENIRQ After A Warm Reset](system_boot.md#penirq-after-a-warm-reset)）。`system_boot` は起動時の判定のために、`cyd_input_init()` より前にこれを呼びます。何度呼んでも 2 回目以降は何もしません。
+
 English supplement: `cyd_input_init()` depends on `cyd_display` for calibration target drawing and on `xpt2046_softspi` for raw touch transport. Initialize `cyd_display` before `cyd_input`.
 
 ## Event Model

@@ -453,6 +453,7 @@ source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py
 - [CYD Simulator](docs/cyd_sim.md)
 - [UI Japanese Platform Plan](docs/ui_japanese_platform_plan.md)
 - [CYD Input Driver](docs/cyd_input.md)
+- [System Boot](docs/system_boot.md)
 - [Build Feature Switches](docs/build_feature_switches.md)
 - [CYD Wi-Fi Setup](docs/cyd_wifi_setup.md)
 - [CYD System Apps](docs/cyd_system_apps.md)

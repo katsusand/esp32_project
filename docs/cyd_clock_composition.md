@@ -33,7 +33,7 @@ composition 自身はアラームのコードを持ちません。以前はア�
 
 English contract: the composition registers apps, not app features. The clock's settings screen and alarms come with `cyd_clock_app_register()`; the composition only starts the shared `app_scheduler` service and must not seed or handle any app's schedules.
 
-`system_boot` が検出した起動ショートカット (`system_boot_result_t.setup_shortcut_requested`) は、時計製品では **settings app を初期 app にする** 要求として解釈します。画面を押したまま電源を入れると時計ではなく settings が開きます。
+`system_boot` が検出した起動ショートカット (`system_boot_result_t.setup_shortcut_requested`) は、時計製品では **settings app を初期 app にする** 要求として解釈します。画面を押したまま電源を入れると時計ではなく settings が開きます。押下を認識した時点で「設定を開きます / 指を離してください」の案内画面が出ます（判定と案内のタイミングは [System Boot](system_boot.md#touch-shortcut)）。
 
 以前はここで Wi-Fi setup ウィザードを予約していました。settings に変えたのは、settings が Wi-Fi の設定・タッチ補正・すべて初期化のいずれにも届く単一の行き先であり、「Wi-Fi profile が存在するかどうか」で意味が変わる shortcut より予測しやすいためです。またウィザードの予約は Wi-Fi build feature の `#if` の内側にあったため、Wi-Fi を無効にしたビルドでは shortcut が何もしていませんでした。
 

@@ -1,4 +1,4 @@
-idf_component_register(SRCS "system_boot.c"
+idf_component_register(SRCS "system_boot.c" "system_boot_view.c"
                     INCLUDE_DIRS "include"
                     REQUIRES nvs_flash nvs_health cyd_status_led cyd_speaker cyd_display cyd_input cyd_ui
-                    PRIV_REQUIRES esp_driver_gpio)
+                    PRIV_REQUIRES esp_driver_gpio xpt2046_softspi)

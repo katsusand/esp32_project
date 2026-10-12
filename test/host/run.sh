@@ -167,6 +167,14 @@ run_case "System settings screens" "${BUILD_DIR}/test_system_settings_view"
 
 run_case "System information screens" "${BUILD_DIR}/test_system_info_view"
 
+# The boot touch shortcut prompt, measured with the real fonts
+SYSTEM_BOOT="${PROJECT_ROOT}/components/framework/system_boot"
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_BOOT}" \
+    "${UI_TEST_SRCS[@]}" "${SYSTEM_BOOT}/system_boot_view.c" "${SCRIPT_DIR}/test_system_boot_view.c" \
+    -o "${BUILD_DIR}/test_system_boot_view"
+
+run_case "Boot shortcut prompt" "${BUILD_DIR}/test_system_boot_view"
+
 # Wi-Fi setup: the network list, notices and failure dialog
 WIFI_SETUP="${PROJECT_ROOT}/components/services/cyd_wifi_setup"
 "${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${WIFI_SETUP}" \
