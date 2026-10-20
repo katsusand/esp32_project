@@ -23,16 +23,14 @@ find_package(SDL2 REQUIRED)
 # lgfx_fonts.cpp defines every built-in face, so the efont and IPA tables must
 # be linked even though the simulator never draws with them. They are large
 # and compile slowly once; incremental builds do not touch them again.
+# The platform and panel code are .inl files pulled in by the v1/*.cpp
+# translation units (lgfx_v1_platforms.cpp compiles the SDL backend when
+# LGFX_SDL is defined), as in upstream examples_for_PC/CMake_SDL.
 file(GLOB LGFX_SRCS CONFIGURE_DEPENDS
      "${LGFX_SRC}/lgfx/Fonts/efont/*.c"
      "${LGFX_SRC}/lgfx/Fonts/IPA/*.c"
      "${LGFX_SRC}/lgfx/utility/*.c"
-     "${LGFX_SRC}/lgfx/v1/*.cpp"
-     "${LGFX_SRC}/lgfx/v1/misc/*.cpp"
-     "${LGFX_SRC}/lgfx/v1/platforms/sdl/*.cpp")
-list(APPEND LGFX_SRCS
-     "${LGFX_SRC}/lgfx/v1/panel/Panel_Device.cpp"
-     "${LGFX_SRC}/lgfx/v1/panel/Panel_FrameBufferBase.cpp")
+     "${LGFX_SRC}/lgfx/v1/*.cpp")
 add_library(lgfx_sdl STATIC ${LGFX_SRCS})
 target_include_directories(lgfx_sdl SYSTEM PUBLIC "${LGFX_SRC}")
 target_compile_definitions(lgfx_sdl PUBLIC LGFX_SDL)
