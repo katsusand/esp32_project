@@ -23,7 +23,7 @@ static void build_overview(cyd_display_screen_t *screen, unsigned frame)
     system_info_view_model_t m = base(SYSTEM_INFO_VIEW_OVERVIEW);
     m.app_name = "esp32_project";
     m.app_version = "b4af5ea-dirty";
-    m.idf_version = "v5.4.3";
+    m.idf_version = "v5.5.6";
     m.chip_revision = 3;
     m.chip_cores = 2;
     m.heap_free = 61344;

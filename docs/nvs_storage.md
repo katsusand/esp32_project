@@ -138,7 +138,7 @@ esp_err_t nvs_schema_erase_scope(nvs_schema_scope_t scope, size_t *erased_count)
 これは開発中の一時的な割り切りではなく、この基盤の方針です。この基盤は汎用の app 基盤ですが、その上に作る app 同士には関連を持たせません。そのため、ある firmware の保存データを別の形式の firmware へ引き継ぐ必要がなく、形式が合わなければ `Initialize NVS` で全部消してやり直すのが最も単純で確実です。key ごとに既定値へ戻す仕組みは用意しません（2026-09-26 のレビューの指摘を受けて検討し、2026-09-28 にこの方針の維持を決めました）。
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh
+source ~/.espressif/tools/activate_idf_v5.5.6.sh
 python "$IDF_PATH/tools/idf.py" erase-flash flash monitor
 ```
 

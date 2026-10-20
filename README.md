@@ -4,7 +4,7 @@ ESP32-2432S028R 系の CYD (Cheap Yellow Display) 向け ESP-IDF プロジェク
 
 TFT 表示、XPT2046 タッチ、オンボード RGB LED、ブザー、Wi-Fi セットアップ、NTP 時刻同期を組み合わせて、タッチ操作できる時計アプリとして動作します。
 
-English supplement: This project targets ESP-IDF v5.4.3 and an ESP32 CYD-class board with 4 MB flash.
+English supplement: This project targets ESP-IDF v5.5.6 and an ESP32 CYD-class board with 4 MB flash.
 
 ## Design Intent
 
@@ -101,13 +101,17 @@ English supplement: CYD clone boards often look identical but use different LCD 
 
 ## Setup
 
-EIM 管理の ESP-IDF v5.4.3 環境を読み込んでから操作します。
+EIM 管理の ESP-IDF v5.5.6 環境を読み込んでから操作します。
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh
+source ~/.espressif/tools/activate_idf_v5.5.6.sh
 ```
 
-`python_env` が存在する環境では `source ~/.espressif/v5.4.3/esp-idf/export.sh` でも動作することがありますが、このリポジトリでは EIM 前提のため `activate_idf_v5.4.3.sh` を優先します。
+IDF の版は派生プロジェクトと揃えています。v5.5.5 より前には戻さないでください。派生の TLS 1.2 のセッションの再開は、v5.5.5 で入った `CONFIG_MBEDTLS_DYNAMIC_BUFFER` の修正に頼っています。
+
+English supplement: The parent and derived projects share one ESP-IDF release. Do not go below v5.5.5, whose mbedtls dynamic-buffer fix the derived TLS session resumption depends on.
+
+`python_env` が存在する環境では `source ~/.espressif/v5.5.6/esp-idf/export.sh` でも動作することがありますが、このリポジトリでは EIM 前提のため `activate_idf_v5.5.6.sh` を優先します。
 
 VS Code の ESP-IDF 拡張を使っている場合は、通常これらを手で意識しなくても拡張側が環境を扱います。
 
@@ -128,14 +132,14 @@ English supplement: Credentials are runtime/local configuration. Do not commit r
 ## Build and Flash
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh
+source ~/.espressif/tools/activate_idf_v5.5.6.sh
 python "$IDF_PATH/tools/idf.py" build
 python "$IDF_PATH/tools/idf.py" -p PORT flash monitor
 ```
 
 monitor を終了するには `Ctrl-]` を押します。
 
-`idf.py` が見つからない場合は、ESP-IDF 環境が読み込まれていない可能性があります。先に `source ~/.espressif/tools/activate_idf_v5.4.3.sh` を実行してください。
+`idf.py` が見つからない場合は、ESP-IDF 環境が読み込まれていない可能性があります。先に `source ~/.espressif/tools/activate_idf_v5.5.6.sh` を実行してください。
 
 人間や AI / IDE Assistant が `source` を読み落としやすい場合は、`scripts/` のラッパーを優先してください。
 
@@ -151,15 +155,15 @@ English supplement: These wrapper scripts are the preferred execution entry poin
 
 まずは `./scripts/idf-build.sh`、`./scripts/idf-menuconfig.sh`、`./scripts/idf-flash-monitor.sh` のラッパーを優先してください。`source` の読み忘れや `DEV=1` の付け忘れを避けやすくなります。
 
-### activate_idf_v5.4.3.sh が非ゼロ終了する
+### activate_idf_v5.5.6.sh が非ゼロ終了する
 
 注意:
 
-- EIM が生成する `activate_idf_v5.4.3.sh` は、環境変数の設定自体は成功していても、シェルや呼び出し方によっては非ゼロ終了になることがある
-- そのため、AI / IDE Assistant や自動化が `set -e` 前提で `source ~/.espressif/tools/activate_idf_v5.4.3.sh && ...` のように書くと、実際には `idf.py` 実行前に止まることがある
-- そのような環境では、`source ~/.espressif/tools/activate_idf_v5.4.3.sh || true` のように activation script の返り値だけ吸収してから `python "$IDF_PATH/tools/idf.py" ...` を実行すると切り分けしやすい
+- EIM が生成する `activate_idf_v5.5.6.sh` は、環境変数の設定自体は成功していても、シェルや呼び出し方によっては非ゼロ終了になることがある
+- そのため、AI / IDE Assistant や自動化が `set -e` 前提で `source ~/.espressif/tools/activate_idf_v5.5.6.sh && ...` のように書くと、実際には `idf.py` 実行前に止まることがある
+- そのような環境では、`source ~/.espressif/tools/activate_idf_v5.5.6.sh || true` のように activation script の返り値だけ吸収してから `python "$IDF_PATH/tools/idf.py" ...` を実行すると切り分けしやすい
 
-English supplement: On some macOS/EIM setups, `activate_idf_v5.4.3.sh` may populate the environment correctly but still return a non-zero status. Automation that assumes `set -e` semantics should account for this.
+English supplement: On some macOS/EIM setups, `activate_idf_v5.5.6.sh` may populate the environment correctly but still return a non-zero status. Automation that assumes `set -e` semantics should account for this.
 
 ### psutil の PermissionError が出る
 
@@ -227,26 +231,36 @@ brew install eim
 exec zsh
 ```
 
-次に、このプロジェクトで固定している ESP-IDF v5.4.3 を EIM CLI で導入します。
+次に、このプロジェクトで固定している ESP-IDF v5.5.6 を EIM CLI で導入します。
 
 ```bash
-eim install -i v5.4.3
+eim install -i v5.5.6
 ```
 
-インストール後、`~/.espressif/tools/activate_idf_v5.4.3.sh` が存在することを確認します。
+`eim install` が `[FAIL] Python Version` で止まる場合は、Homebrew の `python3` が EIM の対応より新しい可能性があります。2026-10 時点では、EIM 0.11.2 が Python 3.15 を拒み、3.14 では通りました。そのときは、そのコマンドの間だけ `python3` が 3.14 を指すようにして実行します（`brew install python@3.14` が必要）。
 
 ```bash
-test -f ~/.espressif/tools/activate_idf_v5.4.3.sh
+mkdir -p /tmp/py314bin
+ln -sf /opt/homebrew/bin/python3.14 /tmp/py314bin/python3
+PATH="/tmp/py314bin:$PATH" eim install -i v5.5.6
+```
+
+English supplement: EIM creates the per-version venv from whichever `python3` comes first on PATH. If its Python sanity check rejects the Homebrew default, put a supported interpreter first on PATH for the install only; the venv keeps using it afterwards.
+
+インストール後、`~/.espressif/tools/activate_idf_v5.5.6.sh` が存在することを確認します。
+
+```bash
+test -f ~/.espressif/tools/activate_idf_v5.5.6.sh
 ```
 
 基本手順は以下です。
 
 1. Git でこのリポジトリを clone する
 2. Homebrew がなければインストールする
-3. EIM CLI で ESP-IDF v5.4.3 を導入する
+3. EIM CLI で ESP-IDF v5.5.6 を導入する
 4. LovyanGFX submodule を取得する
-5. `~/.espressif/tools/activate_idf_v5.4.3.sh` が存在することを確認する
-6. このリポジトリ直下で `source ~/.espressif/tools/activate_idf_v5.4.3.sh` を実行する
+5. `~/.espressif/tools/activate_idf_v5.5.6.sh` が存在することを確認する
+6. このリポジトリ直下で `source ~/.espressif/tools/activate_idf_v5.5.6.sh` を実行する
 7. 必要に応じて `idf.py menuconfig` を開く
 8. `DEV=1 python "$IDF_PATH/tools/idf.py" build` で開発用ビルドを行う
 
@@ -269,11 +283,11 @@ English supplement: `components/support/lovyangfx_wrapper` builds LovyanGFX from
 AI / IDE Assistant 向け運用ルール：
 
 - このプロジェクトでは、通常のローカル開発は `DEV=1` を前提として案内する
-- 新しい Mac への ESP-IDF 導入は、まず EIM CLI による `eim install -i v5.4.3` を案内する
+- 新しい Mac への ESP-IDF 導入は、まず EIM CLI による `eim install -i v5.5.6` を案内する
 - clone 後は `third_party/lovyangfx_upstream` の LovyanGFX submodule が取得済みか確認する
 - 可能なら `./scripts/idf-build.sh`、`./scripts/idf-menuconfig.sh`、`./scripts/idf-flash-monitor.sh` を優先して使う
-- `idf.py` を直接使う場合は、EIM 前提として `source ~/.espressif/tools/activate_idf_v5.4.3.sh` の実行を前提にする
-- `activate_idf_v5.4.3.sh` が環境設定後に非ゼロ終了する環境では、`set -e` 前提の自動化でそのまま連結しない
+- `idf.py` を直接使う場合は、EIM 前提として `source ~/.espressif/tools/activate_idf_v5.5.6.sh` の実行を前提にする
+- `activate_idf_v5.5.6.sh` が環境設定後に非ゼロ終了する環境では、`set -e` 前提の自動化でそのまま連結しない
 - macOS 上の sandbox / 権限制限で `psutil` が `PermissionError: [Errno 1] Operation not permitted` を返す場合、これはソース不備ではなくプロセス列挙制限の可能性を優先して確認する
 - `build/` は環境依存の生成物として扱い、別の Mac で作られた `build/` の再利用を前提にしない
 - `sdkconfig` はローカル生成物として扱い、共有すべき基準値は `sdkconfig.defaults` を参照する
@@ -289,7 +303,7 @@ AI / IDE Assistant 向け運用ルール：
 このプロジェクトでは、通常の組み込み開発フローとして `DEV=1` を付けた開発用ビルドを標準とします。
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh
+source ~/.espressif/tools/activate_idf_v5.5.6.sh
 DEV=1 python "$IDF_PATH/tools/idf.py" build
 DEV=1 python "$IDF_PATH/tools/idf.py" -p PORT flash monitor
 ```
@@ -343,6 +357,7 @@ English supplement: the host tests compile the real component sources against mi
 - 別環境で生成された `build/` を設計根拠や再利用前提にしない
 - `idf.py fullclean` が削除を拒否した場合、AI / IDE Assistant は自動削除しない
 - 必要ならユーザーが `build/` を手動削除してから再生成する
+- ESP-IDF の版を上げたときも、前の版で作った `build/` は使い回さず作り直す。ローカルの `sdkconfig` は新しい版の `idf.py` が設定名の変更を自動で書き換えるので、残してよい
 
 English supplement: Avoid preserving a build directory across different machines when you still need reliable `idf.py menuconfig` and `idf.py fullclean` behavior.
 
@@ -371,7 +386,7 @@ setup flow は以下です。
 Wi-Fi STA 機能をバイナリから外したい派生ビルドでは、CMake 再構成時に `APP_WIFI_STA=0` を指定します。
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh || true
+source ~/.espressif/tools/activate_idf_v5.5.6.sh || true
 APP_WIFI_STA=0 python "$IDF_PATH/tools/idf.py" reconfigure
 APP_WIFI_STA=0 DEV=1 ninja -C build
 ```
@@ -379,7 +394,7 @@ APP_WIFI_STA=0 DEV=1 ninja -C build
 通常の Wi-Fi 有効ビルドへ戻す場合は、`APP_WIFI_STA` を未指定にして再構成します。
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh || true
+source ~/.espressif/tools/activate_idf_v5.5.6.sh || true
 python "$IDF_PATH/tools/idf.py" reconfigure
 DEV=1 ninja -C build
 ```
@@ -437,7 +452,7 @@ English supplement: app partitions must be 0x10000-aligned. When the OTA slots w
 旧 dual OTA 構成からの移行は、通常の書き込みで済みます（全消去は不要で、NVS と内部ストレージは残ります）。
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py" flash monitor
+source ~/.espressif/tools/activate_idf_v5.5.6.sh; python "$IDF_PATH/tools/idf.py" flash monitor
 ```
 
 ## Documentation
@@ -488,7 +503,7 @@ source ~/.espressif/tools/activate_idf_v5.4.3.sh; python "$IDF_PATH/tools/idf.py
 `sdkconfig.defaults` に 4 MB 設定が入っているか確認し、必要なら `sdkconfig` を再生成してください。
 
 ```bash
-source ~/.espressif/v5.4.3/esp-idf/export.sh
+source ~/.espressif/v5.5.6/esp-idf/export.sh
 idf.py reconfigure
 ```
 
@@ -504,7 +519,7 @@ idf.py reconfigure
 
 この場合は、まずソースエラーではなく実行権限の制限を疑ってください。
 
-- `activate_idf_v5.4.3.sh` で環境を読み込んでも止まる場合がある
+- `activate_idf_v5.5.6.sh` で環境を読み込んでも止まる場合がある
 - まず activation script の返り値で止まっていないか確認する
 - その上で `psutil` の `PermissionError` が出ているなら、権限付きで同じビルドを再実行して純粋なビルド成否を確認する
 

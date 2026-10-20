@@ -4,11 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IDF_ACTIVATE_SH="${HOME}/.espressif/tools/activate_idf_v5.4.3.sh"
+IDF_ACTIVATE_SH="${HOME}/.espressif/tools/activate_idf_v5.5.6.sh"
 
 if [[ ! -f "${IDF_ACTIVATE_SH}" ]]; then
     echo "error: ESP-IDF activation script not found: ${IDF_ACTIVATE_SH}" >&2
-    echo "hint: install ESP-IDF v5.4.3 with EIM first, then retry." >&2
+    echo "hint: install ESP-IDF v5.5.6 with EIM first, then retry." >&2
     exit 1
 fi
 
