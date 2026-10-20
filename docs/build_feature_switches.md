@@ -41,7 +41,7 @@ Wi-Fi STA 機能は `APP_WIFI_STA` 環境変数で切り替えます。
 Wi-Fi 有効ビルド:
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh || true
+source ~/.espressif/tools/activate_idf_v5.5.6.sh || true
 python "$IDF_PATH/tools/idf.py" reconfigure
 DEV=1 ninja -C build
 ```
@@ -49,7 +49,7 @@ DEV=1 ninja -C build
 Wi-Fi 無効ビルド:
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh || true
+source ~/.espressif/tools/activate_idf_v5.5.6.sh || true
 APP_WIFI_STA=0 python "$IDF_PATH/tools/idf.py" reconfigure
 APP_WIFI_STA=0 DEV=1 ninja -C build
 ```

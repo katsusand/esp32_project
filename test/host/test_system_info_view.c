@@ -38,7 +38,7 @@ int main(void)
     memset(&m, 0, sizeof(m));
     m.app_name = "esp32_project";
     m.app_version = "b4af5ea-dirty";
-    m.idf_version = "v5.4.3-dirty";
+    m.idf_version = "v5.5.6-dirty";
     m.chip_revision = 301;
     m.chip_cores = 2;
     m.heap_free = 4294967295U;

@@ -136,7 +136,7 @@ English supplement: Retries rebuild operational STA state instead of repeatedly 
 Wi-Fi STA を使わない派生ビルドでは、CMake 再構成時に `APP_WIFI_STA=0` を指定します。
 
 ```bash
-source ~/.espressif/tools/activate_idf_v5.4.3.sh || true
+source ~/.espressif/tools/activate_idf_v5.5.6.sh || true
 APP_WIFI_STA=0 python "$IDF_PATH/tools/idf.py" reconfigure
 APP_WIFI_STA=0 DEV=1 ninja -C build
 ```
