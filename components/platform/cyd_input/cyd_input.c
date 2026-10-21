@@ -1516,7 +1516,12 @@ esp_err_t cyd_input_discard_pending_events(void)
 
     ESP_RETURN_ON_ERROR(cyd_input_check_ready(), TAG, "input unavailable");
 
+    unsigned discarded = 0;
     while (xQueueReceive(s_input.event_queue, &event, 0) == pdTRUE) {
+        discarded++;
+    }
+    if (discarded > 0) {
+        ESP_LOGI(TAG, "discarded %u pending input events", discarded);
     }
 
     return ESP_OK;
