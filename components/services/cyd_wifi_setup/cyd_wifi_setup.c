@@ -369,6 +369,7 @@ esp_err_t cyd_wifi_setup_poll_scan_session(const cyd_input_event_t *event,
         if (selected_record != NULL) {
             *selected_record = s_scan_session.records[record_index];
         }
+        ESP_LOGI(TAG, "selected AP: ssid=\"%s\"", s_scan_session.records[record_index].ssid);
         *selected = true;
     }
 
