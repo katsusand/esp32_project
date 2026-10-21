@@ -431,12 +431,12 @@ static void view_stored_ssids(cyd_display_screen_t *screen, const system_setting
                                  selected ? CYD_UI_THEME_PRIMARY : CYD_UI_THEME_LINE, 1,
                                  (uint16_t)(CYD_SETTINGS_APP_ACTION_STORED_SELECT_BASE + i), true);
     }
-    cyd_ui_add_label(screen, "一番上のものから順に接続します", VIEW_WIDE_COL, 19, VIEW_WIDE_COLS, 2,
+    cyd_ui_add_label(screen, "一番上のものから順に接続します", VIEW_WIDE_COL, 22, VIEW_WIDE_COLS, 2,
                      CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
-    cyd_ui_add_styled_button(screen, "一番上にする", 1, 22, 18, 5, CYD_DISPLAY_FONT_BODY_BOLD,
+    cyd_ui_add_styled_button(screen, "一番上にする", 1, 25, 18, 5, CYD_DISPLAY_FONT_BODY_BOLD,
                              CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE, CYD_UI_THEME_PRIMARY,
                              CYD_UI_THEME_BORDER_PX, CYD_SETTINGS_APP_ACTION_STORED_PREFER, count > 0);
-    cyd_ui_add_styled_button(screen, "削除", 21, 22, 18, 5, CYD_DISPLAY_FONT_BODY_BOLD,
+    cyd_ui_add_styled_button(screen, "削除", 21, 25, 18, 5, CYD_DISPLAY_FONT_BODY_BOLD,
                              CYD_UI_THEME_DANGER_SOFT, CYD_UI_THEME_DANGER_TINT, CYD_UI_THEME_DANGER_SOFT,
                              CYD_UI_THEME_BORDER_PX, CYD_SETTINGS_APP_ACTION_STORED_DELETE, count > 0);
     cyd_ui_add_settings_back(screen, CYD_SETTINGS_APP_ACTION_BACK);
