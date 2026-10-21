@@ -44,4 +44,8 @@ upstream の一覧から、以下の 2 つだけを外しています。どち�
 - `esp_timer`
 - `esp_mm`
 
+ESP-IDF 6 以降では、さらに `esp_driver_ledc`、`esp_driver_i2s`、`hal` にも依存します。v6 では旧 `driver` component がこれらを公開の依存として引き込まなくなったためで、upstream の指定と同じです。
+
+English supplement: the extra IDF 6 requirements are selected by `IDF_VERSION_MAJOR` in the wrapper's CMakeLists.txt; keep them in step with upstream `boards.cmake/esp-idf.cmake` when bumping LovyanGFX.
+
 `cyd_display` はこの component に依存し、プロジェクト側の画面 API を提供します。通常のアプリケーションコードでは `lovyangfx_wrapper` ではなく `cyd_display` を利用してください。

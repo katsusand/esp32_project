@@ -25,6 +25,14 @@ set(SRCS
      ${LGFX_ROOT}/src/lgfx/utility/lgfx_qrcode.c
      ${LGFX_ROOT}/src/lgfx/utility/lgfx_tjpgd.c)
 
+# Same REQUIRES as upstream. From ESP-IDF 6 the legacy `driver` component no
+# longer pulls in the LEDC and I2S drivers or `hal`, which LovyanGFX's ESP32
+# backend (Light_PWM, the I2S bus types, register-level GPIO) still uses.
+set(LGFX_REQUIRES nvs_flash efuse esp_lcd driver esp_timer esp_mm)
+if(IDF_VERSION_MAJOR GREATER_EQUAL 6)
+    list(APPEND LGFX_REQUIRES esp_driver_ledc esp_driver_i2s hal)
+endif()
+
 idf_component_register(SRCS ${SRCS}
                     INCLUDE_DIRS "${LGFX_ROOT}/src"
-                    REQUIRES nvs_flash efuse esp_lcd driver esp_timer esp_mm)
+                    REQUIRES ${LGFX_REQUIRES})
