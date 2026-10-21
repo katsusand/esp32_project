@@ -31,15 +31,16 @@ static constexpr int32_t WIDGET_BUTTON_RADIUS = 8;
 /* Keeps a button label off its rounded border. */
 static constexpr int32_t WIDGET_BUTTON_TEXT_INSET_PX = 6;
 /*
- * A button's frame is drawn this far inside the top and bottom of its grid
- * cells, so two buttons on adjacent rows (the back button over the first row
- * of a page, stacked list rows) are 4px apart instead of sharing an edge. Only
- * the drawing moves: hit testing still uses the whole cells, so the touch
- * target keeps its size. Buttons shorter than WIDGET_BUTTON_FRAME_INSET_MIN_H_PX
- * are drawn to the full cell height.
+ * A button's frame is drawn this far inside each side of its grid cells, so
+ * two buttons in neighbouring cells (the back button over the first row of a
+ * page, stacked list rows, keyboard keys, the weekday row) are 4px apart
+ * instead of sharing an edge. Only the drawing moves: hit testing still uses
+ * the whole cells, so the touch target keeps its size. The label inset is
+ * measured from the drawn frame. A side shorter than
+ * WIDGET_BUTTON_FRAME_INSET_MIN_PX is drawn to the full cells.
  */
-static constexpr int32_t WIDGET_BUTTON_FRAME_INSET_Y_PX = 2;
-static constexpr int32_t WIDGET_BUTTON_FRAME_INSET_MIN_H_PX = 16;
+static constexpr int32_t WIDGET_BUTTON_FRAME_INSET_PX = 2;
+static constexpr int32_t WIDGET_BUTTON_FRAME_INSET_MIN_PX = 16;
 /* Longest label the ellipsis path will shorten; longer text is cut first. */
 static constexpr size_t FIT_TEXT_MAX_BYTES = 160;
 static constexpr uint16_t ELLIPSIS_CODEPOINT = 0x2026;
@@ -564,18 +565,20 @@ static void cyd_display_render_screen_to_target(TDisplay &display,
                 break;
 
             case CYD_DISPLAY_WIDGET_BUTTON: {
-                const int32_t inset_y = h >= WIDGET_BUTTON_FRAME_INSET_MIN_H_PX ? WIDGET_BUTTON_FRAME_INSET_Y_PX : 0;
+                const int32_t inset_x = w >= WIDGET_BUTTON_FRAME_INSET_MIN_PX ? WIDGET_BUTTON_FRAME_INSET_PX : 0;
+                const int32_t inset_y = h >= WIDGET_BUTTON_FRAME_INSET_MIN_PX ? WIDGET_BUTTON_FRAME_INSET_PX : 0;
                 cyd_display_fill_bordered(display,
-                                          x,
+                                          x + inset_x,
                                           y + inset_y,
-                                          w,
+                                          w - 2 * inset_x,
                                           h - 2 * inset_y,
                                           WIDGET_BUTTON_RADIUS,
                                           cyd_display_border_px(widget),
                                           cyd_display_resolve_bg(widget),
                                           widget.border_color != 0 ? widget.border_color : TFT_LIGHTGREY);
                 if (widget.font != CYD_DISPLAY_FONT_LEGACY) {
-                    cyd_display_draw_widget_text(display, widget, x, y, w, h, WIDGET_BUTTON_TEXT_INSET_PX);
+                    cyd_display_draw_widget_text(display, widget, x + inset_x, y, w - 2 * inset_x, h,
+                                                  WIDGET_BUTTON_TEXT_INSET_PX);
                 } else {
                     display.setTextDatum(lgfx::middle_center);
                     display.setTextSize(widget.scale_y > 0 ? widget.scale_y : 1);
