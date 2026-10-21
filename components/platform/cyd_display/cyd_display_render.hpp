@@ -30,6 +30,16 @@ static constexpr int32_t GRID_CELL_PX = CYD_DISPLAY_GRID_CELL_PX;
 static constexpr int32_t WIDGET_BUTTON_RADIUS = 8;
 /* Keeps a button label off its rounded border. */
 static constexpr int32_t WIDGET_BUTTON_TEXT_INSET_PX = 6;
+/*
+ * A button's frame is drawn this far inside the top and bottom of its grid
+ * cells, so two buttons on adjacent rows (the back button over the first row
+ * of a page, stacked list rows) are 4px apart instead of sharing an edge. Only
+ * the drawing moves: hit testing still uses the whole cells, so the touch
+ * target keeps its size. Buttons shorter than WIDGET_BUTTON_FRAME_INSET_MIN_H_PX
+ * are drawn to the full cell height.
+ */
+static constexpr int32_t WIDGET_BUTTON_FRAME_INSET_Y_PX = 2;
+static constexpr int32_t WIDGET_BUTTON_FRAME_INSET_MIN_H_PX = 16;
 /* Longest label the ellipsis path will shorten; longer text is cut first. */
 static constexpr size_t FIT_TEXT_MAX_BYTES = 160;
 static constexpr uint16_t ELLIPSIS_CODEPOINT = 0x2026;
@@ -553,12 +563,13 @@ static void cyd_display_render_screen_to_target(TDisplay &display,
                 }
                 break;
 
-            case CYD_DISPLAY_WIDGET_BUTTON:
+            case CYD_DISPLAY_WIDGET_BUTTON: {
+                const int32_t inset_y = h >= WIDGET_BUTTON_FRAME_INSET_MIN_H_PX ? WIDGET_BUTTON_FRAME_INSET_Y_PX : 0;
                 cyd_display_fill_bordered(display,
                                           x,
-                                          y,
+                                          y + inset_y,
                                           w,
-                                          h,
+                                          h - 2 * inset_y,
                                           WIDGET_BUTTON_RADIUS,
                                           cyd_display_border_px(widget),
                                           cyd_display_resolve_bg(widget),
@@ -572,6 +583,7 @@ static void cyd_display_render_screen_to_target(TDisplay &display,
                     display.drawString(text, x + (w / 2), y + (h / 2));
                 }
                 break;
+            }
 
             case CYD_DISPLAY_WIDGET_ICON:
                 if (cyd_display_bitmap_is_usable(widget.bitmap)) {

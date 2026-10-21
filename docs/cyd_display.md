@@ -300,6 +300,10 @@ English contract: whether text is referenced or copied is decided by where it li
 
 BUTTON と、塗りつぶしの RECT は `border_width` ピクセルの枠を持てます (0 は従来どおり 1px)。太い枠は、枠の色で塗ってから内側を枠幅ぶん小さく塗るので、角丸の角にすき間が出ません。
 
+高さ 16px 以上の BUTTON は、枠と塗りをマスの上下 2px 内側に描きます。隣の行のボタンと枠が接しないようにするためです。マスの上下 2px には、その下に描いた板や背景が見えます。文字の縦中央と、`cyd_display_screen_hit_test()` の当たり判定はマス全体のままです。
+
+English contract: the button frame inset is drawing only (`WIDGET_BUTTON_FRAME_INSET_Y_PX` in `cyd_display_render.hpp`); widget bounds, dirty rectangles and hit testing still use the full grid cells.
+
 ## Grid Layout
 
 このドライバーは 8 px 単位のグリッドを使います。
