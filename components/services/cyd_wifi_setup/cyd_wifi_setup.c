@@ -281,6 +281,8 @@ static void wifi_wait_failed_dialog(const char *ssid, esp_err_t err, esp32_wifi_
         ESP_LOGW(TAG, "show failure dialog failed: %s", esp_err_to_name(submit_err));
         return;
     }
+    /* Taps made during the connect test must not press OK on this dialog. */
+    (void)cyd_input_discard_pending_events();
     while (true) {
         cyd_input_event_t event = { 0 };
         if (cyd_input_read_event(&event, pdMS_TO_TICKS(WIFI_IDLE_POLL_MS)) != ESP_OK) {
@@ -430,6 +432,12 @@ esp_err_t cyd_wifi_setup_poll_password_session(const cyd_input_event_t *event,
                                                    &reason);
         if (err == ESP_OK) {
             vTaskDelay(pdMS_TO_TICKS(800));
+            /*
+             * The connect test blocks this task for up to the connect timeout
+             * while "connecting" and then "saved" are shown. Taps made then
+             * would land on the app we return to, so drop them here.
+             */
+            (void)cyd_input_discard_pending_events();
             *result = CYD_WIFI_SETUP_PASSWORD_CONNECTED;
             return ESP_OK;
         }
