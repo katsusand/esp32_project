@@ -219,6 +219,12 @@ EIM repository を Homebrew に追加します。
 brew tap espressif/eim
 ```
 
+今の Homebrew は、公式以外の tap を信頼しないと読み込みません。`Refusing to load ... from untrusted tap espressif/eim` と出る場合は、tap を信頼してから続けます。
+
+```bash
+brew trust espressif/eim
+```
+
 EIM CLI を入れます。
 
 ```bash
@@ -237,15 +243,13 @@ exec zsh
 eim install -i v5.5.6
 ```
 
-`eim install` が `[FAIL] Python Version` で止まる場合は、Homebrew の `python3` が EIM の対応より新しい可能性があります。2026-10 時点では、EIM 0.11.2 が Python 3.15 を拒み、3.14 では通りました。そのときは、そのコマンドの間だけ `python3` が 3.14 を指すようにして実行します（`brew install python@3.14` が必要）。
+`eim install` は、ESP-IDF 用の Python の venv を作るときに、使える版の Python を自分で探します。2026-10 時点で、EIM 0.20.1 は Homebrew の `python3` が 3.15 のとき、入っていた 3.14 を選んで通りました。古い EIM（0.11.2）は PATH の先頭の `python3`（3.15）を使おうとして、`[FAIL] Python Version` で止まっていました。この表示が出たら、まず EIM を上げてください。
 
 ```bash
-mkdir -p /tmp/py314bin
-ln -sf /opt/homebrew/bin/python3.14 /tmp/py314bin/python3
-PATH="/tmp/py314bin:$PATH" eim install -i v5.5.6
+brew upgrade eim
 ```
 
-English supplement: EIM creates the per-version venv from whichever `python3` comes first on PATH. If its Python sanity check rejects the Homebrew default, put a supported interpreter first on PATH for the install only; the venv keeps using it afterwards.
+English supplement: EIM 0.20.1 picks a supported interpreter by itself (it chose python@3.14 when Homebrew's python3 was 3.15). On older EIM, a `[FAIL] Python Version` from its sanity check is fixed by upgrading EIM; a supported Python (for example `python@3.14`) must still be installed.
 
 インストール後、`~/.espressif/tools/activate_idf_v5.5.6.sh` が存在することを確認します。
 
