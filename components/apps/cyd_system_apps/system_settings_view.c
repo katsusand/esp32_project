@@ -402,35 +402,66 @@ static void view_nvs(cyd_display_screen_t *screen)
 }
 
 /*
- * "label  state  [action]" rows: a switch reads as its current state plus the
- * one thing a tap does, rather than a stepper with only two stops.
+ * A switch row: the whole row is one button, so a tap anywhere on it flips
+ * the switch, and the switch shows the state by itself (no "オン" / "オフ").
+ *
+ *   rows r..r+4 (40px)  | label                          (==O) |
+ *
+ * The track is 48x24px (cols 31-36, rows r+1..r+3) and the knob a 24px circle
+ * at its left end (off) or right end (on). Grid cells are 8px, so the knob is
+ * as tall as the track; its border in the track colour makes it read as
+ * sitting inside. A disabled row greys out as a whole, label included.
  */
+#define VIEW_SWITCH_ROWS 5
+#define VIEW_SWITCH_TRACK_COL 31
+#define VIEW_SWITCH_TRACK_COLS 6
+#define VIEW_SWITCH_KNOB_COLS 3
+#define VIEW_SWITCH_RADIUS 12
+
 static void view_switch(cyd_display_screen_t *screen, const char *label, bool on, uint8_t row,
                         uint16_t action_id, bool enabled)
 {
-    /* cols 1-15 label | 17-21 state | 23-38 [action] */
-    cyd_ui_add_label(screen, label, VIEW_LABEL_COL, row, 15, VIEW_ROW_ROWS, CYD_DISPLAY_ALIGN_LEFT,
-                     CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_SUBTEXT);
-    cyd_ui_add_label(screen, on ? "オン" : "オフ", 17, row, 5, VIEW_ROW_ROWS, CYD_DISPLAY_ALIGN_LEFT,
-                     CYD_DISPLAY_FONT_BODY_BOLD, on ? CYD_UI_THEME_SUCCESS_SOFT : CYD_UI_THEME_TEXT);
-    cyd_ui_add_styled_button(screen, on ? "オフにする" : "オンにする", 23, row, 16, VIEW_ROW_ROWS,
-                             CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
-                             CYD_UI_THEME_PRIMARY, CYD_UI_THEME_BORDER_PX, action_id, enabled);
+    const uint16_t label_color = enabled ? CYD_UI_THEME_TEXT : CYD_UI_THEME_DISABLED;
+    uint16_t track_fill = CYD_UI_THEME_BG;
+    uint16_t track_border = CYD_UI_THEME_SUBTEXT;
+    uint16_t knob_fill = CYD_UI_THEME_SUBTEXT;
+
+    if (!enabled) {
+        track_border = CYD_UI_THEME_DISABLED;
+        knob_fill = CYD_UI_THEME_DISABLED;
+    } else if (on) {
+        track_fill = CYD_UI_THEME_PRIMARY;
+        track_border = CYD_UI_THEME_PRIMARY;
+        knob_fill = CYD_UI_THEME_ON_PRIMARY;
+    }
+
+    cyd_ui_add_styled_button(screen, "", VIEW_LABEL_COL, row, CYD_DISPLAY_GRID_COLS - 2 * VIEW_LABEL_COL,
+                             VIEW_SWITCH_ROWS, CYD_DISPLAY_FONT_BODY_BOLD, label_color, CYD_UI_THEME_SURFACE,
+                             CYD_UI_THEME_LINE, 1, action_id, enabled);
+    cyd_ui_add_label(screen, label, VIEW_LABEL_COL + 2, row, VIEW_SWITCH_TRACK_COL - VIEW_LABEL_COL - 3,
+                     VIEW_SWITCH_ROWS, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, label_color);
+    cyd_ui_add_panel(screen, VIEW_SWITCH_TRACK_COL, (uint8_t)(row + 1), VIEW_SWITCH_TRACK_COLS, 3, track_fill,
+                     track_border, CYD_UI_THEME_BORDER_PX, VIEW_SWITCH_RADIUS);
+    cyd_ui_add_panel(screen,
+                     (uint8_t)(VIEW_SWITCH_TRACK_COL + (on ? VIEW_SWITCH_TRACK_COLS - VIEW_SWITCH_KNOB_COLS : 0)),
+                     (uint8_t)(row + 1), VIEW_SWITCH_KNOB_COLS, 3, knob_fill, track_border, CYD_UI_THEME_BORDER_PX,
+                     VIEW_SWITCH_RADIUS);
 }
 
 static void view_security(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
 {
-    view_switch(screen, "設定の PIN", m->pin_enabled, 5, CYD_SETTINGS_APP_ACTION_PIN_TOGGLE, true);
-    view_switch(screen, "情報画面の PIN", m->pin_enabled && m->pin_info_lock, 10,
+    view_switch(screen, "PIN機能", m->pin_enabled, 4, CYD_SETTINGS_APP_ACTION_PIN_TOGGLE, true);
+    /* Only meaningful with the PIN on, and greyed out (label too) without it. */
+    view_switch(screen, "情報も保護", m->pin_enabled && m->pin_info_lock, 10,
                 CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE, m->pin_enabled);
-    view_wide_button(screen, "PIN を変更する", 15, 4, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
+    view_wide_button(screen, "PIN を変更する", 16, 4, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
                      CYD_SETTINGS_APP_ACTION_PIN_CHANGE, m->pin_enabled);
     if (m->pin_has_recovery) {
-        view_line(screen, "設定に入るときに PIN を求めます", 20, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+        view_line(screen, "設定に入るときに PIN を求めます", 21, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
         return;
     }
-    view_line(screen, "PIN を忘れたら画面では戻せません", 20, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
-    view_line(screen, "PC で設定を消すと PIN もなくなります", 23, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    view_line(screen, "PIN を忘れたら画面では戻せません", 21, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    view_line(screen, "PC で設定を消すと PIN もなくなります", 24, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
 }
 
 static void view_apps(cyd_display_screen_t *screen, const system_settings_view_model_t *m)

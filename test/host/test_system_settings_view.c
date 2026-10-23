@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "cyd_display.h"
+#include "cyd_ui.h"
 #include "system_settings_view.h"
 #include "ui_test_support.h"
 
@@ -132,7 +133,7 @@ static void test_security(void)
     for (int bits = 0; bits < 8; ++bits) {
         char name[64];
         system_settings_view_model_t m = base(SYSTEM_SETTINGS_VIEW_SECURITY);
-        m.page_title = "セキュリティ";
+        m.page_title = "設定のPIN";
         m.page_index = 1;
         m.page_count = 7;
         m.pin_enabled = (bits & 1) != 0;
@@ -148,6 +149,31 @@ static void test_security(void)
                           find_action(CYD_SETTINGS_APP_ACTION_PIN_CHANGE)->enabled == m.pin_enabled &&
                           find_action(CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE)->enabled == m.pin_enabled,
                       "changing the PIN and the info switch need the PIN on");
+        /* The knob sits at the right end of the track when on, the left when off. */
+        const cyd_display_widget_t *pin_knob = NULL;
+        const cyd_display_widget_t *info_knob = NULL;
+        const cyd_display_widget_t *info_label = NULL;
+        for (size_t i = 0; i < s_screen.widget_count; ++i) {
+            const cyd_display_widget_t *w = &s_screen.widgets[i];
+            if (w->type == CYD_DISPLAY_WIDGET_RECT && w->span_cols == 3 && w->span_rows == 3) {
+                if (w->row == 5) {
+                    pin_knob = w;
+                } else if (w->row == 11) {
+                    info_knob = w;
+                }
+            }
+            if (w->type == CYD_DISPLAY_WIDGET_TEXT && strcmp(cyd_display_widget_text(w), "情報も保護") == 0) {
+                info_label = w;
+            }
+        }
+        ui_test_check(pin_knob != NULL && pin_knob->col == (m.pin_enabled ? 34 : 31),
+                      "the PIN switch shows its state by the knob");
+        ui_test_check(info_knob != NULL && info_knob->col == (m.pin_enabled && m.pin_info_lock ? 34 : 31),
+                      "the info switch shows its state by the knob, off while the PIN is off");
+        ui_test_check(info_label != NULL &&
+                          (info_label->fg_color == CYD_UI_THEME_DISABLED) == !m.pin_enabled,
+                      "the info label greys out while the PIN is off");
+        ui_test_check(!has_text("オン") && !has_text("オフ"), "no オン / オフ words next to the switches");
         for (size_t i = 0; i < s_screen.widget_count; ++i) {
             const cyd_display_widget_t *w = &s_screen.widgets[i];
             /* Content starts at row 4 and must end before the navigation row 27. */
