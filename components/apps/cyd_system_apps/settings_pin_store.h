@@ -24,8 +24,16 @@
 extern "C" {
 #endif
 
-/* Each wrong guess costs this many HMAC-SHA256 rounds; kept in the record. */
-#define SETTINGS_PIN_STORE_ITERATIONS 4096U
+/*
+ * HMAC-SHA256 rounds per hash, used for PINs set from now on. Each record
+ * keeps its own count, so a PIN stored with another count still checks.
+ *
+ * 4096 took 699 ms on the CYD (2026-10-23), a pause the user noticed on every
+ * 決定. 1024 is about 175 ms. Guessing on the touch screen is held back by the
+ * wait after wrong PINs, not by this; the count only slows guessing from a
+ * flash dump, which 6-8 digits cannot survive anyway.
+ */
+#define SETTINGS_PIN_STORE_ITERATIONS 1024U
 
 #define SETTINGS_PIN_STORE_FLAG_INFO_LOCK 0x1U
 
