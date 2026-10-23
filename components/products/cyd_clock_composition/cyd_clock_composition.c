@@ -12,6 +12,7 @@
 #include "cyd_system_apps.h"
 #include "error_log_store.h"
 #include "sd_card_status.h"
+#include "settings_pin.h"
 #include "system_boot.h"
 #include "time_tick.h"
 
@@ -158,6 +159,12 @@ esp_err_t cyd_clock_composition_start(void)
     error_log_store_notify_time_decided(ERROR_LOG_TIME_UNAVAILABLE);
 #endif
 
+    /*
+     * The settings PIN guards every way into settings, the boot touch shortcut
+     * below included. Loaded before the NVS check so an unreadable PIN record
+     * routes to Initialize NVS like any other.
+     */
+    cyd_clock_composition_start_optional("settings PIN init failed", settings_pin_init());
     cyd_clock_composition_preflight_nvs_health();
     if (nvs_health_requires_initialize()) {
         ESP_LOGW(TAG, "invalid NVS data detected; forcing Initialize NVS flow");

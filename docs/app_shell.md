@@ -57,6 +57,21 @@ ESP_ERROR_CHECK(app_shell_switch_to(cyd_wifi_setup_get_app()));
 
 English supplement: `app_shell_switch_to()` is deferred until the shell regains control after the current app step returns.
 
+### Enter Guard
+
+`app_shell_set_enter_guard()` で、アプリに入る直前の判定を 1 つだけ差し込めます。guard は入ろうとしているアプリ (`next_app`) と、その `enter()` が受け取る `from_app` を見て、通すなら `next_app` を、別の画面を先に出すならそのアプリを返します。**起動直後の最初のアプリも guard を通ります**（home app は最初のアプリのまま）。
+
+```c
+void app_shell_set_enter_guard(app_shell_enter_guard_fn guard, void *ctx);
+esp_err_t app_shell_switch_to_from(const app_shell_app_t *next_app, const app_shell_app_t *from_app);
+```
+
+前に出た画面が用を終えて本来のアプリへ進むときは、`app_shell_switch_to_from()` で「本来の遷移元」を `from_app` として渡します。普通の `app_shell_switch_to()` だと、本来のアプリは前に出た画面を遷移元として受け取り、その「戻る」が前に出た画面へ戻ってしまいます。`from_app` に NULL を渡せば、起動時に入ったのと同じ扱いになります。
+
+使っているのは設定の PIN です ([Settings PIN](settings_pin.md#guarded-apps))。アプリの切り替えはすべて guard を通るので、guard は「あるアプリ群から出た」ことも知ることができます。
+
+English contract: one guard at a time, installed before `app_shell_start()`. It runs on the shell task before the active app's `leave()`, must not block, and returning the already active app drops the switch. Without a guard the shell behaves exactly as before.
+
 home復帰timeoutは `app_shell_get_idle_return_timeout_seconds()` と
 `app_shell_set_idle_return_timeout_seconds()` で実行時に参照・変更できます。
 `app_shell_save_idle_return_timeout_seconds()` を呼ぶとNVSへ保存され、次回起動時はKconfig初期値よりNVS値が優先されます。`0` は自動復帰無効です。

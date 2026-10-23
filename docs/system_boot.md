@@ -4,7 +4,7 @@
 
 `components/framework/system_boot` は、どの製品でも共通の起動処理です。NVS、ステータス LED、スピーカー、画面、配色テーマ、入力を初期化し、起動時のタッチ長押し（設定を開くショートカット）を判定して、結果を `system_boot_result_t` で返します。
 
-ショートカットの意味（どの app を開くか）は製品の composition が決めます。時計製品では settings app を開きます（[CYD Clock Composition](cyd_clock_composition.md)）。
+ショートカットの意味（どの app を開くか）は製品の composition が決めます。時計製品では settings app を開きます（[CYD Clock Composition](cyd_clock_composition.md)）。設定の PIN がオンなら、その前に PIN の画面が出ます。長押しは PIN の抜け道になりません（[Settings PIN](settings_pin.md#guarded-apps)）。
 
 English supplement: `system_boot` only detects the held panel and reports `setup_shortcut_requested`. What the shortcut opens is a product decision made by the composition.
 

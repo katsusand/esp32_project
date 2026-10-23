@@ -59,6 +59,11 @@ extern "C" {
 #define CYD_SETTINGS_APP_ACTION_RESTART_CONFIRM 0x2223
 #define CYD_SETTINGS_APP_ACTION_THEME_DOWN 0x2224
 #define CYD_SETTINGS_APP_ACTION_THEME_UP 0x2225
+#define CYD_SETTINGS_APP_ACTION_PIN_TOGGLE 0x2226
+#define CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE 0x2227
+#define CYD_SETTINGS_APP_ACTION_PIN_CHANGE 0x2228
+#define CYD_SETTINGS_APP_ACTION_PIN_OFF_CANCEL 0x2229
+#define CYD_SETTINGS_APP_ACTION_PIN_OFF_CONFIRM 0x222a
 /* + index into the stored profile list */
 #define CYD_SETTINGS_APP_ACTION_STORED_SELECT_BASE 0x2300
 /* + index into the apps page list */
@@ -84,6 +89,8 @@ typedef enum {
     SYSTEM_SETTINGS_VIEW_CLEAR_NVS_CONFIRM,
     SYSTEM_SETTINGS_VIEW_RESTART_CONFIRM,
     SYSTEM_SETTINGS_VIEW_MESSAGE, /* full-screen notice, e.g. "restarting" */
+    SYSTEM_SETTINGS_VIEW_SECURITY,
+    SYSTEM_SETTINGS_VIEW_PIN_OFF_CONFIRM,
 } system_settings_view_screen_t;
 
 /* wifi_connection_state_t, plus "the state could not be read". */
@@ -155,6 +162,11 @@ typedef struct {
     system_settings_view_sync_t sync;
     system_settings_view_sync_last_t sync_last;
     struct tm last_sync_at;
+
+    /* SECURITY */
+    bool pin_enabled;
+    bool pin_info_lock;    /* system info asks for the PIN too */
+    bool pin_has_recovery; /* the product installed another way past a forgotten PIN */
 
     /* APPS: titles of the registered apps' settings screens. */
     const char *apps[SYSTEM_SETTINGS_VIEW_APPS_MAX];

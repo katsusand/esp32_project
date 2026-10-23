@@ -401,6 +401,38 @@ static void view_nvs(cyd_display_screen_t *screen)
     }
 }
 
+/*
+ * "label  state  [action]" rows: a switch reads as its current state plus the
+ * one thing a tap does, rather than a stepper with only two stops.
+ */
+static void view_switch(cyd_display_screen_t *screen, const char *label, bool on, uint8_t row,
+                        uint16_t action_id, bool enabled)
+{
+    /* cols 1-15 label | 17-21 state | 23-38 [action] */
+    cyd_ui_add_label(screen, label, VIEW_LABEL_COL, row, 15, VIEW_ROW_ROWS, CYD_DISPLAY_ALIGN_LEFT,
+                     CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_SUBTEXT);
+    cyd_ui_add_label(screen, on ? "オン" : "オフ", 17, row, 5, VIEW_ROW_ROWS, CYD_DISPLAY_ALIGN_LEFT,
+                     CYD_DISPLAY_FONT_BODY_BOLD, on ? CYD_UI_THEME_SUCCESS_SOFT : CYD_UI_THEME_TEXT);
+    cyd_ui_add_styled_button(screen, on ? "オフにする" : "オンにする", 23, row, 16, VIEW_ROW_ROWS,
+                             CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
+                             CYD_UI_THEME_PRIMARY, CYD_UI_THEME_BORDER_PX, action_id, enabled);
+}
+
+static void view_security(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
+{
+    view_switch(screen, "設定の PIN", m->pin_enabled, 5, CYD_SETTINGS_APP_ACTION_PIN_TOGGLE, true);
+    view_switch(screen, "情報画面の PIN", m->pin_enabled && m->pin_info_lock, 10,
+                CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE, m->pin_enabled);
+    view_wide_button(screen, "PIN を変更する", 15, 4, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
+                     CYD_SETTINGS_APP_ACTION_PIN_CHANGE, m->pin_enabled);
+    if (m->pin_has_recovery) {
+        view_line(screen, "設定に入るときに PIN を求めます", 20, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+        return;
+    }
+    view_line(screen, "PIN を忘れたら画面では戻せません", 20, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    view_line(screen, "PC で設定を消すと PIN もなくなります", 23, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+}
+
 static void view_apps(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
 {
     size_t count = m->app_count < SYSTEM_SETTINGS_VIEW_APPS_MAX ? m->app_count : SYSTEM_SETTINGS_VIEW_APPS_MAX;
@@ -492,6 +524,13 @@ void system_settings_view_build(cyd_display_screen_t *screen, const system_setti
     case SYSTEM_SETTINGS_VIEW_APPS:
         view_apps(screen, m);
         break;
+    case SYSTEM_SETTINGS_VIEW_SECURITY:
+        view_security(screen, m);
+        break;
+    case SYSTEM_SETTINGS_VIEW_PIN_OFF_CONFIRM:
+        view_confirm(screen, "PIN をオフにしますか？", "誰でも設定に入れるようになります", CYD_UI_THEME_TEXT, NULL,
+                     "オフにする", CYD_SETTINGS_APP_ACTION_PIN_OFF_CANCEL, CYD_SETTINGS_APP_ACTION_PIN_OFF_CONFIRM);
+        return;
     case SYSTEM_SETTINGS_VIEW_STORED_SSIDS:
         view_stored_ssids(screen, m);
         return;

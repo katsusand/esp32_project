@@ -126,6 +126,61 @@ static void test_pages(void)
     }
 }
 
+/* The security page in every combination, and the turn-off confirmation. */
+static void test_security(void)
+{
+    for (int bits = 0; bits < 8; ++bits) {
+        char name[64];
+        system_settings_view_model_t m = base(SYSTEM_SETTINGS_VIEW_SECURITY);
+        m.page_title = "セキュリティ";
+        m.page_index = 1;
+        m.page_count = 7;
+        m.pin_enabled = (bits & 1) != 0;
+        m.pin_info_lock = (bits & 2) != 0;
+        m.pin_has_recovery = (bits & 4) != 0;
+        snprintf(name, sizeof(name), "security, pin %s, info %s, recovery %s", m.pin_enabled ? "on" : "off",
+                 m.pin_info_lock ? "on" : "off", m.pin_has_recovery ? "yes" : "no");
+        build_and_check(name, &m);
+        ui_test_check(find_action(CYD_SETTINGS_APP_ACTION_PIN_TOGGLE) != NULL &&
+                          find_action(CYD_SETTINGS_APP_ACTION_PIN_TOGGLE)->enabled,
+                      "the PIN switch is always available");
+        ui_test_check(find_action(CYD_SETTINGS_APP_ACTION_PIN_CHANGE) != NULL &&
+                          find_action(CYD_SETTINGS_APP_ACTION_PIN_CHANGE)->enabled == m.pin_enabled &&
+                          find_action(CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE)->enabled == m.pin_enabled,
+                      "changing the PIN and the info switch need the PIN on");
+        for (size_t i = 0; i < s_screen.widget_count; ++i) {
+            const cyd_display_widget_t *w = &s_screen.widgets[i];
+            /* Content starts at row 4 and must end before the navigation row 27. */
+            if (w->row >= 4 && w->row < 27 && w->row + w->span_rows > 27) {
+                ui_test_check(false, "a security page widget runs into the page navigation");
+            }
+        }
+    }
+
+    /*
+     * Again with literals referenced as on the device: copied, they are cut at
+     * 40 bytes before they are measured, and a too long note would pass. No
+     * page row here, since the view formats "n/N" in a stack buffer.
+     */
+    ui_test_set_all_text_immutable(true);
+    for (int bits = 0; bits < 8; ++bits) {
+        system_settings_view_model_t m = base(SYSTEM_SETTINGS_VIEW_SECURITY);
+        m.page_count = 0;
+        m.pin_enabled = (bits & 1) != 0;
+        m.pin_info_lock = (bits & 2) != 0;
+        m.pin_has_recovery = (bits & 4) != 0;
+        build_and_check("security, literals at full length", &m);
+    }
+    ui_test_set_all_text_immutable(false);
+
+    system_settings_view_model_t m = base(SYSTEM_SETTINGS_VIEW_PIN_OFF_CONFIRM);
+    m.page_count = 0;
+    build_and_check("turn the PIN off", &m);
+    ui_test_check(find_action(CYD_SETTINGS_APP_ACTION_PIN_OFF_CANCEL) != NULL &&
+                      find_action(CYD_SETTINGS_APP_ACTION_PIN_OFF_CONFIRM) != NULL,
+                  "turning the PIN off can be cancelled or confirmed");
+}
+
 static void test_value_sweeps(void)
 {
     static const uint16_t wifi_idle[] = { 0, 30, 60, 180, 300, 600, 900, 1200, 1800, 2700, 3600 };
@@ -235,5 +290,7 @@ int main(void)
     test_value_sweeps();
     printf("dialogs and messages\n");
     test_dialogs();
+    printf("security\n");
+    test_security();
     return ui_test_finish();
 }

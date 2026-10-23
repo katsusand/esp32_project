@@ -34,6 +34,11 @@ static TaskHandle_t s_app_shell_task_handle;
 static portMUX_TYPE s_app_shell_lock = portMUX_INITIALIZER_UNLOCKED;
 static const app_shell_app_t *s_app_shell_active_app;
 static const app_shell_app_t *s_app_shell_pending_app;
+/* app_shell_switch_to_from(): what the pending app's enter() receives. */
+static const app_shell_app_t *s_app_shell_pending_from;
+static bool s_app_shell_pending_has_from;
+static app_shell_enter_guard_fn s_app_shell_enter_guard;
+static void *s_app_shell_enter_guard_ctx;
 static const app_shell_app_t *s_app_shell_home_app;
 static app_shell_home_return_allowed_fn s_app_shell_home_return_allowed_callback;
 static void *s_app_shell_home_return_allowed_ctx;
@@ -279,34 +284,60 @@ static bool app_shell_has_pending_switch(void)
     return pending;
 }
 
+/* The app to enter in place of `next_app`, as the enter guard decides. */
+static const app_shell_app_t *app_shell_guarded(const app_shell_app_t *next_app, const app_shell_app_t *from_app)
+{
+    portENTER_CRITICAL(&s_app_shell_lock);
+    app_shell_enter_guard_fn guard = s_app_shell_enter_guard;
+    void *ctx = s_app_shell_enter_guard_ctx;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+
+    if (guard == NULL) {
+        return next_app;
+    }
+    const app_shell_app_t *chosen = guard(ctx, next_app, from_app);
+    if (chosen != NULL && chosen != next_app) {
+        ESP_LOGI(TAG, "enter guard: %s instead of %s", chosen->id, next_app->id);
+    }
+    return chosen != NULL ? chosen : next_app;
+}
+
 static bool app_shell_apply_one_pending_switch(void)
 {
     const app_shell_app_t *next_app = NULL;
-    const app_shell_app_t *from_app = NULL;
+    const app_shell_app_t *from_app = s_app_shell_active_app;
 
     portENTER_CRITICAL(&s_app_shell_lock);
     if (s_app_shell_pending_app != NULL &&
         s_app_shell_pending_app != s_app_shell_active_app) {
         next_app = s_app_shell_pending_app;
-        s_app_shell_pending_app = NULL;
-    } else {
-        s_app_shell_pending_app = NULL;
+        if (s_app_shell_pending_has_from) {
+            from_app = s_app_shell_pending_from;
+        }
     }
+    s_app_shell_pending_app = NULL;
+    s_app_shell_pending_from = NULL;
+    s_app_shell_pending_has_from = false;
     portEXIT_CRITICAL(&s_app_shell_lock);
 
     if (next_app == NULL) {
         return false;
     }
 
-    from_app = s_app_shell_active_app;
-    if (from_app != NULL && from_app->leave != NULL) {
-        esp_err_t leave_err = from_app->leave(from_app->ctx);
+    next_app = app_shell_guarded(next_app, from_app);
+    if (next_app == s_app_shell_active_app) {
+        return false;
+    }
+
+    const app_shell_app_t *leaving_app = s_app_shell_active_app;
+    if (leaving_app != NULL && leaving_app->leave != NULL) {
+        esp_err_t leave_err = leaving_app->leave(leaving_app->ctx);
         if (leave_err != ESP_OK) {
             /*
              * A failing leave() must not trap the user inside the app, so the
              * switch proceeds regardless of the requested action.
              */
-            (void)app_shell_handle_app_error(from_app, APP_SHELL_STAGE_LEAVE, leave_err);
+            (void)app_shell_handle_app_error(leaving_app, APP_SHELL_STAGE_LEAVE, leave_err);
         }
     }
 
@@ -356,7 +387,9 @@ static void app_shell_task(void *arg)
 
     ESP_ERROR_CHECK(cyd_display_claim_owner());
     s_app_shell_home_app = initial_app;
-    s_app_shell_active_app = initial_app;
+    /* The home app stays the initial app even when the guard puts another
+       screen in front of it. */
+    s_app_shell_active_app = app_shell_guarded(initial_app, NULL);
 
     if (s_app_shell_active_app != NULL && s_app_shell_active_app->enter != NULL) {
         esp_err_t enter_err = s_app_shell_active_app->enter(s_app_shell_active_app->ctx, NULL);
@@ -417,8 +450,38 @@ esp_err_t app_shell_switch_to(const app_shell_app_t *next_app)
 
     portENTER_CRITICAL(&s_app_shell_lock);
     s_app_shell_pending_app = next_app;
+    s_app_shell_pending_from = NULL;
+    s_app_shell_pending_has_from = false;
     portEXIT_CRITICAL(&s_app_shell_lock);
     return ESP_OK;
+}
+
+esp_err_t app_shell_switch_to_from(const app_shell_app_t *next_app, const app_shell_app_t *from_app)
+{
+    ESP_RETURN_ON_FALSE(next_app != NULL, ESP_ERR_INVALID_ARG, TAG, "next app required");
+
+    portENTER_CRITICAL(&s_app_shell_lock);
+    s_app_shell_pending_app = next_app;
+    s_app_shell_pending_from = from_app;
+    s_app_shell_pending_has_from = true;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+    return ESP_OK;
+}
+
+void app_shell_set_enter_guard(app_shell_enter_guard_fn guard, void *ctx)
+{
+    portENTER_CRITICAL(&s_app_shell_lock);
+    s_app_shell_enter_guard = guard;
+    s_app_shell_enter_guard_ctx = ctx;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+}
+
+bool app_shell_has_enter_guard(void)
+{
+    portENTER_CRITICAL(&s_app_shell_lock);
+    bool installed = s_app_shell_enter_guard != NULL;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+    return installed;
 }
 
 esp_err_t app_shell_return_to(const app_shell_app_t *return_app)
