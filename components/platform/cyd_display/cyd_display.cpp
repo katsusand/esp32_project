@@ -174,7 +174,6 @@ static TaskHandle_t s_display_task_handle = nullptr;
 static TaskHandle_t s_display_owner_task_handle = nullptr;
 static cyd_display_screen_t s_current_screen = {};
 static cyd_display_screen_t s_previous_screen = {};
-static cyd_display_screen_t s_log_screen = {};
 static bool s_has_previous_screen = false;
 static LGFX_Sprite s_strip_sprite(&s_display);
 
@@ -481,7 +480,11 @@ static void cyd_display_flush_rects(const cyd_display_dirty_rect_t *rects, size_
 
 static void cyd_display_apply_screen(const cyd_display_screen_t &screen)
 {
-    s_current_screen = screen;
+    /* The task receives screens and builds the log view straight into
+       s_current_screen; only a screen from elsewhere needs copying. */
+    if (&screen != &s_current_screen) {
+        s_current_screen = screen;
+    }
     size_t dirty_rect_count = 0;
     cyd_display_collect_dirty_rects(s_previous_screen,
                                     s_has_previous_screen,
@@ -509,7 +512,12 @@ static const char *cyd_display_log_line_at(size_t logical_index)
 
 static void cyd_display_render_log_screen(void)
 {
-    memset(&s_log_screen, 0, sizeof(s_log_screen));
+    /*
+     * Built in place in s_current_screen, which the display task owns. A
+     * separate log buffer cost 3.4KB of RAM even while no log was shown.
+     */
+    cyd_display_screen_t &log_screen = s_current_screen;
+    memset(&log_screen, 0, sizeof(log_screen));
 
     cyd_display_widget_t title_widget = cyd_display_make_widget(CYD_DISPLAY_WIDGET_TEXT);
     title_widget.col = 0;
@@ -522,11 +530,11 @@ static void cyd_display_render_log_screen(void)
     title_widget.fg_color = TFT_YELLOW;
     title_widget.bg_color = TFT_BLACK;
     cyd_display_copy_text(title_widget.text, sizeof(title_widget.text), s_log_state.title);
-    cyd_display_add_widget(&s_log_screen, &title_widget);
+    cyd_display_add_widget(&log_screen, &title_widget);
 
     size_t visible_rows = LOG_VISIBLE_ROWS;
-    if (visible_rows > (CYD_DISPLAY_MAX_WIDGETS - s_log_screen.widget_count)) {
-        visible_rows = CYD_DISPLAY_MAX_WIDGETS - s_log_screen.widget_count;
+    if (visible_rows > (CYD_DISPLAY_MAX_WIDGETS - log_screen.widget_count)) {
+        visible_rows = CYD_DISPLAY_MAX_WIDGETS - log_screen.widget_count;
     }
     if (visible_rows > s_log_state.count) {
         visible_rows = s_log_state.count;
@@ -553,12 +561,12 @@ static void cyd_display_render_log_screen(void)
         line_widget.fg_color = TFT_WHITE;
         line_widget.bg_color = TFT_BLACK;
         cyd_display_copy_text(line_widget.text, sizeof(line_widget.text), cyd_display_log_line_at(first_line + i));
-        cyd_display_add_widget(&s_log_screen, &line_widget);
+        cyd_display_add_widget(&log_screen, &line_widget);
     }
 
     /* No buttons and no input: the app's own hit tests keep answering for its
        own screen, so an app that shows the log should not act on taps. */
-    cyd_display_apply_screen(s_log_screen);
+    cyd_display_apply_screen(log_screen);
 }
 
 static void cyd_display_handle_log_cmd(const cyd_display_log_cmd_t &cmd)
@@ -573,8 +581,8 @@ static void cyd_display_handle_log_cmd(const cyd_display_log_cmd_t &cmd)
 
         case CYD_DISPLAY_LOG_CMD_HIDE: {
             s_log_state.visible = false;
-            memset(&s_log_screen, 0, sizeof(s_log_screen));
-            cyd_display_apply_screen(s_log_screen);
+            memset(&s_current_screen, 0, sizeof(s_current_screen));
+            cyd_display_apply_screen(s_current_screen);
             break;
         }
 
@@ -1185,7 +1193,14 @@ extern "C" esp_err_t cyd_display_show_mode_screen(cyd_display_screen_t *screen,
 
 extern "C" esp_err_t cyd_display_show_boot_screen(void)
 {
-    /* Nobody hit-tests the boot screen, so a buffer for this one call will do. */
-    static cyd_display_screen_t s_boot_screen;
-    return cyd_display_show_text(&s_boot_screen, "CYD Display OK", "LovyanGFX initialized");
+    /*
+     * Shown once, and nobody hit-tests it, so the buffer lives only for the
+     * call: submit copies it into the queue. A static buffer kept 3.4KB of
+     * RAM for the whole uptime.
+     */
+    cyd_display_screen_t *boot_screen = static_cast<cyd_display_screen_t *>(calloc(1, sizeof(cyd_display_screen_t)));
+    ESP_RETURN_ON_FALSE(boot_screen != nullptr, ESP_ERR_NO_MEM, TAG, "no memory for the boot screen");
+    esp_err_t err = cyd_display_show_text(boot_screen, "CYD Display OK", "LovyanGFX initialized");
+    free(boot_screen);
+    return err;
 }

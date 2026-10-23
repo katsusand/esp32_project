@@ -124,7 +124,7 @@ typedef struct {
     bool sync_now_pending;
 } cyd_settings_status_snapshot_t;
 
-static cyd_display_screen_t s_settings_screen;
+static const cyd_ui_screen_owner_t s_settings_screen_owner = { .name = "settings" };
 static const app_shell_app_t *s_settings_return_app;
 static cyd_system_apps_touch_tracker_t s_settings_touch_tracker;
 static cyd_settings_page_t s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
@@ -251,7 +251,7 @@ static bool cyd_settings_touch_stepper_action(const cyd_input_event_t *event, ui
         return false;
     }
 
-    if (!cyd_display_screen_hit_test(&s_settings_screen,
+    if (!cyd_display_screen_hit_test(cyd_ui_screen_of(&s_settings_screen_owner),
                                      event->data.touch.x,
                                      event->data.touch.y,
                                      &pressed_action_id)) {
@@ -759,8 +759,8 @@ static esp_err_t cyd_settings_show_restart_message(const char *title, const char
         .message_title = title,
         .message_detail = detail,
     };
-    system_settings_view_build(&s_settings_screen, &s_settings_model);
-    return cyd_ui_submit(&s_settings_screen);
+    system_settings_view_build(cyd_ui_screen_borrow(&s_settings_screen_owner), &s_settings_model);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_settings_screen_owner));
 }
 
 /*
@@ -833,8 +833,8 @@ static esp_err_t cyd_settings_app_show(void)
     }
     }
 
-    system_settings_view_build(&s_settings_screen, m);
-    return cyd_ui_submit(&s_settings_screen);
+    system_settings_view_build(cyd_ui_screen_borrow(&s_settings_screen_owner), m);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_settings_screen_owner));
 }
 
 
@@ -1616,7 +1616,7 @@ static esp_err_t cyd_settings_app_step(void *ctx)
         return cyd_settings_handle_active_screen_action(action_id, &handled);
     }
 
-    if (!cyd_system_apps_touch_confirmed_action(&s_settings_screen, &event, &s_settings_touch_tracker, &action_id)) {
+    if (!cyd_system_apps_touch_confirmed_action(cyd_ui_screen_of(&s_settings_screen_owner), &event, &s_settings_touch_tracker, &action_id)) {
         return ESP_OK;
     }
 

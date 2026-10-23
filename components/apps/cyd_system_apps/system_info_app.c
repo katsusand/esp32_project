@@ -28,7 +28,7 @@
 #define CYD_INFO_RSSI_MIN_DBM (-100)
 #define CYD_INFO_RSSI_WEAK_DBM (-75)
 
-static cyd_display_screen_t s_info_screen;
+static const cyd_ui_screen_owner_t s_info_screen_owner = { .name = "system_info" };
 static const app_shell_app_t *s_info_return_app;
 static cyd_system_apps_touch_tracker_t s_info_touch_tracker;
 static system_info_view_page_t s_info_page = SYSTEM_INFO_VIEW_OVERVIEW;
@@ -183,8 +183,8 @@ static esp_err_t cyd_info_app_show(void)
         cyd_info_fill_overview(m);
         break;
     }
-    system_info_view_build(&s_info_screen, m);
-    return cyd_ui_submit(&s_info_screen);
+    system_info_view_build(cyd_ui_screen_borrow(&s_info_screen_owner), m);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_info_screen_owner));
 }
 
 static esp_err_t cyd_info_app_enter(void *ctx, const app_shell_app_t *from_app)
@@ -205,7 +205,7 @@ static esp_err_t cyd_info_app_step(void *ctx)
     cyd_input_event_t event = { 0 };
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(CYD_SYSTEM_APPS_INPUT_POLL_MS)) == ESP_OK) {
         uint16_t action_id = 0;
-        if (cyd_system_apps_touch_confirmed_action(&s_info_screen, &event, &s_info_touch_tracker, &action_id)) {
+        if (cyd_system_apps_touch_confirmed_action(cyd_ui_screen_of(&s_info_screen_owner), &event, &s_info_touch_tracker, &action_id)) {
             /* Like the settings pages, navigation stops at both ends. */
             if (action_id == CYD_INFO_APP_ACTION_PREV_PAGE && s_info_page > SYSTEM_INFO_VIEW_OVERVIEW) {
                 s_info_page = (system_info_view_page_t)((int)s_info_page - 1);

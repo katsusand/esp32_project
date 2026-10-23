@@ -32,7 +32,7 @@
 
 #define TAG "cyd_wifi_setup"
 
-static cyd_display_screen_t s_wifi_setup_screen;
+static const cyd_ui_screen_owner_t s_wifi_setup_screen_owner = { .name = "wifi_setup" };
 
 typedef struct {
     bool pending;
@@ -82,7 +82,7 @@ static bool wifi_touch_event_confirmed_action(const cyd_input_event_t *event,
 
     switch (event->data.touch.action) {
         case CYD_INPUT_TOUCH_ACTION_PRESS:
-            tracker->pending = cyd_display_screen_hit_test(&s_wifi_setup_screen,
+            tracker->pending = cyd_display_screen_hit_test(cyd_ui_screen_of(&s_wifi_setup_screen_owner),
                                                            event->data.touch.x,
                                                            event->data.touch.y,
                                                            &tracker->action_id);
@@ -98,7 +98,7 @@ static bool wifi_touch_event_confirmed_action(const cyd_input_event_t *event,
             uint16_t release_action_id = 0;
             bool confirmed = tracker->pending &&
                              !tracker->long_pressed &&
-                             cyd_display_screen_hit_test(&s_wifi_setup_screen,
+                             cyd_display_screen_hit_test(cyd_ui_screen_of(&s_wifi_setup_screen_owner),
                                                          event->data.touch.x,
                                                          event->data.touch.y,
                                                          &release_action_id) &&
@@ -162,7 +162,7 @@ static esp_err_t wifi_show_scan_screen(const char *title,
     }
     model.page_index = session->page_index;
     model.page_count = page_count;
-    cyd_wifi_setup_view_build(&s_wifi_setup_screen, &model);
+    cyd_wifi_setup_view_build(cyd_ui_screen_borrow(&s_wifi_setup_screen_owner), &model);
 
     ESP_LOGI(TAG,
              "%s refresh %" PRIu32 ": %u APs page=%u/%u",
@@ -171,7 +171,7 @@ static esp_err_t wifi_show_scan_screen(const char *title,
              (unsigned)session->record_count,
              (unsigned)(session->page_index + 1),
              (unsigned)page_count);
-    return cyd_ui_submit(&s_wifi_setup_screen);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_wifi_setup_screen_owner));
 }
 
 static void wifi_discard_pending_input(wifi_scan_session_t *session)
@@ -228,8 +228,8 @@ static esp_err_t wifi_show_notice(cyd_wifi_setup_view_screen_t screen, const cha
         .screen = screen,
         .ssid = ssid,
     };
-    cyd_wifi_setup_view_build(&s_wifi_setup_screen, &model);
-    return cyd_ui_submit(&s_wifi_setup_screen);
+    cyd_wifi_setup_view_build(cyd_ui_screen_borrow(&s_wifi_setup_screen_owner), &model);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_wifi_setup_screen_owner));
 }
 
 static esp_err_t wifi_test_connect_and_save(const char *ssid,
@@ -271,10 +271,10 @@ static void wifi_wait_failed_dialog(const char *ssid, esp_err_t err, esp32_wifi_
     };
     wifi_touch_action_tracker_t touch_tracker = { 0 };
 
-    /* Built into s_wifi_setup_screen, so taps are tested against the dialog.
+    /* Built as this app's screen, so taps are tested against the dialog.
        The scan screen is rebuilt there when the scan session restarts. */
-    cyd_wifi_setup_view_build(&s_wifi_setup_screen, &model);
-    esp_err_t submit_err = cyd_ui_submit(&s_wifi_setup_screen);
+    cyd_wifi_setup_view_build(cyd_ui_screen_borrow(&s_wifi_setup_screen_owner), &model);
+    esp_err_t submit_err = cyd_ui_submit(cyd_ui_screen_of(&s_wifi_setup_screen_owner));
     if (submit_err != ESP_OK) {
         /* Not ESP_ERROR_CHECK: a failed draw must not reboot the device. With no
            OK button on screen there is nothing to wait for, so skip the dialog. */

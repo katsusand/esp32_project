@@ -283,6 +283,8 @@ bool cyd_display_touch_to_grid(int16_t x, int16_t y, uint8_t *col, uint8_t *row)
  * lock and no dependence on how far the display task has got. An app that
  * lets another component draw (a text input session, say) must hand touch
  * handling over to it for that time rather than test its own hidden screen.
+ * A NULL `screen` hits nothing: apps pass cyd_ui_screen_of(), which is NULL
+ * once someone else has built in the shared buffer (see cyd_ui.h).
  */
 bool cyd_display_screen_hit_test(const cyd_display_screen_t *screen, int16_t x, int16_t y, uint16_t *action_id);
 bool cyd_display_get_mode_button_bounds(size_t button_count,

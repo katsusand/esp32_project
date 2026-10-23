@@ -16,23 +16,106 @@ English supplement: This is not a UI framework. It is a small screen-builder hel
 #include "cyd_ui.h"
 ```
 
-画面は `cyd_ui_screen_clear()` で初期化し、widget を足して、最後に `cyd_ui_submit()` で `cyd_display` へ渡します。
+画面は共有の画面バッファを `cyd_ui_screen_borrow()` で借りて組み立て、最後に `cyd_ui_submit()` で `cyd_display` へ渡します ([Shared Screen Buffer](#shared-screen-buffer))。
 
 ```c
-cyd_display_screen_t screen = { 0 };
-cyd_ui_screen_clear(&screen);
-cyd_ui_add_panel(&screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
-cyd_ui_add_label(&screen, "こんにちは", 1, 10, 38, 3, CYD_DISPLAY_ALIGN_CENTER,
+static const cyd_ui_screen_owner_t s_owner = { .name = "hello" };
+
+cyd_display_screen_t *screen = cyd_ui_screen_borrow(&s_owner);
+cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
+cyd_ui_add_label(screen, "こんにちは", 1, 10, 38, 3, CYD_DISPLAY_ALIGN_CENTER,
                  CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_TEXT);
-cyd_ui_add_styled_button(&screen, "OK", 12, 24, 16, 5, CYD_DISPLAY_FONT_BODY_BOLD,
+cyd_ui_add_styled_button(screen, "OK", 12, 24, 16, 5, CYD_DISPLAY_FONT_BODY_BOLD,
                          CYD_UI_THEME_ON_PRIMARY, CYD_UI_THEME_PRIMARY, CYD_UI_THEME_PRIMARY,
                          0, ACTION_OK, true);
-ESP_ERROR_CHECK(cyd_ui_submit(&screen));
+ESP_ERROR_CHECK(cyd_ui_submit(screen));
 ```
 
 `enabled=false` のボタンは無効の色で描かれ、タッチ hit-test の対象になりません。
 
 English supplement: Disabled buttons keep their `action_id` for screen state clarity, but `cyd_display_screen_hit_test()` skips them.
+
+## Shared Screen Buffer
+
+`cyd_display_screen_t` は 1 枚で約 3.4KB (ESP32 で 3,460 バイト) あります。以前はアプリがそれぞれ 1 枚を static に持っていて、時計の製品で 7 枚 (約 24KB)、派生の打刻端末ではそれ以上が、使っていないあいだも RAM を占めていました。
+
+`cyd_display_submit_screen()` は画面を表示キューへ値で写すので、アプリのバッファが要るのは「組み立て」と「自分が最後に組み立てた画面でのタップ判定 (`cyd_display_screen_hit_test()`)」だけです。`app_shell` で前面にいるアプリは常に 1 つなので、`cyd_ui` が共有の画面バッファを 1 枚だけ持ち、どのアプリもそれを借りて組み立てます。
+
+- `cyd_ui_screen_borrow(&owner)`: バッファを空にし、`owner` を「最後に組み立てた者」として覚えて返す
+- `cyd_ui_screen_of(&owner)`: `owner` が最後に組み立てた者ならバッファを、そうでなければ `NULL` を返す。`cyd_display_screen_hit_test()` は `NULL` では何にも当たらない
+
+```c
+static const cyd_ui_screen_owner_t s_owner = { .name = "my_app" };
+
+static esp_err_t my_app_show(void)
+{
+    my_app_view_build(cyd_ui_screen_borrow(&s_owner), &s_model);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_owner));
+}
+
+/* タップの判定 */
+if (cyd_display_screen_hit_test(cyd_ui_screen_of(&s_owner), x, y, &action_id)) {
+    ...
+}
+```
+
+別のアプリが前面に来たり、`cyd_text_input` のように別の部品が画面を描いたりすると、バッファの持ち主が変わり、前のアプリの `cyd_ui_screen_of()` は `NULL` になります。そのため、見えていないボタンにタップが反応することはありません。前のアプリは、もう一度組み立てるまでタップに反応しません。
+
+English contract:
+
+- `cyd_ui_screen_borrow()` clears the buffer. Build the whole screen every time; never patch what was built last, because another owner may have built in between.
+- Hit-test only through `cyd_ui_screen_of()`. It returns NULL once someone else has built, so a replaced app sees no buttons until it builds again.
+- Shell task only, like every draw ([Display Ownership](app_shell.md#display-ownership)). There is no lock.
+- Each owner is its own `static const cyd_ui_screen_owner_t`; the address is the identity, the name is for reading only.
+- Pinned text, bitmaps and sparkline samples live outside the buffer and are unaffected (their own lifetime rules still apply).
+
+### Migrating An App
+
+派生プロジェクトのアプリを共有のバッファに移す手順です。親のアプリ (設定、システム情報、PIN、時計、時計の設定、Wi-Fi 設定、文字入力、ランチャー) は移行済みなので、差分の見本になります。
+
+1. 画面バッファの宣言を owner に置き換える
+
+   ```c
+   /* 前 */
+   static cyd_display_screen_t s_punch_screen;
+   /* 後 */
+   static const cyd_ui_screen_owner_t s_punch_screen_owner = { .name = "time_punch" };
+   ```
+
+2. 組み立ては `cyd_ui_screen_borrow()` で借りたバッファに、submit は `cyd_ui_screen_of()` で行う
+
+   ```c
+   /* 前 */
+   punch_view_build(&s_punch_screen, &model);
+   return cyd_ui_submit(&s_punch_screen);
+   /* 後 */
+   punch_view_build(cyd_ui_screen_borrow(&s_punch_screen_owner), &model);
+   return cyd_ui_submit(cyd_ui_screen_of(&s_punch_screen_owner));
+   ```
+
+   `cyd_display_show_text()` などの定型画面も、`cyd_ui_screen_borrow()` で借りたバッファを渡します。
+
+3. タップの判定に渡す画面を `cyd_ui_screen_of()` にする
+
+   ```c
+   /* 前 */
+   cyd_display_screen_hit_test(&s_punch_screen, x, y, &action_id);
+   /* 後 */
+   cyd_display_screen_hit_test(cyd_ui_screen_of(&s_punch_screen_owner), x, y, &action_id);
+   ```
+
+   バッファへのポインタを変数やタッチの tracker に保存しないこと。毎回 `cyd_ui_screen_of()` で取り直します。
+
+4. 次を確かめる
+   - 組み立ての関数 (`*_view_build()`) が、毎回画面の全体を組み立てている。前の画面の widget を書き換えて出し直す所 (部分の描き直し) があれば、全体を組み立てる形に直す
+   - バッファの中身を、次に描くまで覚えておいて使う所がない (前の画面との比べなど)。比べたいなら、view model の方を覚えておく
+   - 別の部品 (`cyd_text_input` など) に画面を任せたあと、戻ったら自分の画面を組み立て直している。組み立て直すまではタップに反応しない
+   - 描くのは shell task (アプリの `enter` / `step` / `leave` の中) だけ
+   - `grep -n "cyd_display_screen_t s_" ` で、static の画面バッファが残っていない
+
+5. 計測: `python -m esp_idf_size build/<project>.map` の `Used static DRAM` が、移したバッファ 1 枚につき 3,460 バイト減る
+
+English supplement: the migration is mechanical (declaration, build/submit, hit-test). The two things to check by hand are partial rebuilds of a previous screen and pointers to the screen kept across builds; both break once another owner can build in between.
 
 ## Screen Rules
 
@@ -171,6 +254,7 @@ English supplement: forgetting to bump `revision` fails silently — the graph i
 `cyd_ui` は以下を提供します。
 
 - 画面構造体の初期化
+- 共有の画面バッファ ([Shared Screen Buffer](#shared-screen-buffer))
 - text widget の追加
 - button widget の追加
 - disabled button の追加
@@ -180,4 +264,4 @@ English supplement: forgetting to bump `revision` fails silently — the graph i
 
 layout engine、画面遷移、focus 管理、入力 dispatch は持ちません。画面遷移は `cyd_clock_app` のようなアプリケーションコンポーネントが管理します。
 
-English supplement: Keep screen ownership and mode transitions in the application layer. `cyd_ui` should stay stateless.
+English supplement: Keep screen ownership and mode transitions in the application layer. Apart from the theme and the shared screen buffer (which only remembers its last builder), `cyd_ui` stays stateless.

@@ -1,5 +1,6 @@
 /*
- * Shared UI parts: the settings chrome, stepper rows and the keyboard screen.
+ * Shared UI parts: the settings chrome, stepper rows, the keyboard screen and
+ * the shared screen buffer.
  *
  * Every keyboard state and the chrome are built and measured against their
  * boxes with the real fonts (ui_test_check_screen), and the value line is
@@ -220,6 +221,36 @@ static void test_value_tail(void)
     ui_test_check(shown != NULL && strcmp(shown, "short") == 0, "a short value is shown whole");
 }
 
+/*
+ * The shared screen buffer answers only the app that built it last, so an app
+ * whose screen was replaced (another app, a text input session) cannot hit-test
+ * buttons it no longer shows.
+ */
+static void test_shared_screen(void)
+{
+    static const cyd_ui_screen_owner_t settings = { .name = "settings" };
+    static const cyd_ui_screen_owner_t keyboard = { .name = "keyboard" };
+
+    ui_test_check(cyd_ui_screen_of(&settings) == NULL, "nobody has built yet");
+
+    cyd_display_screen_t *screen = cyd_ui_screen_borrow(&settings);
+    ui_test_check(screen != NULL && screen->widget_count == 0, "borrow gives an empty screen");
+    cyd_ui_add_label(screen, "設定", 0, 0, 10, 2, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY, 0);
+    ui_test_check(cyd_ui_screen_of(&settings) == screen, "the builder gets its screen back");
+    ui_test_check(cyd_ui_screen_of(&keyboard) == NULL, "another owner gets nothing");
+    ui_test_check(cyd_ui_screen_of(NULL) == NULL, "no owner gets nothing");
+
+    cyd_display_screen_t *again = cyd_ui_screen_borrow(&keyboard);
+    ui_test_check(again == screen, "there is one buffer");
+    ui_test_check(again->widget_count == 0, "borrow clears what the last owner built");
+    ui_test_check(cyd_ui_screen_of(&settings) == NULL, "the replaced owner gets nothing");
+    ui_test_check(cyd_ui_screen_of(&keyboard) == again, "the new owner gets the buffer");
+
+    (void)cyd_ui_screen_borrow(&settings);
+    ui_test_check(cyd_ui_screen_of(&settings) == screen, "building again takes the buffer back");
+    ui_test_check(cyd_ui_screen_of(&keyboard) == NULL, "and the keyboard loses it");
+}
+
 int main(void)
 {
     /* Copy every string: the keyboard view builds its value line in a stack
@@ -234,5 +265,7 @@ int main(void)
     test_keyboard_states();
     printf("keyboard value line\n");
     test_value_tail();
+    printf("shared screen buffer\n");
+    test_shared_screen();
     return ui_test_finish();
 }

@@ -30,12 +30,13 @@ ESP_ERROR_CHECK(cyd_display_show_boot_screen());
 
 タイトルと本文だけの簡単な画面は `cyd_display_show_text()` で表示できます。
 
-`show_text()`、`show_lines()`、`show_mode_screen()` は、呼び出し側の `cyd_display_screen_t` に画面を組み立ててから送ります。app はその buffer でタッチを判定するので（[Hit Testing](#hit-testing)）、表示中の画面と判定に使う画面が常に一致します。app が持っている画面 buffer をそのまま渡してください。
+`show_text()`、`show_lines()`、`show_mode_screen()` は、呼び出し側の `cyd_display_screen_t` に画面を組み立ててから送ります。app はその buffer でタッチを判定するので（[Hit Testing](#hit-testing)）、表示中の画面と判定に使う画面が常に一致します。app は `cyd_ui` の共有の画面バッファを借りて渡してください ([Shared Screen Buffer](cyd_ui.md#shared-screen-buffer))。
 
 ```c
-static cyd_display_screen_t s_screen;
+static const cyd_ui_screen_owner_t s_owner = { .name = "my_app" };
 
-ESP_ERROR_CHECK(cyd_display_show_text(&s_screen, "CYD", "Hello World"));
+cyd_display_screen_t *screen = cyd_ui_screen_borrow(&s_owner);
+ESP_ERROR_CHECK(cyd_display_show_text(screen, "CYD", "Hello World"));
 ```
 
 複数行のテキストを表示する場合は `cyd_display_show_lines()` を使います。
@@ -47,7 +48,7 @@ const char *lines[] = {
     "Touch: enabled",
 };
 
-ESP_ERROR_CHECK(cyd_display_show_lines(&s_screen, "Status", lines, sizeof(lines) / sizeof(lines[0])));
+ESP_ERROR_CHECK(cyd_display_show_lines(cyd_ui_screen_borrow(&s_owner), "Status", lines, sizeof(lines) / sizeof(lines[0])));
 ```
 
 ボタン付きのモード画面を表示する場合は `cyd_display_show_mode_screen()` を使います。ボタンの `action_id` は先頭から `0`、`1`、`2` … です。
@@ -63,7 +64,7 @@ const char *buttons[] = {
 };
 
 ESP_ERROR_CHECK(cyd_display_show_mode_screen(
-    &s_screen,
+    cyd_ui_screen_borrow(&s_owner),
     "Mode",
     lines,
     sizeof(lines) / sizeof(lines[0]),
@@ -340,6 +341,8 @@ English supplement: The display screen queue is latest-state oriented. The log c
 
 `cyd_display_log_push()` は、リングバッファへ1行追加します。バッファが満杯の場合は、最も古い行が上書きされます。
 
+ログ表示の画面は、表示タスクが `s_current_screen` の中に直接組み立てます。専用の画面バッファは持たないので、ログを出していないあいだに RAM を使いません。
+
 新しい行を追加すると、表示位置は最新行へ戻ります。古い行を見たい場合は `cyd_display_log_scroll()` を使います。
 
 English supplement: `cyd_display_log_push()` keeps the view tailing the newest line. A scroll command changes `scroll_offset`, but the next push returns the view to the newest lines.
@@ -351,6 +354,8 @@ English supplement: `cyd_display_log_push()` keeps the view tailing the newest l
 初回表示では画面全体を描画します。2回目以降は、変更されたウィジェットの矩形から dirty rect を作り、16 px 高の strip sprite に描いて LCD へ転送します。
 
 この仕組みにより、毎回全画面を描き直すよりも描画量を抑えます。
+
+`cyd_display` が常に持つ画面は、差分の描画に要る `s_current_screen` と `s_previous_screen` の 2 枚 (約 6.9KB) と、表示キュー (長さ 3、heap に約 10KB) です。起動画面 (`cyd_display_show_boot_screen()`) は呼び出しのあいだだけ heap に組み立て、キューへ写したら解放します。
 
 English supplement: Dirty rendering relies on comparing current and previous widget structs. Avoid leaving uninitialized bytes in widgets because they may cause unnecessary redraws.
 
@@ -375,11 +380,13 @@ if (cyd_display_touch_to_grid(x, y, &col, &row)) {
 
 ## Hit Testing
 
-タッチの判定は、app が自分で持っている画面 buffer に対して `cyd_display_screen_hit_test()` で行います。タッチ座標にある有効な `CYD_DISPLAY_WIDGET_BUTTON` の `action_id` を返します。
+タッチの判定は、app が最後に組み立てた画面 buffer に対して `cyd_display_screen_hit_test()` で行います。タッチ座標にある有効な `CYD_DISPLAY_WIDGET_BUTTON` の `action_id` を返します。`screen` が `NULL` なら何にも当たりません。
+
+app は `cyd_ui` の共有の画面バッファで組み立てるので、判定に渡すのは `cyd_ui_screen_of()` の結果です。ほかの app や部品がバッファを組み立てた後は `NULL` が返り、隠れた画面のボタンが反応することはありません ([Shared Screen Buffer](cyd_ui.md#shared-screen-buffer))。
 
 ```c
 uint16_t action_id = 0;
-if (cyd_display_screen_hit_test(&s_screen, event.data.touch.x, event.data.touch.y, &action_id)) {
+if (cyd_display_screen_hit_test(cyd_ui_screen_of(&s_owner), event.data.touch.x, event.data.touch.y, &action_id)) {
     /* action_id のボタンが押された */
 }
 ```

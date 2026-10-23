@@ -61,7 +61,7 @@ typedef struct {
     text_input_touch_tracker_t touch;
 } text_input_session_t;
 
-static cyd_display_screen_t s_screen;
+static const cyd_ui_screen_owner_t s_screen_owner = { .name = "text_input" };
 static text_input_session_t s_session;
 
 static bool text_input_confirmed_action(const cyd_input_event_t *event, uint16_t *action_id)
@@ -71,7 +71,7 @@ static bool text_input_confirmed_action(const cyd_input_event_t *event, uint16_t
     }
     switch (event->data.touch.action) {
     case CYD_INPUT_TOUCH_ACTION_PRESS:
-        s_session.touch.pending = cyd_display_screen_hit_test(&s_screen,
+        s_session.touch.pending = cyd_display_screen_hit_test(cyd_ui_screen_of(&s_screen_owner),
                                                               event->data.touch.x,
                                                               event->data.touch.y,
                                                               &s_session.touch.action_id);
@@ -85,7 +85,7 @@ static bool text_input_confirmed_action(const cyd_input_event_t *event, uint16_t
         uint16_t released = 0;
         bool confirmed = s_session.touch.pending &&
                          !s_session.touch.long_pressed &&
-                         cyd_display_screen_hit_test(&s_screen,
+                         cyd_display_screen_hit_test(cyd_ui_screen_of(&s_screen_owner),
                                                      event->data.touch.x,
                                                      event->data.touch.y,
                                                      &released) &&
@@ -244,8 +244,8 @@ static esp_err_t text_input_render(void)
         .show_value = s_session.show_value,
         .url_scheme_step = s_session.url_scheme_step,
     };
-    cyd_text_input_view_build(&s_screen, &model);
-    return cyd_ui_submit(&s_screen);
+    cyd_text_input_view_build(cyd_ui_screen_borrow(&s_screen_owner), &model);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_screen_owner));
 }
 
 static void text_input_reset_transient_state(void)

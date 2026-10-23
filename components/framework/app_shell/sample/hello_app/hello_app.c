@@ -22,9 +22,9 @@ typedef struct {
     uint16_t action_id;
 } hello_app_action_tracker_t;
 
-static cyd_display_screen_t s_hello_screen;
-/* Each app hit-tests the screen it drew, so the info app keeps its own. */
-static cyd_display_screen_t s_info_screen;
+static const cyd_ui_screen_owner_t s_hello_screen_owner = { .name = "hello" };
+/* Both apps build into the shared buffer; each hit-tests only what it built last. */
+static const cyd_ui_screen_owner_t s_info_screen_owner = { .name = "hello_info" };
 static TickType_t s_hello_last_log_tick;
 static hello_app_action_tracker_t s_hello_action_tracker;
 static hello_app_action_tracker_t s_info_action_tracker;
@@ -89,9 +89,8 @@ static bool hello_app_touch_confirmed_action(const cyd_display_screen_t *screen,
  */
 static esp_err_t hello_app_show_main(void)
 {
-    cyd_display_screen_t *screen = &s_hello_screen;
+    cyd_display_screen_t *screen = cyd_ui_screen_borrow(&s_hello_screen_owner);
 
-    cyd_ui_screen_clear(screen);
     cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
     cyd_ui_add_label(screen, "hello_app", 0, 4, CYD_DISPLAY_GRID_COLS, 4,
                      CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_INFO);
@@ -106,9 +105,8 @@ static esp_err_t hello_app_show_main(void)
 
 static esp_err_t info_app_show_main(void)
 {
-    cyd_display_screen_t *screen = &s_info_screen;
+    cyd_display_screen_t *screen = cyd_ui_screen_borrow(&s_info_screen_owner);
 
-    cyd_ui_screen_clear(screen);
     cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
     cyd_ui_add_label(screen, "hello_app", 0, 4, CYD_DISPLAY_GRID_COLS, 4,
                      CYD_DISPLAY_ALIGN_CENTER, CYD_DISPLAY_FONT_TITLE, CYD_UI_THEME_INFO);
@@ -143,7 +141,7 @@ static esp_err_t hello_app_step(void *ctx)
     cyd_input_event_t event = { 0 };
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(HELLO_APP_INPUT_POLL_MS)) == ESP_OK) {
         uint16_t action_id = 0;
-        if (hello_app_touch_confirmed_action(&s_hello_screen, &event, &s_hello_action_tracker, &action_id) &&
+        if (hello_app_touch_confirmed_action(cyd_ui_screen_of(&s_hello_screen_owner), &event, &s_hello_action_tracker, &action_id) &&
             action_id == HELLO_APP_ACTION_INFO) {
             ESP_LOGI(TAG, "switching to info_app");
             ESP_RETURN_ON_ERROR(app_shell_switch_to(info_app_get_app()), TAG, "switch to info_app failed");
@@ -181,7 +179,7 @@ static esp_err_t info_app_step(void *ctx)
     cyd_input_event_t event = { 0 };
     if (cyd_input_read_event(&event, pdMS_TO_TICKS(HELLO_APP_INPUT_POLL_MS)) == ESP_OK) {
         uint16_t action_id = 0;
-        if (hello_app_touch_confirmed_action(&s_info_screen, &event, &s_info_action_tracker, &action_id) &&
+        if (hello_app_touch_confirmed_action(cyd_ui_screen_of(&s_info_screen_owner), &event, &s_info_action_tracker, &action_id) &&
             action_id == INFO_APP_ACTION_OK) {
             ESP_LOGI(TAG, "returning to hello_app");
             ESP_RETURN_ON_ERROR(app_shell_switch_to(hello_app_get_app()), TAG, "switch to hello_app failed");

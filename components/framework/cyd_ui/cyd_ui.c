@@ -98,6 +98,25 @@ void cyd_ui_screen_clear(cyd_display_screen_t *screen)
     }
 }
 
+/* The one buffer every app builds into; see cyd_ui_screen_borrow() in cyd_ui.h. */
+static cyd_display_screen_t s_shared_screen;
+static const cyd_ui_screen_owner_t *s_shared_screen_owner;
+
+cyd_display_screen_t *cyd_ui_screen_borrow(const cyd_ui_screen_owner_t *owner)
+{
+    cyd_ui_screen_clear(&s_shared_screen);
+    s_shared_screen_owner = owner;
+    return &s_shared_screen;
+}
+
+const cyd_display_screen_t *cyd_ui_screen_of(const cyd_ui_screen_owner_t *owner)
+{
+    if (owner == NULL || owner != s_shared_screen_owner) {
+        return NULL;
+    }
+    return &s_shared_screen;
+}
+
 static bool cyd_ui_add_widget(cyd_display_screen_t *screen, const cyd_display_widget_t *widget)
 {
     if (screen == NULL || widget == NULL || screen->widget_count >= CYD_DISPLAY_MAX_WIDGETS) {

@@ -67,7 +67,7 @@ static settings_pin_entry_t s_pin_entry;
 static settings_pin_setup_t s_pin_setup;
 static uint32_t s_pin_shown_wait;
 static cyd_system_apps_touch_tracker_t s_pin_tracker;
-static cyd_display_screen_t s_pin_screen;
+static const cyd_ui_screen_owner_t s_pin_screen_owner = { .name = "settings_pin" };
 static settings_pin_view_model_t s_pin_model;
 
 static const settings_pin_recovery_provider_t *s_pin_provider;
@@ -312,8 +312,8 @@ static esp_err_t settings_pin_show(void)
         }
     }
     s_pin_shown_wait = m->wait_seconds;
-    settings_pin_view_build(&s_pin_screen, m);
-    return cyd_ui_submit(&s_pin_screen);
+    settings_pin_view_build(cyd_ui_screen_borrow(&s_pin_screen_owner), m);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_pin_screen_owner));
 }
 
 static void settings_pin_show_message(const char *title, const char *detail)
@@ -324,8 +324,8 @@ static void settings_pin_show_message(const char *title, const char *detail)
         .message_title = title,
         .message_detail = detail,
     };
-    settings_pin_view_build(&s_pin_screen, &s_pin_model);
-    esp_err_t err = cyd_ui_submit(&s_pin_screen);
+    settings_pin_view_build(cyd_ui_screen_borrow(&s_pin_screen_owner), &s_pin_model);
+    esp_err_t err = cyd_ui_submit(cyd_ui_screen_of(&s_pin_screen_owner));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "showing a message failed: %s", esp_err_to_name(err));
     }
@@ -543,7 +543,7 @@ static esp_err_t settings_pin_app_step(void *ctx)
         return ESP_OK;
     }
     uint16_t action_id = 0;
-    if (!cyd_system_apps_touch_confirmed_action(&s_pin_screen, &event, &s_pin_tracker, &action_id)) {
+    if (!cyd_system_apps_touch_confirmed_action(cyd_ui_screen_of(&s_pin_screen_owner), &event, &s_pin_tracker, &action_id)) {
         return ESP_OK;
     }
     return settings_pin_handle_action(action_id);
