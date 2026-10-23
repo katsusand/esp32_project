@@ -21,6 +21,8 @@
 #include "cyd_ui.h"
 #include "cyd_wifi_setup.h"
 #include "radio_manager.h"
+#include "settings_pin.h"
+#include "settings_pin_internal.h"
 #include "system_settings_view.h"
 #include "time_sync.h"
 #include "wifi_connection.h"
@@ -78,6 +80,7 @@ typedef enum {
     CYD_SETTINGS_PAGE_NETWORK2,
     CYD_SETTINGS_PAGE_NVS,
     CYD_SETTINGS_PAGE_APPS,
+    CYD_SETTINGS_PAGE_SECURITY,
     CYD_SETTINGS_PAGE_COUNT,
 } cyd_settings_page_t;
 
@@ -87,6 +90,7 @@ typedef enum {
     CYD_SETTINGS_PAGE_GROUP_NETWORK,
     CYD_SETTINGS_PAGE_GROUP_NVS,
     CYD_SETTINGS_PAGE_GROUP_APPS,
+    CYD_SETTINGS_PAGE_GROUP_SECURITY,
 } cyd_settings_page_group_t;
 
 typedef enum {
@@ -97,6 +101,7 @@ typedef enum {
     CYD_SETTINGS_VIEW_CLEAR_NVS_CONFIRM,
     CYD_SETTINGS_VIEW_CLEAR_APP_DATA_CONFIRM,
     CYD_SETTINGS_VIEW_RESTART_CONFIRM,
+    CYD_SETTINGS_VIEW_PIN_OFF_CONFIRM,
 } cyd_settings_view_t;
 
 typedef enum {
@@ -188,7 +193,8 @@ static bool cyd_settings_page_uses_live_status(cyd_settings_page_t page);
 
 /*
  * True when settings is being re-entered from a screen it opened itself:
- * Wi-Fi setup, touch calibration, or an app's own settings screen.
+ * Wi-Fi setup, touch calibration, an app's own settings screen, or the PIN
+ * screen when it was opened from the security page to set a new PIN.
  *
  * Two things follow. The return target must not be overwritten, otherwise `<<`
  * would bounce back into the sub-screen. And the page the user was on must be
@@ -201,6 +207,7 @@ static bool cyd_settings_is_own_subscreen(const app_shell_app_t *app)
     return app != NULL &&
            (app == cyd_wifi_setup_get_app() ||
             app == system_touch_calibration_app_get_app() ||
+            app == settings_pin_app_get_app() ||
             cyd_settings_is_app_settings_screen(app));
 }
 
@@ -715,6 +722,13 @@ static void cyd_settings_fill_apps_page(system_settings_view_model_t *m)
     m->app_count = count;
 }
 
+static void cyd_settings_fill_security_page(system_settings_view_model_t *m)
+{
+    m->pin_enabled = settings_pin_is_enabled();
+    m->pin_info_lock = settings_pin_info_locked();
+    m->pin_has_recovery = settings_pin_has_recovery();
+}
+
 static void cyd_settings_fill_profiles(system_settings_view_model_t *m)
 {
     m->ssid_count = s_settings_profile_count;
@@ -802,6 +816,9 @@ static esp_err_t cyd_settings_app_show(void)
     case CYD_SETTINGS_VIEW_RESTART_CONFIRM:
         m->screen = SYSTEM_SETTINGS_VIEW_RESTART_CONFIRM;
         break;
+    case CYD_SETTINGS_VIEW_PIN_OFF_CONFIRM:
+        m->screen = SYSTEM_SETTINGS_VIEW_PIN_OFF_CONFIRM;
+        break;
     default: {
         const cyd_settings_page_def_t *def = cyd_settings_page_def(s_settings_page);
 
@@ -824,6 +841,11 @@ static esp_err_t cyd_settings_app_show(void)
 static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_app)
 {
     (void)ctx;
+    /* Normally the PIN was asked for before this enter(); this only catches a
+       product that never installed the guard. */
+    if (settings_pin_divert_unguarded(system_settings_app_get_app(), from_app)) {
+        return ESP_OK;
+    }
     const bool returning_from_subscreen = cyd_settings_is_own_subscreen(from_app);
 
     s_settings_force_initialize = nvs_health_requires_initialize();
@@ -1341,6 +1363,52 @@ static esp_err_t cyd_settings_handle_restart_confirm_action(uint16_t action_id, 
     return ESP_OK;
 }
 
+static esp_err_t cyd_settings_handle_security_page_action(uint16_t action_id, bool *handled)
+{
+    ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
+    *handled = false;
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_PIN_TOGGLE) {
+        *handled = true;
+        if (settings_pin_is_enabled()) {
+            s_settings_view = CYD_SETTINGS_VIEW_PIN_OFF_CONFIRM;
+            return cyd_settings_refresh();
+        }
+        /* The PIN screen asks for it twice and comes back here. */
+        return settings_pin_begin_new_pin();
+    }
+    if (action_id == CYD_SETTINGS_APP_ACTION_PIN_CHANGE && settings_pin_is_enabled()) {
+        *handled = true;
+        return settings_pin_begin_new_pin();
+    }
+    if (action_id == CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE && settings_pin_is_enabled()) {
+        ESP_RETURN_ON_ERROR(settings_pin_set_info_locked(!settings_pin_info_locked()), TAG,
+                            "saving the system info PIN setting failed");
+        *handled = true;
+        return cyd_settings_refresh();
+    }
+    return ESP_OK;
+}
+
+static esp_err_t cyd_settings_handle_pin_off_confirm_action(uint16_t action_id, bool *handled)
+{
+    ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
+    *handled = false;
+
+    if (action_id == CYD_SETTINGS_APP_ACTION_PIN_OFF_CANCEL) {
+        s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+        *handled = true;
+        return cyd_settings_refresh();
+    }
+    if (action_id == CYD_SETTINGS_APP_ACTION_PIN_OFF_CONFIRM) {
+        ESP_RETURN_ON_ERROR(settings_pin_turn_off(), TAG, "turning the PIN off failed");
+        s_settings_view = CYD_SETTINGS_VIEW_PAGES;
+        *handled = true;
+        return cyd_settings_refresh();
+    }
+    return ESP_OK;
+}
+
 static esp_err_t cyd_settings_handle_nvs_page_action(uint16_t action_id, bool *handled)
 {
     ESP_RETURN_ON_FALSE(handled != NULL, ESP_ERR_INVALID_ARG, TAG, "handled is null");
@@ -1381,6 +1449,17 @@ static const cyd_settings_page_def_t CYD_SETTINGS_PAGES[] = {
         .fill = cyd_settings_fill_general_page,
         .screen = SYSTEM_SETTINGS_VIEW_GENERAL,
         .handle_action = cyd_settings_handle_general_page_action,
+    },
+    {
+        .id = CYD_SETTINGS_PAGE_SECURITY,
+        .has_steppers = false,
+        .title = "セキュリティ",
+        .group = CYD_SETTINGS_PAGE_GROUP_SECURITY,
+        .uses_live_status = false,
+        .is_enabled = NULL,
+        .fill = cyd_settings_fill_security_page,
+        .screen = SYSTEM_SETTINGS_VIEW_SECURITY,
+        .handle_action = cyd_settings_handle_security_page_action,
     },
     {
         .id = CYD_SETTINGS_PAGE_TIME,
@@ -1489,6 +1568,8 @@ static esp_err_t cyd_settings_handle_active_screen_action(uint16_t action_id, bo
         return cyd_settings_handle_clear_app_data_confirm_action(action_id, handled);
     case CYD_SETTINGS_VIEW_RESTART_CONFIRM:
         return cyd_settings_handle_restart_confirm_action(action_id, handled);
+    case CYD_SETTINGS_VIEW_PIN_OFF_CONFIRM:
+        return cyd_settings_handle_pin_off_confirm_action(action_id, handled);
     case CYD_SETTINGS_VIEW_PAGES:
     default:
         break;
@@ -1510,6 +1591,11 @@ static esp_err_t cyd_settings_app_step(void *ctx)
 {
     (void)ctx;
 
+    /* The PIN closes again after the idle timeout, even where the shell's idle
+       return has nowhere to go (settings is the home app after a boot here). */
+    if (settings_pin_relock_if_idle(system_settings_app_get_app())) {
+        return ESP_OK;
+    }
     cyd_settings_service_sync_now_pending();
     ESP_RETURN_ON_ERROR(cyd_settings_refresh_if_live_status_changed(),
                         TAG,
@@ -1599,4 +1685,22 @@ void system_settings_open_clear_touch_calib_confirm(void)
 void system_settings_open_clear_nvs_confirm(void)
 {
     system_settings_set_direct_view(CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM);
+}
+
+/*
+ * The forced Initialize NVS screen is about to open: the boot found stored
+ * data this firmware cannot read and armed the confirmation. That screen has
+ * no way out but erasing everything, so the PIN guard lets it through.
+ */
+bool system_settings_forced_initialize_armed(void)
+{
+    portENTER_CRITICAL(&s_settings_direct_view_lock);
+    bool armed = s_settings_pending_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM;
+    portEXIT_CRITICAL(&s_settings_direct_view_lock);
+    return armed && nvs_health_requires_initialize();
+}
+
+void system_settings_discard_direct_view(void)
+{
+    system_settings_set_direct_view(CYD_SETTINGS_DIRECT_VIEW_NONE);
 }

@@ -160,6 +160,20 @@ SYSTEM_APPS="${PROJECT_ROOT}/components/apps/cyd_system_apps"
 
 run_case "System settings screens" "${BUILD_DIR}/test_system_settings_view"
 
+# Settings PIN: digits, the wait after wrong PINs, typing it twice, the stored hash
+"${CC}" "${CFLAGS[@]}" -I"${SYSTEM_APPS}" \
+    "${SYSTEM_APPS}/settings_pin_logic.c" "${SCRIPT_DIR}/test_settings_pin_logic.c" \
+    -o "${BUILD_DIR}/test_settings_pin_logic"
+
+run_case "Settings PIN logic" "${BUILD_DIR}/test_settings_pin_logic"
+
+# Settings PIN screen: every mode, notice, digit count and wait; the keypad's size and spacing
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_APPS}" \
+    "${UI_TEST_SRCS[@]}" "${SYSTEM_APPS}/settings_pin_view.c" "${SCRIPT_DIR}/test_settings_pin_view.c" \
+    -o "${BUILD_DIR}/test_settings_pin_view"
+
+run_case "Settings PIN screen" "${BUILD_DIR}/test_settings_pin_view"
+
 # System information: every page with the longest values, measured with the real fonts
 "${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_APPS}" \
     "${UI_TEST_SRCS[@]}" "${SYSTEM_APPS}/system_settings_view.c" "${SYSTEM_APPS}/system_info_view.c" \

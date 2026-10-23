@@ -476,6 +476,7 @@ source ~/.espressif/tools/activate_idf_v5.5.6.sh; python "$IDF_PATH/tools/idf.py
 - [Build Feature Switches](docs/build_feature_switches.md)
 - [CYD Wi-Fi Setup](docs/cyd_wifi_setup.md)
 - [CYD System Apps](docs/cyd_system_apps.md)
+- [Settings PIN](docs/settings_pin.md)
 - [ESP32 Wi-Fi STA](docs/esp32_wifi_sta.md)
 - [Wi-Fi Connection](docs/wifi_connection.md)
 - [Wi-Fi RSSI History](docs/wifi_rssi_history.md)

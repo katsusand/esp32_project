@@ -17,6 +17,8 @@ main
        -> sd_card_status (SD card: its own task mounts it and starts the error log)
        -> time_tick / app_scheduler (service only)
        -> Wi-Fi / radio / time sync
+       -> settings_pin_init (PIN state, app_shell enter guard)
+       -> NVS health check
        -> register apps (clock + its settings screen + its alarms)
        -> app_shell(cyd_clock_app)
 ```
@@ -38,6 +40,8 @@ English contract: the composition registers apps, not app features. The clock's 
 以前はここで Wi-Fi setup ウィザードを予約していました。settings に変えたのは、settings が Wi-Fi の設定・タッチ補正・すべて初期化のいずれにも届く単一の行き先であり、「Wi-Fi profile が存在するかどうか」で意味が変わる shortcut より予測しやすいためです。またウィザードの予約は Wi-Fi build feature の `#if` の内側にあったため、Wi-Fi を無効にしたビルドでは shortcut が何もしていませんでした。
 
 NVS が不正な場合は、この判定より前に settings と「保存データが読めません」の確認画面が選ばれており、そちらが優先されます。
+
+設定の PIN がオンのときは、長押しで settings を初期 app にしても、最初に PIN の画面が出ます。`settings_pin_init()` が `app_shell` の enter guard を入れ、初期 app も guard を通るためです。composition は NVS の健全性の確認より前に `settings_pin_init()` を呼びます。読めない PIN の記録も「保存データが読めません」へ回すためです ([Settings PIN](settings_pin.md#integrating-into-a-product))。
 
 ## Feature Switches
 

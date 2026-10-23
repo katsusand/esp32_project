@@ -68,6 +68,38 @@ esp_err_t app_shell_start(const app_shell_app_t *initial_app);
 esp_err_t app_shell_switch_to(const app_shell_app_t *next_app);
 
 /*
+ * app_shell_switch_to(), but next_app's enter() receives `from_app` instead of
+ * the app that is active when the switch lands.
+ *
+ * For an app that stood in front of another one and now hands over, such as a
+ * PIN screen shown before settings: settings must see the app the user came
+ * from, not the PIN screen, or its back button would lead to the PIN screen.
+ * `from_app` may be NULL, which keeps a boot entry a boot entry.
+ */
+esp_err_t app_shell_switch_to_from(const app_shell_app_t *next_app, const app_shell_app_t *from_app);
+
+/*
+ * Enter guard: sees every app about to be entered, the initial app included.
+ *
+ * It returns `next_app` to let the switch through, or another app to enter in
+ * its place (for example a PIN screen that later continues to `next_app` with
+ * app_shell_switch_to_from()). NULL counts as `next_app`. When it returns the
+ * app that is already active, the switch is dropped. `from_app` is what
+ * next_app's enter() would receive.
+ *
+ * English contract: one guard at a time; setting another replaces it, NULL
+ * removes it. Install it before app_shell_start() so the initial app is
+ * guarded too. It runs on the shell task, before the active app's leave(), and
+ * must not block. Because every switch passes through it, a guard can also
+ * tell when the user has left a group of apps.
+ */
+typedef const app_shell_app_t *(*app_shell_enter_guard_fn)(void *ctx,
+                                                           const app_shell_app_t *next_app,
+                                                           const app_shell_app_t *from_app);
+void app_shell_set_enter_guard(app_shell_enter_guard_fn guard, void *ctx);
+bool app_shell_has_enter_guard(void);
+
+/*
  * Back navigation with a guaranteed destination.
  *
  * Apps remember the `from_app` handed to enter() and return there. That pointer

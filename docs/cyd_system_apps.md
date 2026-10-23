@@ -19,6 +19,7 @@ English supplement: These apps are intentionally lightweight shell apps. They sh
 - `system_info_app.c` / `system_info_view.c`: 概要・診断・Wi-Fi 診断・電波・NVS の各ページの値の取得と描画、lifecycle
 - `system_settings_app.c`: settings の state、描画、action dispatch、direct-view API
 - `system_touch_calibration_app.c`: touch calibration の実行と戻り遷移
+- `settings_pin_app.c` / `settings_pin_view.c` / `settings_pin_logic.c` / `settings_pin_store.c`: 設定の PIN（enter guard、PIN の画面、照合と待ち時間、NVS）。公開 API は `include/settings_pin.h` ([Settings PIN](settings_pin.md))
 - `cyd_system_apps_common.c`: info / settings が共有する入力確定処理と状態表示整形
 - `cyd_system_apps_internal.h`: component 内だけで使う定数・型・宣言
 
@@ -63,7 +64,9 @@ sub-view (「保存済みのネットワーク」や各確認画面) の「戻�
 
 English contract: the back button (「戻る」) on the settings root reboots only when settings is where the device booted to; otherwise it navigates back. Sub-views keep their own back semantics.
 
-settings は「settings 自身が開いた画面」から戻ってきた場合だけ、戻り先を更新しません。判定は `cyd_settings_is_own_subscreen()` で、Wi-Fi Setup、Touch Calibration、登録済み app の固有設定画面が対象です。`cyd_settings_is_app_settings_screen()` は、そのうち app 固有設定画面だけを判定する内部 helper です。registry の app 本体まで対象にすると、clock から settings に入ったときに戻り先が記録されず「戻る」が効かなくなります。
+settings は「settings 自身が開いた画面」から戻ってきた場合だけ、戻り先を更新しません。判定は `cyd_settings_is_own_subscreen()` で、Wi-Fi Setup、Touch Calibration、登録済み app の固有設定画面、「セキュリティ」ページから開いた PIN の画面が対象です。
+
+設定の PIN がオンのとき、settings の前に出る PIN の画面は `app_shell_switch_to_from()` で本来の遷移元を渡して settings へ進みます。そのため settings から見た `from_app` は PIN の画面ではなく、時計など本来の遷移元（起動時なら NULL）です。上の表の「戻る」の振る舞いは PIN があっても変わりません。`cyd_settings_is_app_settings_screen()` は、そのうち app 固有設定画面だけを判定する内部 helper です。registry の app 本体まで対象にすると、clock から settings に入ったときに戻り先が記録されず「戻る」が効かなくなります。
 
 保存済みSSID一覧、touch calibration消去確認、NVS消去確認は、次のAPIで次回のsettings遷移先として直接指定できます。
 
@@ -124,6 +127,7 @@ prefix を持たない namespace は `unknown` になります。ここには ES
 | 表示名 | page ID | 内容 |
 |---|---|---|
 | 一般 | `GENERAL` | 「画面の明るさ」「配色」「無操作で戻る」の増減、「タッチ位置の補正」(touch calibration app へ) |
+| セキュリティ | `SECURITY` | 「設定の PIN」「情報画面の PIN」のオン・オフ、「PIN を変更する」([Settings PIN](settings_pin.md#settings-page)) |
 | 時刻 | `TIME` | 現在時刻、日付と曜日、時計が合っているか、「タイムゾーン」の増減 |
 | ネットワーク1 | `NETWORK1` | Wi-Fi の状態、「保存済みのネットワーク」(サブ画面)、「Wi-Fi を設定する」(`wifi_setup app` へ) |
 | ネットワーク2 | `NETWORK2` | 「同期の間隔」「Wi-Fi切断」の増減、「今すぐ時刻を合わせる」、時刻同期の状態と前回の結果 |
