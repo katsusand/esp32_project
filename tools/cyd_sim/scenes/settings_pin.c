@@ -113,7 +113,7 @@ static void build_security(cyd_display_screen_t *screen, bool enabled, bool info
 
     memset(&m, 0, sizeof(m));
     m.screen = SYSTEM_SETTINGS_VIEW_SECURITY;
-    m.page_title = "セキュリティ";
+    m.page_title = "設定のPIN";
     m.page_index = 1;
     m.page_count = 7;
     m.pin_enabled = enabled;
@@ -151,9 +151,9 @@ static void build_off_confirm(cyd_display_screen_t *screen, unsigned frame)
 }
 
 static const cyd_sim_scene_t k_scenes[] = {
-    { "sys_security", "設定: セキュリティ (PIN オフ)", NULL, build_security_off },
-    { "sys_security_on", "設定: セキュリティ (PIN オン)", "情報画面にも PIN", build_security_on },
-    { "sys_security_recovery", "設定: セキュリティ (解除の手段あり)", "派生側が解除の手段を登録", build_security_recovery },
+    { "sys_security", "設定: 設定のPIN (オフ)", "情報も保護はグレー", build_security_off },
+    { "sys_security_on", "設定: 設定のPIN (オン)", "情報も保護もオン", build_security_on },
+    { "sys_security_recovery", "設定: 設定のPIN (解除の手段あり)", "派生側が解除の手段を登録", build_security_recovery },
     { "sys_pin_off", "確認: PIN をオフにする", NULL, build_off_confirm },
     { "pin_enter", "PIN: 入力", NULL, build_enter },
     { "pin_enter_typing", "PIN: 6 桁入力済み", "決定が押せる", build_enter_typing },

@@ -1453,7 +1453,7 @@ static const cyd_settings_page_def_t CYD_SETTINGS_PAGES[] = {
     {
         .id = CYD_SETTINGS_PAGE_SECURITY,
         .has_steppers = false,
-        .title = "セキュリティ",
+        .title = "設定のPIN",
         .group = CYD_SETTINGS_PAGE_GROUP_SECURITY,
         .uses_live_status = false,
         .is_enabled = NULL,

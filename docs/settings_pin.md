@@ -23,7 +23,7 @@ English contract: while the PIN is off, the enter guard lets every switch throug
 | 設定 (`system_settings_app_get_app()`) | 時計の設定ボタン、起動時の長押し、`system_settings_open_*()` からの直接表示 |
 | Wi-Fi の設定 (`cyd_wifi_setup_get_app()`) | 設定の「Wi-Fi を設定する」、時計の「Wi-Fi に接続できません」画面のボタン |
 | 各アプリの設定画面 (`app_registry` の `settings_app`) | 設定の「アプリ」ページ |
-| システム情報 (`system_info_app_get_app()`) | 「情報画面の PIN」をオンにしたときだけ |
+| システム情報 (`system_info_app_get_app()`) | 「情報も保護」をオンにしたときだけ |
 
 起動時の長押しは、composition が最初のアプリを settings にするだけです。最初のアプリも guard を通るので、長押しで PIN を飛ばすことはできません。そのとき PIN の画面の「戻る」には戻る先が無い（settings が home app でもある）ので、端末を再起動して通常の起動に戻ります。
 
@@ -120,13 +120,15 @@ rows 10-28  [1][2][3] / [4][5][6] / [7][8][9] / [削除][0][決定]
 
 ## Settings Page
 
-設定の「セキュリティ」ページ（「一般」の次）。
+設定の「設定のPIN」ページ（「一般」の次。内部の page ID は `SECURITY`）。
 
 | 行 | 内容 |
 |---|---|
-| 設定の PIN | 「オンにする」で新しい PIN を 2 回入れる。「オフにする」は確認のあと PIN を消す |
-| 情報画面の PIN | システム情報にも PIN を求める。PIN がオフのあいだは押せない |
+| PIN機能 | オンにすると新しい PIN を 2 回入れる。オフにするときは確認のあと PIN を消す |
+| 情報も保護 | システム情報にも PIN を求める。PIN機能がオフのあいだは見出しごとグレーになり、押せない |
 | PIN を変更する | 新しい PIN を 2 回入れる。PIN がオフのあいだは押せない |
+
+「PIN機能」と「情報も保護」はスイッチで、状態はつまみの位置と色で表し、「オン」「オフ」の字は出しません（2026-10-23、実機確認でのユーザーの判断）。行全体が 1 つのボタンなので、行のどこを押しても切り替わります。高さは 40px です。
 
 オン・オフ・変更は、このページ、つまり設定に入れている人だけができます。変更のときに今の PIN を聞き直すことはしません。
 
@@ -232,6 +234,6 @@ if (nvs_health_requires_initialize()) {
 
 - `test/host/test_settings_pin_logic.c`: 入力の桁、待ち時間の表、2 回入力の一致・不一致、ハッシュの照合（塩と回数が効くこと、ハッシュの失敗は不一致になること）
 - `test/host/test_settings_pin_view.c`: 全モード・全通知・全桁数・1 秒〜1 時間の全待ち時間で文字が枠に収まること、キーの大きさと重なり、数字が画面に出ないこと、解除のボタン
-- `test/host/test_system_settings_view.c`: 「セキュリティ」ページの全組み合わせと、オフの確認画面
+- `test/host/test_system_settings_view.c`: 「設定のPIN」ページの全組み合わせ（つまみの位置、グレーの見出し、「オン」「オフ」の字が無いこと）と、オフの確認画面
 
 PBKDF2 そのものと NVS、guard の遷移は実機で確かめます（PR のチェックリスト）。
