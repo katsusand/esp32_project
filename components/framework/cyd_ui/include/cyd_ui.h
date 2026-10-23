@@ -234,6 +234,43 @@ esp_err_t cyd_ui_add_settings_chrome(cyd_display_screen_t *screen,
 void cyd_ui_screen_clear(cyd_display_screen_t *screen);
 
 /*
+ * The shared screen buffer.
+ *
+ * A cyd_display_screen_t is about 3.4KB and submit() copies it into the
+ * display queue, so an app needs its buffer only to build a screen and to
+ * hit-test what it last built. Only one app is in front at a time, so all
+ * apps build into this one buffer instead of keeping one each.
+ *
+ * Each builder names itself with the address of its own owner object:
+ *
+ *   static const cyd_ui_screen_owner_t s_owner = { .name = "settings" };
+ *
+ *   my_view_build(cyd_ui_screen_borrow(&s_owner), &model);
+ *   cyd_ui_submit(cyd_ui_screen_of(&s_owner));
+ *   ...
+ *   cyd_display_screen_hit_test(cyd_ui_screen_of(&s_owner), x, y, &id);
+ *
+ * English contract:
+ *  - borrow() clears the buffer, records `owner` as its builder and returns it.
+ *  - screen_of() returns the buffer only while `owner` is the last builder,
+ *    else NULL. cyd_display_screen_hit_test() finds nothing on NULL, so an app
+ *    whose screen was replaced (another app entered, or a text input session
+ *    drew over it) cannot act on buttons it no longer shows. Such an app must
+ *    build again before its taps work.
+ *  - The buffer holds nothing between builds that an app may rely on: always
+ *    build the whole screen after borrow(), never patch the last one.
+ *  - Shell task only, like every draw (see "Display Ownership" in
+ *    docs/app_shell.md). No lock.
+ *  - Owner objects must be distinct objects; the name is for logs only.
+ */
+typedef struct {
+    const char *name;
+} cyd_ui_screen_owner_t;
+
+cyd_display_screen_t *cyd_ui_screen_borrow(const cyd_ui_screen_owner_t *owner);
+const cyd_display_screen_t *cyd_ui_screen_of(const cyd_ui_screen_owner_t *owner);
+
+/*
  * Legacy ASCII font: do not use in new code.
  *
  * cyd_ui_add_text() and the cyd_ui_add_button*() family draw with the old

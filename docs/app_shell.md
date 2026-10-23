@@ -231,6 +231,8 @@ English supplement: `hello` is a learning app for observing app switching withou
 
 このルールにより、タッチ/描画競合を減らします。
 
+画面を組み立てるバッファも、前面の app が 1 つなので `cyd_ui` の共有の 1 枚を借りて使います ([Shared Screen Buffer](cyd_ui.md#shared-screen-buffer))。lock がないので、shell task 以外から借りてはいけません。
+
 ## Configuration
 
 主な設定項目は `idf.py menuconfig` の `App Shell` から変更できます。

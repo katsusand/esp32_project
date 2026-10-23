@@ -39,7 +39,7 @@ typedef struct {
     uint16_t action_id;
 } cyd_clock_settings_touch_tracker_t;
 
-static cyd_display_screen_t s_clock_settings_screen;
+static const cyd_ui_screen_owner_t s_clock_settings_screen_owner = { .name = "clock_settings" };
 static const app_shell_app_t *s_clock_settings_return_app;
 static cyd_clock_settings_page_t s_clock_settings_page = CYD_CLOCK_SETTINGS_PAGE_ALARM1;
 static cyd_clock_settings_touch_tracker_t s_clock_settings_touch_tracker;
@@ -54,7 +54,7 @@ static bool cyd_clock_settings_touch_confirmed_action(const cyd_input_event_t *e
 
     switch (event->data.touch.action) {
     case CYD_INPUT_TOUCH_ACTION_PRESS:
-        tracker->pending = cyd_display_screen_hit_test(&s_clock_settings_screen,
+        tracker->pending = cyd_display_screen_hit_test(cyd_ui_screen_of(&s_clock_settings_screen_owner),
                                                        event->data.touch.x,
                                                        event->data.touch.y,
                                                        &tracker->action_id);
@@ -70,7 +70,7 @@ static bool cyd_clock_settings_touch_confirmed_action(const cyd_input_event_t *e
         uint16_t release_action_id = 0;
         bool confirmed = tracker->pending &&
                          !tracker->long_pressed &&
-                         cyd_display_screen_hit_test(&s_clock_settings_screen,
+                         cyd_display_screen_hit_test(cyd_ui_screen_of(&s_clock_settings_screen_owner),
                                                      event->data.touch.x,
                                                      event->data.touch.y,
                                                      &release_action_id) &&
@@ -118,7 +118,7 @@ static bool cyd_clock_settings_touch_stepper_action(const cyd_input_event_t *eve
         return false;
     }
 
-    if (!cyd_display_screen_hit_test(&s_clock_settings_screen,
+    if (!cyd_display_screen_hit_test(cyd_ui_screen_of(&s_clock_settings_screen_owner),
                                      event->data.touch.x,
                                      event->data.touch.y,
                                      &pressed_action_id)) {
@@ -206,8 +206,8 @@ static esp_err_t cyd_clock_settings_show(void)
         model.minute = alarm.minute;
         model.weekday_mask = alarm.weekday_mask;
     }
-    cyd_clock_settings_view_build(&s_clock_settings_screen, &model);
-    return cyd_ui_submit(&s_clock_settings_screen);
+    cyd_clock_settings_view_build(cyd_ui_screen_borrow(&s_clock_settings_screen_owner), &model);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_clock_settings_screen_owner));
 }
 
 static esp_err_t cyd_clock_settings_handle_alarm_action(uint16_t action_id, bool *handled)

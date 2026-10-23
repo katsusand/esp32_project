@@ -10,15 +10,14 @@
 #define TAG "cyd_wifi_setup"
 
 static const app_shell_app_t *s_wifi_setup_return_app;
-static cyd_display_screen_t s_wifi_setup_disabled_screen;
+static const cyd_ui_screen_owner_t s_wifi_setup_disabled_screen_owner = { .name = "wifi_setup_disabled" };
 
 static esp_err_t cyd_wifi_setup_disabled_enter(void *ctx, const app_shell_app_t *from_app)
 {
     (void)ctx;
     s_wifi_setup_return_app = from_app;
-    cyd_display_screen_t *screen = &s_wifi_setup_disabled_screen;
+    cyd_display_screen_t *screen = cyd_ui_screen_borrow(&s_wifi_setup_disabled_screen_owner);
 
-    cyd_ui_screen_clear(screen);
     cyd_ui_add_panel(screen, 0, 0, CYD_DISPLAY_GRID_COLS, CYD_DISPLAY_GRID_ROWS, CYD_UI_THEME_BG, 0, 0, 0);
     cyd_ui_add_settings_title(screen, "Wi-Fi の設定");
     cyd_ui_add_label(screen, "このファームウェアでは Wi-Fi を使いません", 1, 10, 38, 3,

@@ -20,7 +20,7 @@ typedef struct {
     uint16_t action_id;
 } app_launcher_touch_tracker_t;
 
-static cyd_display_screen_t s_launcher_screen;
+static const cyd_ui_screen_owner_t s_launcher_screen_owner = { .name = "launcher" };
 static const app_shell_app_t *s_launcher_return_app;
 static app_launcher_touch_tracker_t s_launcher_tracker;
 static size_t s_launcher_page;
@@ -35,7 +35,7 @@ static bool app_launcher_touch_confirmed_action(const cyd_input_event_t *event,
 
     switch (event->data.touch.action) {
     case CYD_INPUT_TOUCH_ACTION_PRESS:
-        tracker->pending = cyd_display_screen_hit_test(&s_launcher_screen,
+        tracker->pending = cyd_display_screen_hit_test(cyd_ui_screen_of(&s_launcher_screen_owner),
                                                        event->data.touch.x,
                                                        event->data.touch.y,
                                                        &tracker->action_id);
@@ -47,7 +47,7 @@ static bool app_launcher_touch_confirmed_action(const cyd_input_event_t *event,
         tracker->pending = false;
 
         uint16_t released_action = 0;
-        if (!cyd_display_screen_hit_test(&s_launcher_screen,
+        if (!cyd_display_screen_hit_test(cyd_ui_screen_of(&s_launcher_screen_owner),
                                          event->data.touch.x,
                                          event->data.touch.y,
                                          &released_action) ||
@@ -96,8 +96,8 @@ static esp_err_t app_launcher_show(void)
         model.titles[i] = entry != NULL ? entry->title : NULL;
         model.count = i + 1U;
     }
-    app_launcher_view_build(&s_launcher_screen, &model);
-    return cyd_ui_submit(&s_launcher_screen);
+    app_launcher_view_build(cyd_ui_screen_borrow(&s_launcher_screen_owner), &model);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_launcher_screen_owner));
 }
 
 static esp_err_t app_launcher_enter(void *ctx, const app_shell_app_t *from_app)

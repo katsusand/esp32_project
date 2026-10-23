@@ -42,7 +42,7 @@
 /* The SD card problem icon: two grid cells square, in the top-right corner,
    which the title (row 2 and below) never reaches. */
 
-static cyd_display_screen_t s_clock_screen;
+static const cyd_ui_screen_owner_t s_clock_screen_owner = { .name = "clock" };
 static bool s_clock_use_24_hour = true;
 
 /* What the ALARM button shows and cycles through; the alarms themselves are
@@ -167,7 +167,7 @@ static bool cyd_clock_app_touch_confirmed_action(const cyd_input_event_t *event,
     case CYD_INPUT_TOUCH_ACTION_PRESS:
         {
             uint16_t pressed_action_id = 0;
-            tracker->pending = cyd_display_screen_hit_test(&s_clock_screen,
+            tracker->pending = cyd_display_screen_hit_test(cyd_ui_screen_of(&s_clock_screen_owner),
                                                            event->data.touch.x,
                                                            event->data.touch.y,
                                                            &pressed_action_id);
@@ -185,7 +185,7 @@ static bool cyd_clock_app_touch_confirmed_action(const cyd_input_event_t *event,
         uint16_t release_action_id = 0;
         bool confirmed = tracker->pending &&
                          !tracker->long_pressed &&
-                         cyd_display_screen_hit_test(&s_clock_screen,
+                         cyd_display_screen_hit_test(cyd_ui_screen_of(&s_clock_screen_owner),
                                                      event->data.touch.x,
                                                      event->data.touch.y,
                                                      &release_action_id) &&
@@ -392,8 +392,8 @@ static esp_err_t cyd_clock_app_show_clock(void)
     model.time_known = cyd_clock_app_time_is_synced(&model.local_time);
     model.sync = cyd_clock_app_view_sync(&model.last_sync_at);
     model.wifi = cyd_clock_app_view_wifi();
-    cyd_clock_view_build(&s_clock_screen, &model);
-    return cyd_ui_submit(&s_clock_screen);
+    cyd_clock_view_build(cyd_ui_screen_borrow(&s_clock_screen_owner), &model);
+    return cyd_ui_submit(cyd_ui_screen_of(&s_clock_screen_owner));
 }
 
 static bool cyd_clock_app_should_enter_wifi_setup(void)
@@ -461,8 +461,8 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_failed(void)
     };
     cyd_clock_mode_button_tracker_t tracker = { 0 };
 
-    cyd_clock_view_build(&s_clock_screen, &model);
-    cyd_clock_app_log_on_error(cyd_ui_submit(&s_clock_screen), "show Wi-Fi failed screen");
+    cyd_clock_view_build(cyd_ui_screen_borrow(&s_clock_screen_owner), &model);
+    cyd_clock_app_log_on_error(cyd_ui_submit(cyd_ui_screen_of(&s_clock_screen_owner)), "show Wi-Fi failed screen");
 
     while (true) {
         cyd_input_event_t event = { 0 };
@@ -520,8 +520,8 @@ static cyd_clock_app_mode_t cyd_clock_app_run_wifi_retrying(void)
             } else if (progress.phase == WIFI_CONNECTION_PROGRESS_SEARCHING) {
                 model.retry = CYD_CLOCK_VIEW_RETRY_SEARCHING;
             }
-            cyd_clock_view_build(&s_clock_screen, &model);
-            cyd_clock_app_log_on_error(cyd_ui_submit(&s_clock_screen), "show Wi-Fi retry screen");
+            cyd_clock_view_build(cyd_ui_screen_borrow(&s_clock_screen_owner), &model);
+            cyd_clock_app_log_on_error(cyd_ui_submit(cyd_ui_screen_of(&s_clock_screen_owner)), "show Wi-Fi retry screen");
             last_progress = progress;
         }
 
