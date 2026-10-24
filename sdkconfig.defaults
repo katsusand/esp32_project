@@ -46,6 +46,19 @@ CONFIG_APP_SHELL_TASK_STACK_SIZE=10240
 # otherwise fail with FR_INVALID_NAME and the log would silently never be written.
 #
 CONFIG_FATFS_LFN_HEAP=y
+
+#
+# FAT: size the buffers by each volume's sector and allocate one only per open
+# file. Off (the IDF default), FatFs keeps a buffer of the largest sector size
+# (4096, from wear levelling) for every volume and every file slot
+# (CONFIG_SD_CARD_STORAGE_MOUNT_MAX_FILES) from mount on, although the SD card
+# uses 512-byte sectors. That was about 25KB of heap held for the whole uptime,
+# and on a cyd_time_puncher monitor unit the first TLS handshake then failed for
+# lack of heap (2026-10-24: 13.7KB free before connecting with it off, 38.7KB
+# with it on). An existing sdkconfig does not pick this up: see
+# docs/sd_card_storage.md.
+#
+CONFIG_FATFS_USE_DYN_BUFFERS=y
 CONFIG_WIFI_CONNECTION_TASK_STACK_SIZE=9216
 
 #
