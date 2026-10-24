@@ -57,6 +57,24 @@ English contract: `init` / `deinit` / `probe` / `get_space` have no locking and 
 
 ログのように継続して書くデータは、直接 `fopen()` せず [SD Card Writer](sd_card_writer.md) の stream を使ってください。書き込みを1つの task にまとめ、呼び出し元が SD を待たないようにしています。
 
+## Memory
+
+`sdkconfig.defaults` は `CONFIG_FATFS_USE_DYN_BUFFERS=y` にしています。
+
+- オフ (ESP-IDF の既定): FatFs は、一番大きいセクタ (wear levelling の 4096 バイト) に合わせたバッファを、ボリュームごとに 1 つ、開けるファイルの枠 (`CONFIG_SD_CARD_STORAGE_MOUNT_MAX_FILES`、今は 5) ごとに 1 つ、mount のときから持ち続ける。SD カードのセクタは 512 バイトなのに、4KB を約 6 つ持つことになる
+- オン: バッファはボリュームのセクタの大きさで取られ、ファイルの分は開いているあいだだけ取られる
+
+派生の cyd_time_puncher の監視端末では、オフのとき `sd_card_status` のタスクがヒープを 43.8KB 持ち続け、最初の TLS 接続が証明書の確認の途中でヒープ不足になり失敗しました (接続前の空きヒープ: オフ 13.7KB、オン 38.7KB。2026-10-24)。
+
+**既にある `sdkconfig` には自動では入りません。** ESP-IDF は、`sdkconfig` が無いときにだけ `sdkconfig.defaults` を読みます。`idf.py fullclean` も `build/` を消すだけです。手元の `sdkconfig` に `# CONFIG_FATFS_USE_DYN_BUFFERS is not set` とあれば、次のどちらかで有効にしてください。
+
+- `./scripts/idf-menuconfig.sh` で Component config → FAT Filesystem support → Use dynamic buffers をオンにする
+- 必要なローカルの設定を控えてから、プロジェクト直下の `sdkconfig` を消して、作り直す
+
+確かめるには: `grep FATFS_USE_DYN_BUFFERS sdkconfig` が `CONFIG_FATFS_USE_DYN_BUFFERS=y` を返すこと。
+
+English supplement: this is a heap setting, so `esp_idf_size` (static DRAM) does not show it; compare free heap on the device. Each open file costs one 512-byte buffer while it is open.
+
 ## Notes
 
 - FAT format を前提とし、mount 失敗時の自動 format は行いません。カードの中身を、黙って消さないためです。exFAT（32 GB 超のカードに多い）も扱えません
