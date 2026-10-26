@@ -20,6 +20,7 @@ English supplement: These apps are intentionally lightweight shell apps. They sh
 - `system_settings_app.c`: settings の state、描画、action dispatch、direct-view API
 - `system_touch_calibration_app.c`: touch calibration の実行と戻り遷移
 - `settings_pin_app.c` / `settings_pin_view.c` / `settings_pin_logic.c` / `settings_pin_store.c`: 設定の PIN（enter guard、PIN の画面、照合と待ち時間、NVS）。公開 API は `include/settings_pin.h` ([Settings PIN](settings_pin.md))
+- `system_settings_fix.c`: 製品が固定した項目の表（[Fixed Items](#fixed-items)）。公開 API は `include/system_settings_fix.h`
 - `cyd_system_apps_common.c`: info / settings が共有する入力確定処理と状態表示整形
 - `cyd_system_apps_internal.h`: component 内だけで使う定数・型・宣言
 
@@ -165,6 +166,70 @@ prefix を持たない namespace は `unknown` になります。ここには ES
 NVS blob の version / size / 文字列終端などが現在 firmware の想定フォーマットと一致しない場合は、起動時に「保存データが読めません」の確認画面へ強制遷移します。この画面には「やめる」が無く、「初期化する」のあとの再起動が必要です。原因 (`nvs_health_get_summary()`、英語) は小さく表示します。
 
 English supplement: Structurally incompatible persistent data now routes the product into a forced initialize flow instead of silently trusting or rewriting the broken payload.
+
+### Fixed Items
+
+製品が、設定の項目を固定できます。現場の人（PIN を知っている人も含む）が、製品が動けなくなる値にするのを防ぐためです。例: 打刻端末と監視端末は、「Wi-Fi切断」を「しない」から変えられないようにします。設定 PIN が「誰が設定に入れるか」を守るのに対し、こちらは「入れる人でも、何を変えられないか」を決めます。
+
+```c
+#include "system_settings_fix.h"
+
+/* 製品の composition で、app_shell_start() の前に */
+cyd_<product>_composition_start_optional("radio manager start failed", radio_manager_start());
+(void)radio_manager_set_idle_timeout_seconds(0);   /* 値を決めるのはこの行 */
+cyd_<product>_composition_start_optional("fix Wi-Fi idle failed",
+                                         system_settings_fix(SYSTEM_SETTINGS_ITEM_WIFI_IDLE,
+                                                             SYSTEM_SETTINGS_FIX_HIDDEN, NULL));
+...
+return app_shell_start(initial_app);
+```
+
+**順番**: サービスの開始 → 値の設定 → `system_settings_fix()` → `app_shell_start()`。
+
+- 値を固定するのは 2 行目。`system_settings_fix()` は、設定画面で変えられないようにするだけ
+- 2 行目の値は、NVS に保存されていた値に勝つ。そのあと利用者が設定を離れると、settings がその値を保存し直すので、NVS も揃う
+
+| 種類 | 画面 |
+|---|---|
+| `SYSTEM_SETTINGS_FIX_READONLY` | 見出しと値をグレーにし、「−」「+」を出さない。`reason` を値の下に出す |
+| `SYSTEM_SETTINGS_FIX_HIDDEN` | 行を出さない。行の場所は空けたまま（他の行は動かない）。ページの項目が全部隠れたら、そのページを出さず、下の「n/N」にも数えない |
+
+**指針**: 現場で値を見る意味がある項目だけ READONLY にし、理由を付けます（例: 「常時接続（監視のため）」）。見る意味が無い項目は HIDDEN にします。
+
+固定できる項目 (`system_settings_item_t`):
+
+| 項目 | ページ | 固定の種類 |
+|---|---|---|
+| `BRIGHTNESS` 画面の明るさ | 一般 | READONLY / HIDDEN |
+| `THEME` 配色 | 一般 | READONLY / HIDDEN |
+| `IDLE_RETURN` 無操作で戻る | 一般 | READONLY / HIDDEN。HIDDEN なら下の説明の行も消える。READONLY で理由があれば、説明の行の代わりに理由を出す |
+| `TIMEZONE` タイムゾーン | 時刻 | READONLY / HIDDEN |
+| `SYNC_INTERVAL` 同期の間隔 | ネットワーク2 | READONLY / HIDDEN |
+| `WIFI_IDLE` Wi-Fi切断 | ネットワーク2 | READONLY / HIDDEN |
+| `TOUCH_CALIBRATE` タッチ位置の補正 | 一般 | HIDDEN |
+| `STORED_SSIDS` 保存済みのネットワーク | ネットワーク1 | HIDDEN |
+| `WIFI_SETUP` Wi-Fi を設定する | ネットワーク1 | HIDDEN |
+| `SYNC_NOW` 今すぐ時刻を合わせる | ネットワーク2 | HIDDEN |
+| `CLEAR_TOUCH_CALIB` タッチ補正を消去 | 初期化 | HIDDEN |
+| `CLEAR_APP_DATA` アプリのデータを消去 | 初期化 | HIDDEN |
+| `CLEAR_NVS` すべて初期化 | 初期化 | HIDDEN。NVS が読めないときの強制の初期化は、隠しても開く（回復の手段のため） |
+
+- 操作の項目は HIDDEN だけ。READONLY は `ESP_ERR_NOT_SUPPORTED` を返す。見せる値が無く、押せないボタンが残るだけになるため
+- 「PIN機能」は固定できない（設定 PIN の仕組みそのものなので）
+- 隠した項目へ別のアプリが直接開かせる画面（`system_settings_open_stored_ssids()`、`system_settings_open_clear_touch_calib_confirm()`、強制でない `system_settings_open_clear_nvs_confirm()`）も開かない
+- 固定するのは**設定アプリの画面だけ**。たとえば `WIFI_SETUP` を隠しても、時計の「Wi-Fi に接続できません」画面から Wi-Fi の設定へは行ける
+- `reason` は複製しないので文字列リテラルを渡す。16px で 200px、全角 12 文字まで。製品のソースに書いた文字はフォントの作り直しで入る
+
+**固定できるのは composition だけです。** `app_shell_start()` のあとに呼ぶと `ESP_ERR_INVALID_STATE` を返します。固定する場所が 1 か所なら「なぜ変えられないか」を追いやすく、アプリの切り替えや、2 つのアプリで値が食い違うことを考えずに済むためです（2026-10-26、派生プロジェクトとの相談で決定）。アプリの都合は、そのアプリを載せる composition が知っています。
+
+呼ぶたびに起動時のログに出ます。HIDDEN の行は画面に出ないので、開発者がシリアルで理由を見つけられるようにするためです。
+
+```text
+I (1234) settings: wifi_idle fixed (hidden)
+I (1235) settings: brightness fixed (read-only): 屋外で見るため
+```
+
+English contract: RAM only; call any number of times before `app_shell_start()`, the last call per item wins and `SYSTEM_SETTINGS_FIX_NONE` undoes it. With no calls, every settings screen is exactly as before (the cyd_sim exports of the existing scenes are byte-identical). A tap on a fixed item is ignored even if its button were on screen.
 
 ### Simulator-Friendly Split
 

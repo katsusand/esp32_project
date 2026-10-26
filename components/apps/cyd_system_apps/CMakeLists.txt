@@ -8,5 +8,6 @@ idf_component_register(SRCS "cyd_system_apps_common.c"
                             "settings_pin_logic.c"
                             "settings_pin_store.c"
                             "settings_pin_view.c"
+                            "system_settings_fix.c"
                     INCLUDE_DIRS "include"
                     REQUIRES app_registry app_shell nvs_schema cyd_display cyd_input cyd_ui cyd_wifi_setup esp_app_format esp_hw_support esp_system esp_timer heap mbedtls nvs_flash nvs_health time_sync wifi_connection wifi_profile_store wifi_rssi_history radio_manager)

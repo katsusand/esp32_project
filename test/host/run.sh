@@ -154,11 +154,19 @@ run_case "Japanese UI shared parts" "${BUILD_DIR}/test_ui_common"
 
 # System settings: every page, dialog and stepper value, measured with the real fonts
 SYSTEM_APPS="${PROJECT_ROOT}/components/apps/cyd_system_apps"
-"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_APPS}" \
-    "${UI_TEST_SRCS[@]}" "${SYSTEM_APPS}/system_settings_view.c" "${SCRIPT_DIR}/test_system_settings_view.c" \
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_APPS}" -I"${SYSTEM_APPS}/include" \
+    "${UI_TEST_SRCS[@]}" "${SYSTEM_APPS}/system_settings_view.c" "${SYSTEM_APPS}/system_settings_fix.c" \
+    "${SCRIPT_DIR}/test_system_settings_view.c" \
     -o "${BUILD_DIR}/test_system_settings_view"
 
 run_case "System settings screens" "${BUILD_DIR}/test_system_settings_view"
+
+# Fixed settings items: accepted fixes, a page of hidden items, taps on fixed items
+"${CC}" "${CFLAGS[@]}" -I"${SYSTEM_APPS}" -I"${SYSTEM_APPS}/include" \
+    "${SYSTEM_APPS}/system_settings_fix.c" "${SCRIPT_DIR}/test_settings_fix_logic.c" \
+    -o "${BUILD_DIR}/test_settings_fix_logic"
+
+run_case "Fixed settings items" "${BUILD_DIR}/test_settings_fix_logic"
 
 # Settings PIN: digits, the wait after wrong PINs, typing it twice, the stored hash
 "${CC}" "${CFLAGS[@]}" -I"${SYSTEM_APPS}" \
@@ -175,7 +183,7 @@ run_case "Settings PIN logic" "${BUILD_DIR}/test_settings_pin_logic"
 run_case "Settings PIN screen" "${BUILD_DIR}/test_settings_pin_view"
 
 # System information: every page with the longest values, measured with the real fonts
-"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_APPS}" \
+"${CC}" "${CFLAGS[@]}" -std=gnu11 "${UI_TEST_INCLUDES[@]}" -I"${SYSTEM_APPS}" -I"${SYSTEM_APPS}/include" \
     "${UI_TEST_SRCS[@]}" "${SYSTEM_APPS}/system_settings_view.c" "${SYSTEM_APPS}/system_info_view.c" \
     "${SCRIPT_DIR}/test_system_info_view.c" -o "${BUILD_DIR}/test_system_info_view"
 

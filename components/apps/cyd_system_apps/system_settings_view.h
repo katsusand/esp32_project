@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "cyd_display.h"
+#include "system_settings_fix.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -183,6 +184,14 @@ typedef struct {
     /* MESSAGE */
     const char *message_title;
     const char *message_detail;
+
+    /*
+     * Items the product fixed (system_settings_fix()), by
+     * system_settings_item_t. All zero (SYSTEM_SETTINGS_FIX_NONE) draws every
+     * page exactly as without fixes.
+     */
+    system_settings_fix_mode_t fix[SYSTEM_SETTINGS_ITEM_COUNT];
+    const char *fix_reason[SYSTEM_SETTINGS_ITEM_COUNT];
 } system_settings_view_model_t;
 
 /* Words for the service states, shared with the system info screens. */

@@ -84,6 +84,7 @@ English contract: the shared simulator sources (`sim_main.cpp`, `sim_catalog.h`,
 - `settings_*`: 設定画面の共通枠と増減行。`settings_legacy_mix` は、旧書体のままのページが新しい枠の中でどう見えるか
 - `keyboard_*`: キーボード画面 (`cyd_text_input`) の全状態 (パスワード、大文字、記号 2 種、URL、数字だけ)
 - `sys_*`: システム設定 (`system_settings_view.c`) の全ページ、主な状態、全ダイアログ。`sys_security*` と `sys_pin_off` は設定の PIN のページ
+- `sys_fixed_*`: 製品が固定した項目（隠した行、変えられない行と理由、項目が減った初期化のページ）
 - `pin_*`: 設定の PIN の画面 (`settings_pin_view.c`)。入力、違う、待ち時間、新しい PIN の 1 回目・2 回目、不一致、解除のボタン、起動時にやめたとき
 - `info_*`: システム情報 (`system_info_view.c`) の全ページ
 - `wifi_*`: Wi-Fi 設定 (`cyd_wifi_setup_view.c`) の一覧・検索中・見つからない・エラー・接続中・保存・失敗 (理由別)
