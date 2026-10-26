@@ -181,6 +181,130 @@ static void test_security(void)
                   "turning the PIN off can be cancelled or confirmed");
 }
 
+/*
+ * Fixed items. Each value item on its page: READONLY keeps the label and the
+ * value with the reason and no buttons; HIDDEN removes it and moves nothing
+ * else. Each action: HIDDEN removes the button only.
+ */
+static bool same_widget(const cyd_display_widget_t *a, const cyd_display_widget_t *b)
+{
+    return a->type == b->type && a->col == b->col && a->row == b->row && a->span_cols == b->span_cols &&
+           a->span_rows == b->span_rows && a->action_id == b->action_id &&
+           strcmp(cyd_display_widget_text(a), cyd_display_widget_text(b)) == 0;
+}
+
+/* True when every widget of `fixed` is also in `plain`, unmoved: nothing shifts. */
+static bool subset_of(const cyd_display_screen_t *fixed, const cyd_display_screen_t *plain)
+{
+    for (size_t i = 0; i < fixed->widget_count; ++i) {
+        bool found = false;
+        for (size_t j = 0; j < plain->widget_count && !found; ++j) {
+            found = same_widget(&fixed->widgets[i], &plain->widgets[j]);
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static system_settings_view_model_t full_page(system_settings_view_screen_t screen)
+{
+    system_settings_view_model_t m = base(screen);
+    m.brightness_percent = 75;
+    m.can_dim = m.can_brighten = true;
+    m.idle_return_seconds = 1790;
+    m.can_idle_return_down = m.can_idle_return_up = true;
+    m.theme_name = "高コントラスト";
+    m.can_theme_up = true;
+    m.timezone_label = system_settings_view_timezone_label(system_settings_view_timezone_count() - 1U);
+    m.can_timezone_down = true;
+    m.sync_interval_minutes = 1439;
+    m.can_sync_interval_down = m.can_sync_interval_up = true;
+    m.wifi_idle_seconds = 2700;
+    m.can_wifi_idle_down = m.can_wifi_idle_up = true;
+    m.sync_now_enabled = true;
+    return m;
+}
+
+static void test_fixed(void)
+{
+    static const struct {
+        system_settings_item_t item;
+        system_settings_view_screen_t screen;
+        uint16_t actions[2];
+        const char *label;
+    } items[] = {
+        { SYSTEM_SETTINGS_ITEM_BRIGHTNESS, SYSTEM_SETTINGS_VIEW_GENERAL,
+          { CYD_SETTINGS_APP_ACTION_BRIGHTNESS_DOWN, CYD_SETTINGS_APP_ACTION_BRIGHTNESS_UP }, "画面の明るさ" },
+        { SYSTEM_SETTINGS_ITEM_THEME, SYSTEM_SETTINGS_VIEW_GENERAL,
+          { CYD_SETTINGS_APP_ACTION_THEME_DOWN, CYD_SETTINGS_APP_ACTION_THEME_UP }, "配色" },
+        { SYSTEM_SETTINGS_ITEM_IDLE_RETURN, SYSTEM_SETTINGS_VIEW_GENERAL,
+          { CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN, CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP }, "無操作で戻る" },
+        { SYSTEM_SETTINGS_ITEM_TIMEZONE, SYSTEM_SETTINGS_VIEW_TIME,
+          { CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN, CYD_SETTINGS_APP_ACTION_TIMEZONE_UP }, "タイムゾーン" },
+        { SYSTEM_SETTINGS_ITEM_SYNC_INTERVAL, SYSTEM_SETTINGS_VIEW_NETWORK2,
+          { CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN, CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP }, "同期の間隔" },
+        { SYSTEM_SETTINGS_ITEM_WIFI_IDLE, SYSTEM_SETTINGS_VIEW_NETWORK2,
+          { CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN, CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP }, "Wi-Fi切断" },
+        { SYSTEM_SETTINGS_ITEM_TOUCH_CALIBRATE, SYSTEM_SETTINGS_VIEW_GENERAL,
+          { CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE, 0 }, NULL },
+        { SYSTEM_SETTINGS_ITEM_STORED_SSIDS, SYSTEM_SETTINGS_VIEW_NETWORK1,
+          { CYD_SETTINGS_APP_ACTION_STORED_SSIDS, 0 }, NULL },
+        { SYSTEM_SETTINGS_ITEM_WIFI_SETUP, SYSTEM_SETTINGS_VIEW_NETWORK1, { CYD_SETTINGS_APP_ACTION_WIFI, 0 }, NULL },
+        { SYSTEM_SETTINGS_ITEM_SYNC_NOW, SYSTEM_SETTINGS_VIEW_NETWORK2, { CYD_SETTINGS_APP_ACTION_SYNC_NOW, 0 }, NULL },
+        { SYSTEM_SETTINGS_ITEM_CLEAR_TOUCH_CALIB, SYSTEM_SETTINGS_VIEW_NVS,
+          { CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB, 0 }, NULL },
+        { SYSTEM_SETTINGS_ITEM_CLEAR_APP_DATA, SYSTEM_SETTINGS_VIEW_NVS,
+          { CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA, 0 }, NULL },
+        { SYSTEM_SETTINGS_ITEM_CLEAR_NVS, SYSTEM_SETTINGS_VIEW_NVS, { CYD_SETTINGS_APP_ACTION_CLEAR_NVS, 0 }, NULL },
+    };
+    static cyd_display_screen_t plain;
+    _Static_assert(sizeof(items) / sizeof(items[0]) == SYSTEM_SETTINGS_ITEM_COUNT, "test every item");
+
+    for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); ++i) {
+        char name[96];
+        system_settings_view_model_t m = full_page(items[i].screen);
+        system_settings_view_build(&plain, &m);
+
+        m.fix[items[i].item] = SYSTEM_SETTINGS_FIX_HIDDEN;
+        snprintf(name, sizeof(name), "%s hidden", system_settings_item_name(items[i].item));
+        build_and_check(name, &m);
+        ui_test_check(find_action(items[i].actions[0]) == NULL &&
+                          (items[i].actions[1] == 0 || find_action(items[i].actions[1]) == NULL) &&
+                          (items[i].label == NULL || !has_text(items[i].label)),
+                      "a hidden item is not drawn");
+        ui_test_check(s_screen.widget_count < plain.widget_count && subset_of(&s_screen, &plain),
+                      "the other rows stay where they were");
+
+        if (items[i].label == NULL) {
+            continue;
+        }
+        m.fix[items[i].item] = SYSTEM_SETTINGS_FIX_READONLY;
+        m.fix_reason[items[i].item] = "接続したままにするため";
+        snprintf(name, sizeof(name), "%s read-only", system_settings_item_name(items[i].item));
+        build_and_check(name, &m);
+        ui_test_check(find_action(items[i].actions[0]) == NULL && find_action(items[i].actions[1]) == NULL &&
+                          has_text(items[i].label) && has_text("接続したままにするため"),
+                      "a read-only item keeps its label and reason, without buttons");
+        m.fix_reason[items[i].item] = NULL;
+        snprintf(name, sizeof(name), "%s read-only, no reason", system_settings_item_name(items[i].item));
+        build_and_check(name, &m);
+    }
+
+    /* The longest documented reason, 12 full-width characters, under the value. */
+    system_settings_view_model_t m = full_page(SYSTEM_SETTINGS_VIEW_NETWORK2);
+    m.fix[SYSTEM_SETTINGS_ITEM_WIFI_IDLE] = SYSTEM_SETTINGS_FIX_READONLY;
+    m.fix_reason[SYSTEM_SETTINGS_ITEM_WIFI_IDLE] = "あいうえおかきくけこさし";
+    build_and_check("a 12-character reason", &m);
+
+    /* Hiding the idle return also hides its explanation line. */
+    m = full_page(SYSTEM_SETTINGS_VIEW_GENERAL);
+    m.fix[SYSTEM_SETTINGS_ITEM_IDLE_RETURN] = SYSTEM_SETTINGS_FIX_HIDDEN;
+    system_settings_view_build(&s_screen, &m);
+    ui_test_check(!has_text("操作がないとメイン画面に戻ります"), "a hidden idle return takes its note along");
+}
+
 static void test_value_sweeps(void)
 {
     static const uint16_t wifi_idle[] = { 0, 30, 60, 180, 300, 600, 900, 1200, 1800, 2700, 3600 };
@@ -292,5 +416,7 @@ int main(void)
     test_dialogs();
     printf("security\n");
     test_security();
+    printf("fixed items\n");
+    test_fixed();
     return ui_test_finish();
 }

@@ -224,6 +224,59 @@ static void view_stepper(cyd_display_screen_t *screen,
                     VIEW_PLUS_COL, down_action, up_action, can_down, can_up);
 }
 
+static system_settings_fix_mode_t view_fix(const system_settings_view_model_t *m, system_settings_item_t item)
+{
+    return (unsigned)item < SYSTEM_SETTINGS_ITEM_COUNT ? m->fix[item] : SYSTEM_SETTINGS_FIX_NONE;
+}
+
+static bool view_shown(const system_settings_view_model_t *m, system_settings_item_t item)
+{
+    return view_fix(m, item) != SYSTEM_SETTINGS_FIX_HIDDEN;
+}
+
+/*
+ * A stepper row, or its fixed forms.
+ *
+ * HIDDEN draws nothing and leaves the rows empty, so every other row keeps its
+ * place. READONLY keeps the label and the value, greyed out, with no buttons,
+ * and the product's reason under the value. The value stays at the height it
+ * has in a normal row; the reason takes the spare row under the row:
+ *
+ *   cols 1-12 label  (rows r..r+3) | 14-38  value   (rows r+1, r+2)
+ *                                  |        reason  (rows r+3, r+4)
+ */
+static void view_value_row(cyd_display_screen_t *screen,
+                           const system_settings_view_model_t *m,
+                           system_settings_item_t item,
+                           const char *label,
+                           const char *value,
+                           uint8_t row,
+                           uint16_t down_action,
+                           uint16_t up_action,
+                           bool can_down,
+                           bool can_up)
+{
+    const system_settings_fix_mode_t fix = view_fix(m, item);
+    const char *reason = m->fix_reason[item];
+
+    if (fix == SYSTEM_SETTINGS_FIX_HIDDEN) {
+        return;
+    }
+    if (fix != SYSTEM_SETTINGS_FIX_READONLY) {
+        view_stepper(screen, label, value, row, down_action, up_action, can_down, can_up);
+        return;
+    }
+    const bool has_reason = reason != NULL && reason[0] != '\0';
+    cyd_ui_add_label(screen, label, VIEW_LABEL_COL, row, VIEW_LABEL_COLS, VIEW_ROW_ROWS, CYD_DISPLAY_ALIGN_LEFT,
+                     CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_DISABLED);
+    cyd_ui_add_label(screen, value, VIEW_MINUS_COL, row, CYD_DISPLAY_GRID_COLS - 1 - VIEW_MINUS_COL, VIEW_ROW_ROWS,
+                     CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_DISABLED);
+    if (has_reason) {
+        cyd_ui_add_label(screen, reason, VIEW_MINUS_COL, (uint8_t)(row + 3), CYD_DISPLAY_GRID_COLS - 1 - VIEW_MINUS_COL,
+                         2, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    }
+}
+
 /* An outlined full-width button: the ordinary "go somewhere" action. */
 static void view_wide_button(cyd_display_screen_t *screen, const char *text, uint8_t row, uint8_t rows,
                              uint16_t color, uint16_t tint, uint16_t action_id, bool enabled)
@@ -302,16 +355,26 @@ static void view_general(cyd_display_screen_t *screen, const system_settings_vie
     snprintf(brightness, sizeof(brightness), "%u%%", (unsigned)m->brightness_percent);
     view_format_seconds(idle_return, sizeof(idle_return), m->idle_return_seconds);
 
-    view_stepper(screen, "画面の明るさ", brightness, 5, CYD_SETTINGS_APP_ACTION_BRIGHTNESS_DOWN,
-                 CYD_SETTINGS_APP_ACTION_BRIGHTNESS_UP, m->can_dim, m->can_brighten);
+    view_value_row(screen, m, SYSTEM_SETTINGS_ITEM_BRIGHTNESS, "画面の明るさ", brightness, 5,
+                   CYD_SETTINGS_APP_ACTION_BRIGHTNESS_DOWN, CYD_SETTINGS_APP_ACTION_BRIGHTNESS_UP, m->can_dim,
+                   m->can_brighten);
     /* The whole screen redraws in the new colours the moment it changes. */
-    view_stepper(screen, "配色", view_text(m->theme_name), 10, CYD_SETTINGS_APP_ACTION_THEME_DOWN,
-                 CYD_SETTINGS_APP_ACTION_THEME_UP, m->can_theme_down, m->can_theme_up);
-    view_stepper(screen, "無操作で戻る", idle_return, 15, CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN,
-                 CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP, m->can_idle_return_down, m->can_idle_return_up);
-    view_line(screen, "操作がないとメイン画面に戻ります", 19, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
-    view_wide_button(screen, "タッチ位置の補正", 22, 4, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
-                     CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE, true);
+    view_value_row(screen, m, SYSTEM_SETTINGS_ITEM_THEME, "配色", view_text(m->theme_name), 10,
+                   CYD_SETTINGS_APP_ACTION_THEME_DOWN, CYD_SETTINGS_APP_ACTION_THEME_UP, m->can_theme_down,
+                   m->can_theme_up);
+    view_value_row(screen, m, SYSTEM_SETTINGS_ITEM_IDLE_RETURN, "無操作で戻る", idle_return, 15,
+                   CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN, CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP,
+                   m->can_idle_return_down, m->can_idle_return_up);
+    /* A read-only idle return with a reason puts the reason where this note was. */
+    if (view_fix(m, SYSTEM_SETTINGS_ITEM_IDLE_RETURN) == SYSTEM_SETTINGS_FIX_NONE ||
+        (view_fix(m, SYSTEM_SETTINGS_ITEM_IDLE_RETURN) == SYSTEM_SETTINGS_FIX_READONLY &&
+         m->fix_reason[SYSTEM_SETTINGS_ITEM_IDLE_RETURN] == NULL)) {
+        view_line(screen, "操作がないとメイン画面に戻ります", 19, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    }
+    if (view_shown(m, SYSTEM_SETTINGS_ITEM_TOUCH_CALIBRATE)) {
+        view_wide_button(screen, "タッチ位置の補正", 22, 4, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
+                         CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE, true);
+    }
 }
 
 static void view_time(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
@@ -332,18 +395,23 @@ static void view_time(cyd_display_screen_t *screen, const system_settings_view_m
     } else {
         view_line(screen, "時計がまだ合っていません", 11, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_WARNING);
     }
-    view_stepper(screen, "タイムゾーン", view_text(m->timezone_label), 16, CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN,
-                 CYD_SETTINGS_APP_ACTION_TIMEZONE_UP, m->can_timezone_down, m->can_timezone_up);
+    view_value_row(screen, m, SYSTEM_SETTINGS_ITEM_TIMEZONE, "タイムゾーン", view_text(m->timezone_label), 16,
+                   CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN, CYD_SETTINGS_APP_ACTION_TIMEZONE_UP, m->can_timezone_down,
+                   m->can_timezone_up);
 }
 
 static void view_network1(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
 {
     view_item(screen, "Wi-Fi", system_settings_view_wifi_text(m->wifi), 5, system_settings_view_wifi_color(m->wifi));
-    view_wide_button(screen, "保存済みのネットワーク", 10, 5, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
-                     CYD_SETTINGS_APP_ACTION_STORED_SSIDS, true);
-    cyd_ui_add_styled_button(screen, "Wi-Fi を設定する", VIEW_WIDE_COL, 17, VIEW_WIDE_COLS, 5,
-                             CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_ON_PRIMARY, CYD_UI_THEME_PRIMARY,
-                             CYD_UI_THEME_PRIMARY, 0, CYD_SETTINGS_APP_ACTION_WIFI, true);
+    if (view_shown(m, SYSTEM_SETTINGS_ITEM_STORED_SSIDS)) {
+        view_wide_button(screen, "保存済みのネットワーク", 10, 5, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
+                         CYD_SETTINGS_APP_ACTION_STORED_SSIDS, true);
+    }
+    if (view_shown(m, SYSTEM_SETTINGS_ITEM_WIFI_SETUP)) {
+        cyd_ui_add_styled_button(screen, "Wi-Fi を設定する", VIEW_WIDE_COL, 17, VIEW_WIDE_COLS, 5,
+                                 CYD_DISPLAY_FONT_BODY_BOLD, CYD_UI_THEME_ON_PRIMARY, CYD_UI_THEME_PRIMARY,
+                                 CYD_UI_THEME_PRIMARY, 0, CYD_SETTINGS_APP_ACTION_WIFI, true);
+    }
 }
 
 static void view_network2(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
@@ -358,12 +426,16 @@ static void view_network2(cyd_display_screen_t *screen, const system_settings_vi
     snprintf(state, sizeof(state), "時刻同期: %s", system_settings_view_sync_text(m->sync));
     system_settings_view_format_sync_last(last, sizeof(last), m->sync_last, &m->last_sync_at, true);
 
-    view_stepper(screen, "同期の間隔", interval, 4, CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN,
-                 CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP, m->can_sync_interval_down, m->can_sync_interval_up);
-    view_stepper(screen, "Wi-Fi切断", idle, 9, CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN,
-                 CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP, m->can_wifi_idle_down, m->can_wifi_idle_up);
-    view_wide_button(screen, "今すぐ時刻を合わせる", 14, 5, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
-                     CYD_SETTINGS_APP_ACTION_SYNC_NOW, m->sync_now_enabled);
+    view_value_row(screen, m, SYSTEM_SETTINGS_ITEM_SYNC_INTERVAL, "同期の間隔", interval, 4,
+                   CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN, CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP,
+                   m->can_sync_interval_down, m->can_sync_interval_up);
+    view_value_row(screen, m, SYSTEM_SETTINGS_ITEM_WIFI_IDLE, "Wi-Fi切断", idle, 9,
+                   CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN, CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP, m->can_wifi_idle_down,
+                   m->can_wifi_idle_up);
+    if (view_shown(m, SYSTEM_SETTINGS_ITEM_SYNC_NOW)) {
+        view_wide_button(screen, "今すぐ時刻を合わせる", 14, 5, CYD_UI_THEME_PRIMARY_SOFT, CYD_UI_THEME_SURFACE,
+                         CYD_SETTINGS_APP_ACTION_SYNC_NOW, m->sync_now_enabled);
+    }
     view_line(screen, state, 20, CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_TEXT);
     view_line(screen, last, 23,
               CYD_DISPLAY_FONT_BODY,
@@ -374,7 +446,7 @@ static void view_network2(cyd_display_screen_t *screen, const system_settings_vi
  * Three actions of increasing blast radius, ordered that way on purpose. Only
  * the last erases everything, so only it is red.
  */
-static void view_nvs(cyd_display_screen_t *screen)
+static void view_nvs(cyd_display_screen_t *screen, const system_settings_view_model_t *m)
 {
     static const struct {
         const char *label;
@@ -382,16 +454,20 @@ static void view_nvs(cyd_display_screen_t *screen)
         uint8_t row;
         bool danger;
         uint16_t action_id;
+        system_settings_item_t item;
     } actions[] = {
         { "タッチ補正を消去", "保存したタッチ補正だけを消します", 4, false,
-          CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB },
+          CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB, SYSTEM_SETTINGS_ITEM_CLEAR_TOUCH_CALIB },
         { "アプリのデータを消去", "アプリが保存したデータだけを消します", 11, false,
-          CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA },
+          CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA, SYSTEM_SETTINGS_ITEM_CLEAR_APP_DATA },
         { "すべて初期化", "Wi-Fi・設定・補正をすべて消します", 18, true,
-          CYD_SETTINGS_APP_ACTION_CLEAR_NVS },
+          CYD_SETTINGS_APP_ACTION_CLEAR_NVS, SYSTEM_SETTINGS_ITEM_CLEAR_NVS },
     };
 
     for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i) {
+        if (!view_shown(m, actions[i].item)) {
+            continue;
+        }
         view_wide_button(screen, actions[i].label, actions[i].row, 4,
                          actions[i].danger ? CYD_UI_THEME_DANGER_SOFT : CYD_UI_THEME_WARNING,
                          actions[i].danger ? CYD_UI_THEME_DANGER_TINT : CYD_UI_THEME_WARNING_TINT,
@@ -500,7 +576,7 @@ void system_settings_view_build(cyd_display_screen_t *screen, const system_setti
         view_network2(screen, m);
         break;
     case SYSTEM_SETTINGS_VIEW_NVS:
-        view_nvs(screen);
+        view_nvs(screen, m);
         break;
     case SYSTEM_SETTINGS_VIEW_APPS:
         view_apps(screen, m);

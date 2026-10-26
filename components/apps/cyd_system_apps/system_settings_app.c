@@ -23,6 +23,8 @@
 #include "radio_manager.h"
 #include "settings_pin.h"
 #include "settings_pin_internal.h"
+#include "system_settings_fix.h"
+#include "system_settings_fix_internal.h"
 #include "system_settings_view.h"
 #include "time_sync.h"
 #include "wifi_connection.h"
@@ -322,6 +324,56 @@ static bool cyd_settings_status_snapshot_equal(const cyd_settings_status_snapsho
 static bool cyd_settings_network_page_enabled(void)
 {
     return APP_WIFI_STA_ENABLED != 0;
+}
+
+/*
+ * Which settings item each button belongs to. A tap on a fixed item is
+ * ignored even if its button were somehow on screen.
+ */
+static const system_settings_action_item_t CYD_SETTINGS_ACTION_ITEMS[] = {
+    { CYD_SETTINGS_APP_ACTION_BRIGHTNESS_DOWN, SYSTEM_SETTINGS_ITEM_BRIGHTNESS },
+    { CYD_SETTINGS_APP_ACTION_BRIGHTNESS_UP, SYSTEM_SETTINGS_ITEM_BRIGHTNESS },
+    { CYD_SETTINGS_APP_ACTION_THEME_DOWN, SYSTEM_SETTINGS_ITEM_THEME },
+    { CYD_SETTINGS_APP_ACTION_THEME_UP, SYSTEM_SETTINGS_ITEM_THEME },
+    { CYD_SETTINGS_APP_ACTION_IDLE_RETURN_DOWN, SYSTEM_SETTINGS_ITEM_IDLE_RETURN },
+    { CYD_SETTINGS_APP_ACTION_IDLE_RETURN_UP, SYSTEM_SETTINGS_ITEM_IDLE_RETURN },
+    { CYD_SETTINGS_APP_ACTION_TIMEZONE_DOWN, SYSTEM_SETTINGS_ITEM_TIMEZONE },
+    { CYD_SETTINGS_APP_ACTION_TIMEZONE_UP, SYSTEM_SETTINGS_ITEM_TIMEZONE },
+    { CYD_SETTINGS_APP_ACTION_TIME_SYNC_DOWN, SYSTEM_SETTINGS_ITEM_SYNC_INTERVAL },
+    { CYD_SETTINGS_APP_ACTION_TIME_SYNC_UP, SYSTEM_SETTINGS_ITEM_SYNC_INTERVAL },
+    { CYD_SETTINGS_APP_ACTION_WIFI_IDLE_DOWN, SYSTEM_SETTINGS_ITEM_WIFI_IDLE },
+    { CYD_SETTINGS_APP_ACTION_WIFI_IDLE_UP, SYSTEM_SETTINGS_ITEM_WIFI_IDLE },
+    { CYD_SETTINGS_APP_ACTION_TOUCH_CALIBRATE, SYSTEM_SETTINGS_ITEM_TOUCH_CALIBRATE },
+    { CYD_SETTINGS_APP_ACTION_STORED_SSIDS, SYSTEM_SETTINGS_ITEM_STORED_SSIDS },
+    { CYD_SETTINGS_APP_ACTION_WIFI, SYSTEM_SETTINGS_ITEM_WIFI_SETUP },
+    { CYD_SETTINGS_APP_ACTION_SYNC_NOW, SYSTEM_SETTINGS_ITEM_SYNC_NOW },
+    { CYD_SETTINGS_APP_ACTION_CLEAR_TOUCH_CALIB, SYSTEM_SETTINGS_ITEM_CLEAR_TOUCH_CALIB },
+    { CYD_SETTINGS_APP_ACTION_CLEAR_APP_DATA, SYSTEM_SETTINGS_ITEM_CLEAR_APP_DATA },
+    { CYD_SETTINGS_APP_ACTION_CLEAR_NVS, SYSTEM_SETTINGS_ITEM_CLEAR_NVS },
+};
+
+static bool cyd_settings_action_is_fixed(uint16_t action_id)
+{
+    return system_settings_fixed_action(action_id, CYD_SETTINGS_ACTION_ITEMS,
+                                        sizeof(CYD_SETTINGS_ACTION_ITEMS) / sizeof(CYD_SETTINGS_ACTION_ITEMS[0]));
+}
+
+/* A page whose items are all hidden leaves the rotation (and the n/N count). */
+static bool cyd_settings_general_page_enabled(void)
+{
+    static const system_settings_item_t items[] = {
+        SYSTEM_SETTINGS_ITEM_BRIGHTNESS, SYSTEM_SETTINGS_ITEM_THEME, SYSTEM_SETTINGS_ITEM_IDLE_RETURN,
+        SYSTEM_SETTINGS_ITEM_TOUCH_CALIBRATE,
+    };
+    return !system_settings_items_all_hidden(items, sizeof(items) / sizeof(items[0]));
+}
+
+static bool cyd_settings_nvs_page_enabled(void)
+{
+    static const system_settings_item_t items[] = {
+        SYSTEM_SETTINGS_ITEM_CLEAR_TOUCH_CALIB, SYSTEM_SETTINGS_ITEM_CLEAR_APP_DATA, SYSTEM_SETTINGS_ITEM_CLEAR_NVS,
+    };
+    return !system_settings_items_all_hidden(items, sizeof(items) / sizeof(items[0]));
 }
 
 static bool cyd_settings_apps_page_enabled(void)
@@ -792,6 +844,10 @@ static esp_err_t cyd_settings_app_show(void)
     system_settings_view_model_t *m = &s_settings_model;
 
     *m = (system_settings_view_model_t){ 0 };
+    for (size_t i = 0; i < SYSTEM_SETTINGS_ITEM_COUNT; ++i) {
+        m->fix[i] = system_settings_fix_mode((system_settings_item_t)i);
+        m->fix_reason[i] = system_settings_fix_reason((system_settings_item_t)i);
+    }
     switch (s_settings_view) {
     case CYD_SETTINGS_VIEW_STORED_SSIDS:
         m->screen = SYSTEM_SETTINGS_VIEW_STORED_SSIDS;
@@ -855,6 +911,18 @@ static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_a
     s_settings_direct_view = s_settings_pending_direct_view;
     s_settings_pending_direct_view = CYD_SETTINGS_DIRECT_VIEW_NONE;
     portEXIT_CRITICAL(&s_settings_direct_view_lock);
+    /* A view another app asked for does not open when the product hid its
+       item. The forced Initialize NVS screen is recovery, not a setting, and
+       always opens. */
+    if ((s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_STORED_SSIDS &&
+         system_settings_fix_mode(SYSTEM_SETTINGS_ITEM_STORED_SSIDS) == SYSTEM_SETTINGS_FIX_HIDDEN) ||
+        (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_TOUCH_CALIB_CONFIRM &&
+         system_settings_fix_mode(SYSTEM_SETTINGS_ITEM_CLEAR_TOUCH_CALIB) == SYSTEM_SETTINGS_FIX_HIDDEN) ||
+        (s_settings_direct_view == CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM && !s_settings_force_initialize &&
+         system_settings_fix_mode(SYSTEM_SETTINGS_ITEM_CLEAR_NVS) == SYSTEM_SETTINGS_FIX_HIDDEN)) {
+        ESP_LOGI(TAG, "direct view skipped: its item is hidden by the product");
+        s_settings_direct_view = CYD_SETTINGS_DIRECT_VIEW_NONE;
+    }
 
     /* Coming back from a sub-screen resumes the page the user left from. A
        fresh entry from another app starts at the first page. */
@@ -875,7 +943,8 @@ static esp_err_t cyd_settings_app_enter(void *ctx, const app_shell_app_t *from_a
     s_settings_selected_profile = 0;
     s_settings_sync_now_pending = false;
     s_settings_status_snapshot = (cyd_settings_status_snapshot_t){ 0 };
-    if (!cyd_settings_page_is_enabled(s_settings_page)) {
+    const bool forced_view = s_settings_force_initialize && s_settings_view == CYD_SETTINGS_VIEW_CLEAR_NVS_CONFIRM;
+    if (!forced_view && !cyd_settings_page_is_enabled(s_settings_page)) {
         s_settings_direct_view = CYD_SETTINGS_DIRECT_VIEW_NONE;
         s_settings_page = CYD_SETTINGS_PAGE_GENERAL;
         s_settings_view = CYD_SETTINGS_VIEW_PAGES;
@@ -1438,7 +1507,7 @@ static const cyd_settings_page_def_t CYD_SETTINGS_PAGES[] = {
         .title = "一般",
         .group = CYD_SETTINGS_PAGE_GROUP_GENERAL,
         .uses_live_status = false,
-        .is_enabled = NULL,
+        .is_enabled = cyd_settings_general_page_enabled,
         .fill = cyd_settings_fill_general_page,
         .screen = SYSTEM_SETTINGS_VIEW_GENERAL,
         .handle_action = cyd_settings_handle_general_page_action,
@@ -1493,7 +1562,7 @@ static const cyd_settings_page_def_t CYD_SETTINGS_PAGES[] = {
         .title = "初期化",
         .group = CYD_SETTINGS_PAGE_GROUP_NVS,
         .uses_live_status = false,
-        .is_enabled = NULL,
+        .is_enabled = cyd_settings_nvs_page_enabled,
         .fill = cyd_settings_fill_nvs_page,
         .screen = SYSTEM_SETTINGS_VIEW_NVS,
         .handle_action = cyd_settings_handle_nvs_page_action,
@@ -1606,10 +1675,16 @@ static esp_err_t cyd_settings_app_step(void *ctx)
        normal buttons wait for a confirmed RELEASE. The two are not
        interchangeable, which is why the paths stay separate. */
     if (cyd_settings_touch_stepper_action(&event, &action_id)) {
+        if (cyd_settings_action_is_fixed(action_id)) {
+            return ESP_OK;
+        }
         return cyd_settings_handle_active_screen_action(action_id, &handled);
     }
 
     if (!cyd_system_apps_touch_confirmed_action(cyd_ui_screen_of(&s_settings_screen_owner), &event, &s_settings_touch_tracker, &action_id)) {
+        return ESP_OK;
+    }
+    if (cyd_settings_action_is_fixed(action_id)) {
         return ESP_OK;
     }
 
@@ -1678,6 +1753,35 @@ void system_settings_open_clear_touch_calib_confirm(void)
 void system_settings_open_clear_nvs_confirm(void)
 {
     system_settings_set_direct_view(CYD_SETTINGS_DIRECT_VIEW_CLEAR_NVS_CONFIRM);
+}
+
+static const char *system_settings_fix_mode_name(system_settings_fix_mode_t mode)
+{
+    switch (mode) {
+    case SYSTEM_SETTINGS_FIX_READONLY: return "read-only";
+    case SYSTEM_SETTINGS_FIX_HIDDEN: return "hidden";
+    default: return "changeable";
+    }
+}
+
+esp_err_t system_settings_fix(system_settings_item_t item, system_settings_fix_mode_t mode, const char *reason)
+{
+    /* Only the composition fixes items: one place to look for why a setting
+       cannot be changed, and no app can quietly change another's fix. */
+    if (app_shell_get_active_app() != NULL) {
+        ESP_LOGE("settings", "%s: fix items before app_shell_start()", system_settings_item_name(item));
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = system_settings_fix_set(item, mode, reason);
+    if (err != ESP_OK) {
+        ESP_LOGE("settings", "fixing item %d (%s) failed: %s", (int)item, system_settings_fix_mode_name(mode),
+                 esp_err_to_name(err));
+        return err;
+    }
+    /* A hidden row is not on screen; the log is where a developer finds why. */
+    ESP_LOGI("settings", "%s fixed (%s)%s%s", system_settings_item_name(item), system_settings_fix_mode_name(mode),
+             reason != NULL ? ": " : "", reason != NULL ? reason : "");
+    return ESP_OK;
 }
 
 /*

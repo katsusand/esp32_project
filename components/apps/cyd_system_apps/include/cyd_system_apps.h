@@ -2,6 +2,7 @@
 #define CYD_SYSTEM_APPS_H
 
 #include "app_shell.h"
+#include "system_settings_fix.h"
 
 #ifdef __cplusplus
 extern "C" {
