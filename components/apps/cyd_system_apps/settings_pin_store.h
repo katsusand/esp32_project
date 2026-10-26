@@ -5,7 +5,7 @@
  * Where the settings PIN lives in NVS: namespace "sys_pin" (system scope, so
  * Clear App Data keeps it; Initialize NVS removes it).
  *
- *   key "pin_v1"  blob  version, flags, PBKDF2 iterations, salt, hash
+ *   key "pin_v1"  blob  version, flags (none in use), PBKDF2 iterations, salt, hash
  *   key "fails"   u32   wrong PINs in a row, kept across restarts
  *
  * A missing "pin_v1" means the PIN is off.
@@ -35,7 +35,8 @@ extern "C" {
  */
 #define SETTINGS_PIN_STORE_ITERATIONS 1024U
 
-#define SETTINGS_PIN_STORE_FLAG_INFO_LOCK 0x1U
+/* flags: none in use. Bit 0 once meant "system info asks for the PIN too"
+   (2026-10-23 only); apps now choose that themselves, and it is ignored. */
 
 typedef enum {
     SETTINGS_PIN_STORE_OFF = 0,

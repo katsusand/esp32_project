@@ -144,6 +144,14 @@ esp_err_t cyd_clock_app_register(void)
     entry.settings_app = cyd_clock_settings_app_get_app();
     ESP_RETURN_ON_ERROR(app_registry_register(&entry), TAG, "register clock app failed");
 
+    /* The clock's own choice of keeping its info screen behind the settings
+       PIN ("情報をPINで保護" in Clock Settings). Not fatal: the info screen then
+       opens without the PIN. */
+    esp_err_t info_err = cyd_clock_settings_app_init();
+    if (info_err != ESP_OK) {
+        ESP_LOGW(TAG, "applying the info PIN choice failed: %s", esp_err_to_name(info_err));
+    }
+
     /*
      * The alarm belongs to the clock the same way: registering the clock is
      * what installs it, so a product without the clock has no alarm and

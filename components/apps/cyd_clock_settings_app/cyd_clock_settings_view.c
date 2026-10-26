@@ -9,6 +9,7 @@
 static const char *const k_page_titles[CYD_CLOCK_SETTINGS_VIEW_PAGE_COUNT] = {
     "アラーム1",
     "アラーム2",
+    "情報画面",
     "スケジュール",
 };
 
@@ -67,6 +68,20 @@ static void view_alarm(cyd_display_screen_t *screen, const cyd_clock_settings_vi
     view_stepper(screen, "分", minute, (uint8_t)(row + 5),
                  alarm1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_DOWN : CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_DOWN,
                  alarm1 ? CYD_CLOCK_SETTINGS_ACTION_ALARM1_MINUTE_UP : CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_UP);
+}
+
+/* The clock's own choice of putting its info screen behind the settings PIN. */
+static void view_info(cyd_display_screen_t *screen, const cyd_clock_settings_view_model_t *m)
+{
+    (void)cyd_ui_add_switch_row(screen, "情報をPINで保護", 4, m->pin_enabled && m->info_pin, m->pin_enabled,
+                                CYD_CLOCK_SETTINGS_ACTION_INFO_PIN);
+    if (m->pin_enabled) {
+        cyd_ui_add_label(screen, "「情報」を開くとき PIN を求めます", 2, 10, 36, 3, CYD_DISPLAY_ALIGN_LEFT,
+                         CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    } else {
+        cyd_ui_add_label(screen, "設定の PIN機能がオフのため使えません", 2, 10, 36, 3, CYD_DISPLAY_ALIGN_LEFT,
+                         CYD_DISPLAY_FONT_BODY, CYD_UI_THEME_SUBTEXT);
+    }
 }
 
 static const char *view_state_text(cyd_clock_settings_view_sched_state_t state)
@@ -158,6 +173,9 @@ void cyd_clock_settings_view_build(cyd_display_screen_t *screen, const cyd_clock
         break;
     case CYD_CLOCK_SETTINGS_VIEW_ALARM2:
         view_alarm(screen, m, false);
+        break;
+    case CYD_CLOCK_SETTINGS_VIEW_INFO:
+        view_info(screen, m);
         break;
     default:
         view_scheduler(screen, m);

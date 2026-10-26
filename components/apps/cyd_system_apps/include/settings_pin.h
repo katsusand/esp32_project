@@ -8,8 +8,9 @@
  * app shows the PIN screen first, whoever asks for the switch and however the
  * device booted: settings (the clock's settings button, the boot touch
  * shortcut), Wi-Fi setup, every app settings screen registered with
- * app_registry, and, when the user chooses so, system info. The PIN stays
- * entered until the user leaves those apps or the idle timeout passes.
+ * app_registry, and any app that asks for it with settings_pin_guard_app().
+ * The PIN stays entered until the user leaves those apps or the idle timeout
+ * passes.
  *
  * The check is an app_shell enter guard (app_shell_set_enter_guard()), so a
  * product only has to call settings_pin_init() once before app_shell_start().
@@ -42,6 +43,27 @@ bool settings_pin_is_enabled(void);
 
 /* The PIN screen, for apps that need to recognise it as a from_app. */
 const app_shell_app_t *settings_pin_app_get_app(void);
+
+/*
+ * Puts one more app behind the PIN, or takes it out again.
+ *
+ * For a screen outside settings that a product wants to keep from passers-by,
+ * such as system info on a monitoring unit. Whether to guard it is the app's
+ * own setting: the app stores its choice and calls this at registration and
+ * whenever the user changes it. Nothing here is saved. It only has an effect
+ * while the PIN is on.
+ *
+ * `title` is shown on the PIN screen in front of it (e.g. "システム情報"); it
+ * is not copied, so pass a literal. A guarded app counts as inside settings:
+ * moving between it and settings does not ask again.
+ *
+ * English contract: shell task (or before app_shell_start()). At most
+ * SETTINGS_PIN_GUARDED_APPS_MAX apps; another returns ESP_ERR_NO_MEM.
+ * Guarding an app twice only updates its title; unguarding one that is not
+ * guarded is not an error.
+ */
+#define SETTINGS_PIN_GUARDED_APPS_MAX 4
+esp_err_t settings_pin_guard_app(const app_shell_app_t *app, const char *title, bool guarded);
 
 /*
  * A second way past the PIN, supplied by the product, such as a one-time code

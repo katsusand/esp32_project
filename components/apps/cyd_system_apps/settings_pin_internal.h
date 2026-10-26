@@ -15,8 +15,6 @@ esp_err_t settings_pin_begin_new_pin(void);
 /* The settings page: remove the PIN and the failure count. */
 esp_err_t settings_pin_turn_off(void);
 
-bool settings_pin_info_locked(void);
-esp_err_t settings_pin_set_info_locked(bool locked);
 bool settings_pin_has_recovery(void);
 
 /*

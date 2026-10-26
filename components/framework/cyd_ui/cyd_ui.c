@@ -620,6 +620,63 @@ esp_err_t cyd_ui_submit(const cyd_display_screen_t *screen)
  * own box black) does not show as dark blocks on a themed one.
  */
 #define CYD_UI_SETTINGS_HEADER_ROWS 4
+/*
+ * Switch row geometry. Grid cells are 8px, so the knob (24px) is as tall as
+ * the track (48x24px); its border in the track colour makes it read as sitting
+ * inside the track.
+ */
+#define CYD_UI_SWITCH_ROW_COL 1
+#define CYD_UI_SWITCH_ROW_COLS 38
+#define CYD_UI_SWITCH_LABEL_COL 3
+#define CYD_UI_SWITCH_LABEL_COLS 27
+#define CYD_UI_SWITCH_TRACK_COL 31
+#define CYD_UI_SWITCH_TRACK_COLS 6
+#define CYD_UI_SWITCH_KNOB_COLS 3
+#define CYD_UI_SWITCH_PART_ROWS 3
+#define CYD_UI_SWITCH_RADIUS 12
+
+bool cyd_ui_add_switch_row(cyd_display_screen_t *screen,
+                           const char *label,
+                           uint8_t row,
+                           bool on,
+                           bool enabled,
+                           uint16_t action_id)
+{
+    if (screen == NULL || label == NULL) {
+        return false;
+    }
+    const uint16_t label_color = enabled ? CYD_UI_THEME_TEXT : CYD_UI_THEME_DISABLED;
+    uint16_t track_fill = CYD_UI_THEME_BG;
+    uint16_t track_border = CYD_UI_THEME_SUBTEXT;
+    uint16_t knob_fill = CYD_UI_THEME_SUBTEXT;
+
+    if (!enabled) {
+        /* Off while it cannot be changed: a greyed-out "on" would still read as on. */
+        on = false;
+        track_border = CYD_UI_THEME_DISABLED;
+        knob_fill = CYD_UI_THEME_DISABLED;
+    } else if (on) {
+        track_fill = CYD_UI_THEME_PRIMARY;
+        track_border = CYD_UI_THEME_PRIMARY;
+        knob_fill = CYD_UI_THEME_ON_PRIMARY;
+    }
+
+    bool ok = cyd_ui_add_styled_button(screen, "", CYD_UI_SWITCH_ROW_COL, row, CYD_UI_SWITCH_ROW_COLS,
+                                       CYD_UI_SWITCH_ROW_ROWS, CYD_DISPLAY_FONT_BODY_BOLD, label_color,
+                                       CYD_UI_THEME_SURFACE, CYD_UI_THEME_LINE, 1, action_id, enabled);
+    ok &= cyd_ui_add_label(screen, label, CYD_UI_SWITCH_LABEL_COL, row, CYD_UI_SWITCH_LABEL_COLS,
+                           CYD_UI_SWITCH_ROW_ROWS, CYD_DISPLAY_ALIGN_LEFT, CYD_DISPLAY_FONT_BODY_BOLD, label_color);
+    ok &= cyd_ui_add_panel(screen, CYD_UI_SWITCH_TRACK_COL, (uint8_t)(row + 1), CYD_UI_SWITCH_TRACK_COLS,
+                           CYD_UI_SWITCH_PART_ROWS, track_fill, track_border, CYD_UI_THEME_BORDER_PX,
+                           CYD_UI_SWITCH_RADIUS);
+    ok &= cyd_ui_add_panel(screen,
+                           (uint8_t)(CYD_UI_SWITCH_TRACK_COL +
+                                     (on ? CYD_UI_SWITCH_TRACK_COLS - CYD_UI_SWITCH_KNOB_COLS : 0)),
+                           (uint8_t)(row + 1), CYD_UI_SWITCH_KNOB_COLS, CYD_UI_SWITCH_PART_ROWS, knob_fill,
+                           track_border, CYD_UI_THEME_BORDER_PX, CYD_UI_SWITCH_RADIUS);
+    return ok;
+}
+
 #define CYD_UI_SETTINGS_BACK_COL 0
 #define CYD_UI_SETTINGS_BACK_SPAN_COLS 8
 #define CYD_UI_SETTINGS_TITLE_COL 9

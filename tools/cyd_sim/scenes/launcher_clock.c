@@ -104,6 +104,32 @@ static void build_alarm2(cyd_display_screen_t *screen, unsigned frame)
     cyd_clock_settings_view_build(screen, &m);
 }
 
+static void build_info_pin(cyd_display_screen_t *screen, bool pin_enabled, bool info_pin)
+{
+    const cyd_clock_settings_view_model_t m = { .page = CYD_CLOCK_SETTINGS_VIEW_INFO,
+                                                .pin_enabled = pin_enabled,
+                                                .info_pin = info_pin };
+    cyd_clock_settings_view_build(screen, &m);
+}
+
+static void build_info_pin_on(cyd_display_screen_t *screen, unsigned frame)
+{
+    (void)frame;
+    build_info_pin(screen, true, true);
+}
+
+static void build_info_pin_off(cyd_display_screen_t *screen, unsigned frame)
+{
+    (void)frame;
+    build_info_pin(screen, true, false);
+}
+
+static void build_info_pin_unavailable(cyd_display_screen_t *screen, unsigned frame)
+{
+    (void)frame;
+    build_info_pin(screen, false, true);
+}
+
 static void build_scheduler(cyd_display_screen_t *screen, unsigned frame)
 {
     (void)frame;
@@ -129,6 +155,9 @@ static const cyd_sim_scene_t k_scenes[] = {
     { "clock_wifi_retrying", "時計: Wi-Fi 再接続中", NULL, build_wifi_retrying },
     { "clock_settings_alarm1", "時計の設定: アラーム1", "平日だけ", build_alarm1 },
     { "clock_settings_alarm2", "時計の設定: アラーム2", NULL, build_alarm2 },
+    { "clock_settings_info", "時計の設定: 情報画面", "情報をPINで保護がオン", build_info_pin_on },
+    { "clock_settings_info_off", "時計の設定: 情報画面 (オフ)", NULL, build_info_pin_off },
+    { "clock_settings_info_no_pin", "時計の設定: 情報画面 (PIN機能がオフ)", "グレーで押せない", build_info_pin_unavailable },
     { "clock_settings_scheduler", "時計の設定: スケジュール", NULL, build_scheduler },
 };
 

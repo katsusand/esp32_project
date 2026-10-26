@@ -127,7 +127,7 @@ prefix を持たない namespace は `unknown` になります。ここには ES
 | 表示名 | page ID | 内容 |
 |---|---|---|
 | 一般 | `GENERAL` | 「画面の明るさ」「配色」「無操作で戻る」の増減、「タッチ位置の補正」(touch calibration app へ) |
-| 設定のPIN | `SECURITY` | 「PIN機能」「情報も保護」のスイッチ、「PIN を変更する」([Settings PIN](settings_pin.md#settings-page)) |
+| 設定のPIN | `SECURITY` | 「PIN機能」のスイッチ、「PIN を変更する」([Settings PIN](settings_pin.md#settings-page)) |
 | 時刻 | `TIME` | 現在時刻、日付と曜日、時計が合っているか、「タイムゾーン」の増減 |
 | ネットワーク1 | `NETWORK1` | Wi-Fi の状態、「保存済みのネットワーク」(サブ画面)、「Wi-Fi を設定する」(`wifi_setup app` へ) |
 | ネットワーク2 | `NETWORK2` | 「同期の間隔」「Wi-Fi切断」の増減、「今すぐ時刻を合わせる」、時刻同期の状態と前回の結果 |

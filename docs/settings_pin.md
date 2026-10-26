@@ -23,7 +23,7 @@ English contract: while the PIN is off, the enter guard lets every switch throug
 | 設定 (`system_settings_app_get_app()`) | 時計の設定ボタン、起動時の長押し、`system_settings_open_*()` からの直接表示 |
 | Wi-Fi の設定 (`cyd_wifi_setup_get_app()`) | 設定の「Wi-Fi を設定する」、時計の「Wi-Fi に接続できません」画面のボタン |
 | 各アプリの設定画面 (`app_registry` の `settings_app`) | 設定の「アプリ」ページ |
-| システム情報 (`system_info_app_get_app()`) | 「情報も保護」をオンにしたときだけ |
+| `settings_pin_guard_app()` で頼んだアプリ | 例: 時計の設定で「情報をPINで保護」をオンにしたときの、時計の「情報」ボタン（システム情報） |
 
 起動時の長押しは、composition が最初のアプリを settings にするだけです。最初のアプリも guard を通るので、長押しで PIN を飛ばすことはできません。そのとき PIN の画面の「戻る」には戻る先が無い（settings が home app でもある）ので、端末を再起動して通常の起動に戻ります。
 
@@ -90,7 +90,7 @@ namespace `sys_pin`（system scope。「アプリのデータを消去」では�
 
 | key | 型 | 内容 |
 |---|---|---|
-| `pin_v1` | blob 60 バイト | version (1)、flags (bit0: 情報画面にも PIN)、PBKDF2 の回数、塩 16 バイト、ハッシュ 32 バイト |
+| `pin_v1` | blob 60 バイト | version (1)、flags (使っていない。0 を書く)、PBKDF2 の回数、塩 16 バイト、ハッシュ 32 バイト |
 | `fails` | u32 | 続けて間違えた回数 |
 
 - `pin_v1` が無いことが「オフ」。オフにすると namespace ごと消す
@@ -117,7 +117,7 @@ rows 10-28  [1][2][3] / [4][5][6] / [7][8][9] / [削除][0][決定]
 - 入力は点だけで表し、数字は画面のどこにも出ない（model に数字そのものを渡さない）
 - 新しい PIN は 2 回入れる。2 回目が違えば「一致しませんでした。最初から入力」と出して 1 回目からやり直す。2 回とも同じになって保存できたときだけ PIN が変わる
 
-シミュレーターの `pin_*` と `sys_security*`、`sys_pin_off` のシーンで全状態を見られます。
+シミュレーターの `pin_*` と `sys_security*`、`sys_pin_off`、`clock_settings_info*` のシーンで全状態を見られます。
 
 ## Settings Page
 
@@ -126,14 +126,35 @@ rows 10-28  [1][2][3] / [4][5][6] / [7][8][9] / [削除][0][決定]
 | 行 | 内容 |
 |---|---|
 | PIN機能 | オンにすると新しい PIN を 2 回入れる。オフにするときは確認のあと PIN を消す |
-| 情報も保護 | システム情報にも PIN を求める。PIN機能がオフのあいだは見出しごとグレーになり、押せない |
 | PIN を変更する | 新しい PIN を 2 回入れる。PIN がオフのあいだは押せない |
 
-「PIN機能」と「情報も保護」はスイッチで、状態はつまみの位置と色で表し、「オン」「オフ」の字は出しません（2026-10-23、実機確認でのユーザーの判断）。行全体が 1 つのボタンなので、行のどこを押しても切り替わります。高さは 40px です。
+「PIN機能」はスイッチ (`cyd_ui_add_switch_row()`) で、状態はつまみの位置と色で表し、「オン」「オフ」の字は出しません（2026-10-23、実機確認でのユーザーの判断）。行全体が 1 つのボタンなので、行のどこを押しても切り替わります。
+
+このページには、設定の外の画面を守るかどうかの切り替えを置きません。最初は「情報も保護」（システム情報にも PIN を求める）をここに置いていましたが、システム情報を開けるようにしているのは時計（このリポジトリの見本のアプリ）なので、その選択は時計の設定に移しました（[Guarding Other Apps](#guarding-other-apps)、2026-10-26、ユーザーの指摘）。
 
 オン・オフ・変更は、このページ、つまり設定に入れている人だけができます。変更のときに今の PIN を聞き直すことはしません。
 
 このページは既存のページを詰めて場所を作るのではなく、ページを 1 つ足しました。「一般」はすでに一杯で、他のページに足すとそのページの見た目が変わるためです。そのかわりページの数は 1 つ増え（Wi-Fi ありで 7、なしで 5）、下の「n/N」の N が 1 つ大きくなります。既存シーンの書き出しはページ数をシーンの側で固定しているので、変わりません。
+
+## Guarding Other Apps
+
+設定の外の画面にも PIN を求めたいときは、その画面を開けるようにしているアプリが、自分の設定として選ばせ、`settings_pin_guard_app()` を呼びます。
+
+```c
+esp_err_t settings_pin_guard_app(const app_shell_app_t *app, const char *title, bool guarded);
+```
+
+- `title` は、その前に出る PIN の画面の見出し（例: 「システム情報」）。複製しないので文字列リテラルを渡す
+- 頼まれた画面は「設定の内側」としても扱う。その画面と設定のあいだを移っても、PIN を聞き直さない
+- ここでは何も保存しない。選んだ値の保存はアプリの側（app scope の NVS など）で行い、起動時の登録と、ユーザーが変えたときに呼ぶ
+- PIN機能がオフのあいだは何も起きない
+- 最大 `SETTINGS_PIN_GUARDED_APPS_MAX`（4）個
+
+このリポジトリでは、時計の設定の「情報画面」ページにある「情報をPINで保護」がこれを使い、時計の「情報」ボタンで開くシステム情報を守ります ([CYD Clock Settings App](cyd_clock_settings_app.md#info-page))。派生プロジェクトの監視端末で、ホームから情報画面を開けるようにするなら、その home のアプリが同じように自分の設定を持って呼びます。
+
+`pin_v1` の flags の bit0 は、2026-10-23 の版だけ「情報も保護」に使っていました。今は読まずに無視し、PIN を設定し直すと 0 になります。その版で「情報も保護」をオンにしていた端末は、時計の設定で選び直してください。
+
+English contract: the PIN module keeps the list of extra guarded apps in RAM only; each app owns and persists its choice. While the PIN is off the list has no effect.
 
 ## Forgotten PIN
 
@@ -235,6 +256,8 @@ if (nvs_health_requires_initialize()) {
 
 - `test/host/test_settings_pin_logic.c`: 入力の桁、待ち時間の表、2 回入力の一致・不一致、ハッシュの照合（塩と回数が効くこと、ハッシュの失敗は不一致になること）
 - `test/host/test_settings_pin_view.c`: 全モード・全通知・全桁数・1 秒〜1 時間の全待ち時間で文字が枠に収まること、キーの大きさと重なり、数字が画面に出ないこと、解除のボタン
-- `test/host/test_system_settings_view.c`: 「設定のPIN」ページの全組み合わせ（つまみの位置、グレーの見出し、「オン」「オフ」の字が無いこと）と、オフの確認画面
+- `test/host/test_system_settings_view.c`: 「設定のPIN」ページの全組み合わせと、オフの確認画面
+- `test/host/test_ui_common.c`: 切り替えの行（つまみの位置、行全体がボタン、無効のときのグレー）
+- `test/host/test_launcher_clock_view.c`: 時計の設定の「情報画面」ページ（PIN機能がオフなら押せない）
 
 PBKDF2 そのものと NVS、guard の遷移は実機で確かめます（PR のチェックリスト）。

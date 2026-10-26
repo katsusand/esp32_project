@@ -73,6 +73,13 @@ static settings_pin_view_model_t s_pin_model;
 static const settings_pin_recovery_provider_t *s_pin_provider;
 static void *s_pin_provider_ctx;
 
+/* Apps that asked for the PIN themselves (settings_pin_guard_app()). */
+typedef struct {
+    const app_shell_app_t *app;
+    const char *title;
+} settings_pin_extra_t;
+static settings_pin_extra_t s_pin_extra[SETTINGS_PIN_GUARDED_APPS_MAX];
+
 static const app_shell_app_t s_settings_pin_app;
 
 /* ---- stored state ---------------------------------------------------------- */
@@ -140,6 +147,16 @@ static bool settings_pin_is_app_settings_screen(const app_shell_app_t *app)
     return false;
 }
 
+static const settings_pin_extra_t *settings_pin_find_extra(const app_shell_app_t *app)
+{
+    for (size_t i = 0; i < SETTINGS_PIN_GUARDED_APPS_MAX; ++i) {
+        if (app != NULL && s_pin_extra[i].app == app) {
+            return &s_pin_extra[i];
+        }
+    }
+    return NULL;
+}
+
 static bool settings_pin_is_guarded(const app_shell_app_t *app)
 {
     if (app == NULL) {
@@ -148,7 +165,7 @@ static bool settings_pin_is_guarded(const app_shell_app_t *app)
     return app == system_settings_app_get_app() ||
            app == cyd_wifi_setup_get_app() ||
            settings_pin_is_app_settings_screen(app) ||
-           ((s_pin_config.flags & SETTINGS_PIN_STORE_FLAG_INFO_LOCK) != 0 && app == system_info_app_get_app());
+           settings_pin_find_extra(app) != NULL;
 }
 
 static const app_shell_app_t *settings_pin_provider_app(void)
@@ -289,8 +306,9 @@ static const char *settings_pin_title(void)
     if (s_pin_flow == SETTINGS_PIN_FLOW_NEW_PIN) {
         return "PIN の設定";
     }
-    if (s_pin_target != NULL && s_pin_target == system_info_app_get_app()) {
-        return "システム情報";
+    const settings_pin_extra_t *extra = settings_pin_find_extra(s_pin_target);
+    if (extra != NULL && extra->title != NULL) {
+        return extra->title;
     }
     return "設定";
 }
@@ -338,7 +356,7 @@ static esp_err_t settings_pin_store_new_pin(const settings_pin_entry_t *entry)
     int64_t started = esp_timer_get_time();
 
     settings_pin_store_new_record(&config.record);
-    config.flags = (s_pin_state == SETTINGS_PIN_STORE_ON) ? s_pin_config.flags : 0U;
+    config.flags = 0U; /* bit 0 was "system info too"; that choice now belongs to the app */
     ESP_RETURN_ON_FALSE(settings_pin_record_fill(&config.record, entry, settings_pin_store_hash), ESP_FAIL, TAG,
                         "hashing the new PIN failed");
     ESP_LOGI(TAG, "PIN hash took %d ms", (int)((esp_timer_get_time() - started) / 1000));
@@ -610,6 +628,34 @@ esp_err_t settings_pin_set_recovery_provider(const settings_pin_recovery_provide
     return ESP_OK;
 }
 
+esp_err_t settings_pin_guard_app(const app_shell_app_t *app, const char *title, bool guarded)
+{
+    ESP_RETURN_ON_FALSE(app != NULL, ESP_ERR_INVALID_ARG, TAG, "app is null");
+    ESP_RETURN_ON_FALSE(app != &s_settings_pin_app, ESP_ERR_INVALID_ARG, TAG, "the PIN screen cannot guard itself");
+
+    settings_pin_extra_t *free_slot = NULL;
+    for (size_t i = 0; i < SETTINGS_PIN_GUARDED_APPS_MAX; ++i) {
+        if (s_pin_extra[i].app == app) {
+            if (!guarded) {
+                s_pin_extra[i] = (settings_pin_extra_t){ 0 };
+            } else {
+                s_pin_extra[i].title = title;
+            }
+            return ESP_OK;
+        }
+        if (free_slot == NULL && s_pin_extra[i].app == NULL) {
+            free_slot = &s_pin_extra[i];
+        }
+    }
+    if (!guarded) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_FALSE(free_slot != NULL, ESP_ERR_NO_MEM, TAG, "too many apps behind the PIN");
+    *free_slot = (settings_pin_extra_t){ .app = app, .title = title };
+    ESP_LOGI(TAG, "%s asks for the PIN when the PIN is on", app->id);
+    return ESP_OK;
+}
+
 void settings_pin_recovery_succeeded(void)
 {
     if (s_pin_flow != SETTINGS_PIN_FLOW_UNLOCK || s_pin_state != SETTINGS_PIN_STORE_ON) {
@@ -644,30 +690,6 @@ esp_err_t settings_pin_turn_off(void)
     settings_pin_end_flow();
     ESP_LOGI(TAG, "settings PIN turned off");
     return ESP_OK;
-}
-
-bool settings_pin_info_locked(void)
-{
-    settings_pin_ensure_loaded();
-    return s_pin_state == SETTINGS_PIN_STORE_ON && (s_pin_config.flags & SETTINGS_PIN_STORE_FLAG_INFO_LOCK) != 0;
-}
-
-esp_err_t settings_pin_set_info_locked(bool locked)
-{
-    settings_pin_store_config_t config = s_pin_config;
-
-    ESP_RETURN_ON_FALSE(s_pin_state == SETTINGS_PIN_STORE_ON, ESP_ERR_INVALID_STATE, TAG, "the PIN is off");
-    if (locked) {
-        config.flags |= SETTINGS_PIN_STORE_FLAG_INFO_LOCK;
-    } else {
-        config.flags &= ~SETTINGS_PIN_STORE_FLAG_INFO_LOCK;
-    }
-    esp_err_t err = settings_pin_store_save(&config);
-    if (err == ESP_OK) {
-        s_pin_config.flags = config.flags;
-    }
-    memset(&config, 0, sizeof(config));
-    return err;
 }
 
 bool settings_pin_has_recovery(void)
