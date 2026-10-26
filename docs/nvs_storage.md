@@ -69,8 +69,9 @@ prefix が 4 文字なので、component 側に使えるのは 11 文字です�
 | `ftr_timesync` | feature | `time_sync` |
 | `ftr_wifi` | feature | `wifi_profile_store` |
 | `app_sched` | app | `app_scheduler` (app scope の schedule) |
+| `app_clock` | app | `cyd_clock_settings_app` (時計の「情報をPINで保護」。key `info_pin`、u8) |
 
-`app_scheduler` は 2 つの namespace を持ち、schedule ごとの `scope` で保存先を選びます ([app_scheduler.md](app_scheduler.md#scope))。`app_sched` の中身は現在、時計のアラーム (`cyd_clock_alarm`) だけです。時計アプリ自身は NVS を直接使いません。
+`app_scheduler` は 2 つの namespace を持ち、schedule ごとの `scope` で保存先を選びます ([app_scheduler.md](app_scheduler.md#scope))。`app_sched` の中身は現在、時計のアラーム (`cyd_clock_alarm`) だけです。時計が自分で持つ NVS は `app_clock` の 1 つだけです。
 
 「アプリのデータを消去」で `app_sched` を消しても、次回起動時に時計が既定の (無効な) アラームを作り直すので、namespace はすぐに戻ります。消えるのはユーザーが設定した時刻と曜日です。
 

@@ -127,58 +127,33 @@ static void test_pages(void)
     }
 }
 
-/* The security page in every combination, and the turn-off confirmation. */
+/* The PIN page in every combination, and the turn-off confirmation. */
 static void test_security(void)
 {
-    for (int bits = 0; bits < 8; ++bits) {
+    for (int bits = 0; bits < 4; ++bits) {
         char name[64];
         system_settings_view_model_t m = base(SYSTEM_SETTINGS_VIEW_SECURITY);
         m.page_title = "設定のPIN";
         m.page_index = 1;
         m.page_count = 7;
         m.pin_enabled = (bits & 1) != 0;
-        m.pin_info_lock = (bits & 2) != 0;
-        m.pin_has_recovery = (bits & 4) != 0;
-        snprintf(name, sizeof(name), "security, pin %s, info %s, recovery %s", m.pin_enabled ? "on" : "off",
-                 m.pin_info_lock ? "on" : "off", m.pin_has_recovery ? "yes" : "no");
+        m.pin_has_recovery = (bits & 2) != 0;
+        snprintf(name, sizeof(name), "PIN page, pin %s, recovery %s", m.pin_enabled ? "on" : "off",
+                 m.pin_has_recovery ? "yes" : "no");
         build_and_check(name, &m);
         ui_test_check(find_action(CYD_SETTINGS_APP_ACTION_PIN_TOGGLE) != NULL &&
                           find_action(CYD_SETTINGS_APP_ACTION_PIN_TOGGLE)->enabled,
                       "the PIN switch is always available");
         ui_test_check(find_action(CYD_SETTINGS_APP_ACTION_PIN_CHANGE) != NULL &&
-                          find_action(CYD_SETTINGS_APP_ACTION_PIN_CHANGE)->enabled == m.pin_enabled &&
-                          find_action(CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE)->enabled == m.pin_enabled,
-                      "changing the PIN and the info switch need the PIN on");
-        /* The knob sits at the right end of the track when on, the left when off. */
-        const cyd_display_widget_t *pin_knob = NULL;
-        const cyd_display_widget_t *info_knob = NULL;
-        const cyd_display_widget_t *info_label = NULL;
-        for (size_t i = 0; i < s_screen.widget_count; ++i) {
-            const cyd_display_widget_t *w = &s_screen.widgets[i];
-            if (w->type == CYD_DISPLAY_WIDGET_RECT && w->span_cols == 3 && w->span_rows == 3) {
-                if (w->row == 5) {
-                    pin_knob = w;
-                } else if (w->row == 11) {
-                    info_knob = w;
-                }
-            }
-            if (w->type == CYD_DISPLAY_WIDGET_TEXT && strcmp(cyd_display_widget_text(w), "情報も保護") == 0) {
-                info_label = w;
-            }
-        }
-        ui_test_check(pin_knob != NULL && pin_knob->col == (m.pin_enabled ? 34 : 31),
-                      "the PIN switch shows its state by the knob");
-        ui_test_check(info_knob != NULL && info_knob->col == (m.pin_enabled && m.pin_info_lock ? 34 : 31),
-                      "the info switch shows its state by the knob, off while the PIN is off");
-        ui_test_check(info_label != NULL &&
-                          (info_label->fg_color == CYD_UI_THEME_DISABLED) == !m.pin_enabled,
-                      "the info label greys out while the PIN is off");
-        ui_test_check(!has_text("オン") && !has_text("オフ"), "no オン / オフ words next to the switches");
+                          find_action(CYD_SETTINGS_APP_ACTION_PIN_CHANGE)->enabled == m.pin_enabled,
+                      "changing the PIN needs the PIN on");
+        ui_test_check(!has_text("情報も保護"), "app screens are not switched here; apps offer that themselves");
+        ui_test_check(!has_text("オン") && !has_text("オフ"), "no オン / オフ words next to the switch");
         for (size_t i = 0; i < s_screen.widget_count; ++i) {
             const cyd_display_widget_t *w = &s_screen.widgets[i];
             /* Content starts at row 4 and must end before the navigation row 27. */
             if (w->row >= 4 && w->row < 27 && w->row + w->span_rows > 27) {
-                ui_test_check(false, "a security page widget runs into the page navigation");
+                ui_test_check(false, "a PIN page widget runs into the page navigation");
             }
         }
     }
@@ -189,12 +164,11 @@ static void test_security(void)
      * page row here, since the view formats "n/N" in a stack buffer.
      */
     ui_test_set_all_text_immutable(true);
-    for (int bits = 0; bits < 8; ++bits) {
+    for (int bits = 0; bits < 4; ++bits) {
         system_settings_view_model_t m = base(SYSTEM_SETTINGS_VIEW_SECURITY);
         m.page_count = 0;
         m.pin_enabled = (bits & 1) != 0;
-        m.pin_info_lock = (bits & 2) != 0;
-        m.pin_has_recovery = (bits & 4) != 0;
+        m.pin_has_recovery = (bits & 2) != 0;
         build_and_check("security, literals at full length", &m);
     }
     ui_test_set_all_text_immutable(false);

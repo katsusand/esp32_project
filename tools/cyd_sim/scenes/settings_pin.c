@@ -107,7 +107,7 @@ static void build_restart(cyd_display_screen_t *screen, unsigned frame)
     settings_pin_view_build(screen, &m);
 }
 
-static void build_security(cyd_display_screen_t *screen, bool enabled, bool info, bool recovery)
+static void build_security(cyd_display_screen_t *screen, bool enabled, bool recovery)
 {
     system_settings_view_model_t m;
 
@@ -117,7 +117,6 @@ static void build_security(cyd_display_screen_t *screen, bool enabled, bool info
     m.page_index = 1;
     m.page_count = 7;
     m.pin_enabled = enabled;
-    m.pin_info_lock = info;
     m.pin_has_recovery = recovery;
     system_settings_view_build(screen, &m);
 }
@@ -125,19 +124,19 @@ static void build_security(cyd_display_screen_t *screen, bool enabled, bool info
 static void build_security_off(cyd_display_screen_t *screen, unsigned frame)
 {
     (void)frame;
-    build_security(screen, false, false, false);
+    build_security(screen, false, false);
 }
 
 static void build_security_on(cyd_display_screen_t *screen, unsigned frame)
 {
     (void)frame;
-    build_security(screen, true, true, false);
+    build_security(screen, true, false);
 }
 
 static void build_security_recovery(cyd_display_screen_t *screen, unsigned frame)
 {
     (void)frame;
-    build_security(screen, true, false, true);
+    build_security(screen, true, true);
 }
 
 static void build_off_confirm(cyd_display_screen_t *screen, unsigned frame)
@@ -151,8 +150,8 @@ static void build_off_confirm(cyd_display_screen_t *screen, unsigned frame)
 }
 
 static const cyd_sim_scene_t k_scenes[] = {
-    { "sys_security", "設定: 設定のPIN (オフ)", "情報も保護はグレー", build_security_off },
-    { "sys_security_on", "設定: 設定のPIN (オン)", "情報も保護もオン", build_security_on },
+    { "sys_security", "設定: 設定のPIN (オフ)", "PIN を変更するはグレー", build_security_off },
+    { "sys_security_on", "設定: 設定のPIN (オン)", NULL, build_security_on },
     { "sys_security_recovery", "設定: 設定のPIN (解除の手段あり)", "派生側が解除の手段を登録", build_security_recovery },
     { "sys_pin_off", "確認: PIN をオフにする", NULL, build_off_confirm },
     { "pin_enter", "PIN: 入力", NULL, build_enter },

@@ -204,6 +204,16 @@ rows 27-29  [前へ]     ページ名 n/N     [次へ]
 
 増減行 (`cyd_ui_add_stepper_row()`) は、項目名・値・`−` / `+` のボタンをすべて 16px 太字で描きます。設定画面は項目が多いので、24px の値やボタンは収まっても周りの行と釣り合いません。旧寸法の小さいボタン (幅 24px、高さ 16px) と、16px 太字に入らない項目名は旧 ASCII 書体に戻すので、ページを日本語化するまでも読めます。共通枠の見出しも 16px 太字です。新しく作る行は、抵抗膜タッチのため高さ 4 行 (32px) 以上にしてください。
 
+オン・オフの項目は切り替えの行 (`cyd_ui_add_switch_row()`) で描きます。左に項目名、右にスイッチを置いた高さ 5 行 (40px)、幅いっぱいの行です。
+
+- 状態はスイッチだけで表す。つまみが左で地が無色ならオフ、右で地が primary ならオン。「オン」「オフ」の字は出さない
+- 行全体が 1 つのボタンなので、項目名を押しても切り替わる
+- 他の項目がオンのときだけ意味のある項目は `enabled = false` で渡す。行ごと、項目名も含めてグレーになり、押せない（つまみは左）
+- 項目名は 16px 太字で 26 列 (208px) まで。全角なら 13 文字
+- 行は描くだけ。押されたら呼び出し側が値を変えて画面を作り直す
+
+使っているのは設定の「設定のPIN」ページと、時計の設定の「情報画面」ページです。2026-10-23 の実機確認でのユーザーの判断で、「オフ [オンにする]」の形からこの形にしました。
+
 English supplement: the chrome deliberately leaves the background to the page. Pages are converted one at a time; a themed background under a legacy page would show its text boxes as black blocks.
 
 ## Legacy ASCII API

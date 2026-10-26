@@ -251,6 +251,62 @@ static void test_shared_screen(void)
     ui_test_check(cyd_ui_screen_of(&keyboard) == NULL, "and the keyboard loses it");
 }
 
+/* The knob of the switch row built at `row`: the 24px circle on its track. */
+static const cyd_display_widget_t *switch_knob(uint8_t row)
+{
+    const cyd_display_widget_t *knob = NULL;
+    for (size_t i = 0; i < s_screen.widget_count; ++i) {
+        const cyd_display_widget_t *w = &s_screen.widgets[i];
+        if (w->type == CYD_DISPLAY_WIDGET_RECT && w->row == row + 1 && w->span_cols == 3 && w->span_rows == 3) {
+            knob = w;
+        }
+    }
+    return knob;
+}
+
+static void test_switch_row(void)
+{
+    static const struct {
+        bool on;
+        bool enabled;
+        const char *name;
+    } states[] = {
+        { false, true, "switch off" },
+        { true, true, "switch on" },
+        { false, false, "switch disabled" },
+        { true, false, "switch disabled while on" },
+    };
+
+    for (size_t i = 0; i < sizeof(states) / sizeof(states[0]); ++i) {
+        char what[80];
+        cyd_ui_screen_clear(&s_screen);
+        ui_test_check(cyd_ui_add_switch_row(&s_screen, "情報をPINで保護", 4, states[i].on, states[i].enabled, 7),
+                      "a switch row builds");
+        ui_test_check_screen(states[i].name, &s_screen);
+
+        const cyd_display_widget_t *row = find_action(&s_screen, 7);
+        const cyd_display_widget_t *knob = switch_knob(4);
+        const bool shows_on = states[i].on && states[i].enabled;
+        snprintf(what, sizeof(what), "%s: the whole 304x40px row is the button", states[i].name);
+        ui_test_check(row != NULL && row->col == 1 && row->span_cols == 38 && row->span_rows == CYD_UI_SWITCH_ROW_ROWS &&
+                          row->enabled == states[i].enabled,
+                      what);
+        snprintf(what, sizeof(what), "%s: the knob is at the %s", states[i].name, shows_on ? "right" : "left");
+        ui_test_check(knob != NULL && knob->col == (shows_on ? 34 : 31), what);
+        snprintf(what, sizeof(what), "%s: the label is %s", states[i].name,
+                 states[i].enabled ? "in the text colour" : "greyed out");
+        ui_test_check(s_screen.widgets[1].type == CYD_DISPLAY_WIDGET_TEXT &&
+                          (s_screen.widgets[1].fg_color == CYD_UI_THEME_DISABLED) == !states[i].enabled,
+                      what);
+        ui_test_check(s_screen.widget_count == 4, "a switch row uses 4 widgets");
+    }
+
+    /* A 26-column label: the longest that fits. */
+    cyd_ui_screen_clear(&s_screen);
+    (void)cyd_ui_add_switch_row(&s_screen, "あいうえおかきくけこさし", 4, true, true, 7);
+    ui_test_check_screen("switch row, 12 full-width characters", &s_screen);
+}
+
 int main(void)
 {
     /* Copy every string: the keyboard view builds its value line in a stack
@@ -261,6 +317,8 @@ int main(void)
     test_chrome();
     printf("stepper row\n");
     test_stepper();
+    printf("switch row\n");
+    test_switch_row();
     printf("keyboard states\n");
     test_keyboard_states();
     printf("keyboard value line\n");

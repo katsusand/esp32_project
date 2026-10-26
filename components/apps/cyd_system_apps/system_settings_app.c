@@ -725,7 +725,6 @@ static void cyd_settings_fill_apps_page(system_settings_view_model_t *m)
 static void cyd_settings_fill_security_page(system_settings_view_model_t *m)
 {
     m->pin_enabled = settings_pin_is_enabled();
-    m->pin_info_lock = settings_pin_info_locked();
     m->pin_has_recovery = settings_pin_has_recovery();
 }
 
@@ -1380,12 +1379,6 @@ static esp_err_t cyd_settings_handle_security_page_action(uint16_t action_id, bo
     if (action_id == CYD_SETTINGS_APP_ACTION_PIN_CHANGE && settings_pin_is_enabled()) {
         *handled = true;
         return settings_pin_begin_new_pin();
-    }
-    if (action_id == CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE && settings_pin_is_enabled()) {
-        ESP_RETURN_ON_ERROR(settings_pin_set_info_locked(!settings_pin_info_locked()), TAG,
-                            "saving the system info PIN setting failed");
-        *handled = true;
-        return cyd_settings_refresh();
     }
     return ESP_OK;
 }

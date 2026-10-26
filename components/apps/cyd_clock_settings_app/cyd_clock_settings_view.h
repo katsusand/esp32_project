@@ -2,8 +2,8 @@
 #define CYD_CLOCK_SETTINGS_VIEW_H
 
 /*
- * The clock settings screens, built from a model only: the two alarm pages
- * and the scheduler diagnostics page. All text is 16px, like every settings
+ * The clock settings screens, built from a model only: the two alarm pages,
+ * the info screen page and the scheduler diagnostics page. All text is 16px, like every settings
  * screen.
  *
  * English contract: cyd_clock_settings_view_build() calls no service and
@@ -32,13 +32,15 @@ extern "C" {
 #define CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_DOWN 0x310a
 #define CYD_CLOCK_SETTINGS_ACTION_ALARM2_MINUTE_UP 0x310b
 /* + weekday, 0 = Sunday ... 6 = Saturday */
-#define CYD_CLOCK_SETTINGS_ACTION_ALARM1_WEEKDAY_BASE 0x310c
+#define CYD_CLOCK_SETTINGS_ACTION_ALARM1_WEEKDAY_BASE 0x310c /* ..0x3112 */
+#define CYD_CLOCK_SETTINGS_ACTION_INFO_PIN 0x3113
 
 #define CYD_CLOCK_SETTINGS_VIEW_SCHEDULES_MAX 5
 
 typedef enum {
     CYD_CLOCK_SETTINGS_VIEW_ALARM1 = 0,
     CYD_CLOCK_SETTINGS_VIEW_ALARM2,
+    CYD_CLOCK_SETTINGS_VIEW_INFO,
     CYD_CLOCK_SETTINGS_VIEW_SCHEDULER,
     CYD_CLOCK_SETTINGS_VIEW_PAGE_COUNT,
 } cyd_clock_settings_view_page_t;
@@ -70,6 +72,10 @@ typedef struct {
     uint8_t hour;
     uint8_t minute;
     uint8_t weekday_mask; /* ALARM1 only; bit 0 = Sunday, as app_scheduler */
+
+    /* INFO */
+    bool pin_enabled; /* the settings PIN is on, so the switch can be used */
+    bool info_pin;    /* the clock's info button asks for the PIN */
 
     /* SCHEDULER */
     bool schedules_unavailable;

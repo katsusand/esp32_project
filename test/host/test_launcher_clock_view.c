@@ -139,6 +139,28 @@ static void test_clock_settings(void)
     cyd_clock_settings_view_build(&s_screen, &m);
     check_current("alarm 2");
 
+    /* The info page in every combination: the switch works only with the PIN on. */
+    for (int bits = 0; bits < 4; ++bits) {
+        char name[64];
+        m = (cyd_clock_settings_view_model_t){ .page = CYD_CLOCK_SETTINGS_VIEW_INFO,
+                                               .pin_enabled = (bits & 1) != 0,
+                                               .info_pin = (bits & 2) != 0 };
+        snprintf(name, sizeof(name), "info page, PIN %s, info %s", m.pin_enabled ? "on" : "off",
+                 m.info_pin ? "on" : "off");
+        cyd_clock_settings_view_build(&s_screen, &m);
+        check_current(name);
+        const cyd_display_widget_t *sw = find_action(CYD_CLOCK_SETTINGS_ACTION_INFO_PIN);
+        ui_test_check(sw != NULL && sw->enabled == m.pin_enabled, "the info switch is usable only with the PIN on");
+    }
+    /* The notes are literals over 40 bytes, which this test copies and cuts
+       before measuring; measure them whole here. */
+    static const char *const notes[] = { "「情報」を開くとき PIN を求めます", "設定の PIN機能がオフのため使えません" };
+    for (size_t i = 0; i < sizeof(notes) / sizeof(notes[0]); ++i) {
+        char what[96];
+        snprintf(what, sizeof(what), "info page note %u fits 288px at full length", (unsigned)i + 1U);
+        ui_test_check(cyd_display_text_width(CYD_DISPLAY_FONT_BODY, notes[i]) <= 36 * CYD_DISPLAY_GRID_CELL_PX, what);
+    }
+
     m = (cyd_clock_settings_view_model_t){ .page = CYD_CLOCK_SETTINGS_VIEW_SCHEDULER,
                                            .schedule_count = CYD_CLOCK_SETTINGS_VIEW_SCHEDULES_MAX,
                                            .schedule_capacity = CYD_CLOCK_SETTINGS_VIEW_SCHEDULES_MAX };

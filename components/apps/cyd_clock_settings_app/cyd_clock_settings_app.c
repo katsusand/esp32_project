@@ -11,7 +11,11 @@
 #include "cyd_clock_settings_view.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
+#include "cyd_system_apps.h"
 #include "cyd_ui.h"
+#include "nvs.h"
+#include "nvs_schema.h"
+#include "settings_pin.h"
 
 #define TAG "cyd_clock_settings"
 #define CYD_CLOCK_SETTINGS_INPUT_POLL_MS 50
@@ -29,6 +33,7 @@ _Static_assert(APP_SCHEDULER_MAX_ENTRIES <= CYD_CLOCK_SETTINGS_VIEW_SCHEDULES_MA
 typedef enum {
     CYD_CLOCK_SETTINGS_PAGE_ALARM1 = 0,
     CYD_CLOCK_SETTINGS_PAGE_ALARM2,
+    CYD_CLOCK_SETTINGS_PAGE_INFO,
     CYD_CLOCK_SETTINGS_PAGE_SCHEDULER,
     CYD_CLOCK_SETTINGS_PAGE_COUNT,
 } cyd_clock_settings_page_t;
@@ -39,7 +44,15 @@ typedef struct {
     uint16_t action_id;
 } cyd_clock_settings_touch_tracker_t;
 
+/* The clock owns this, so it is app scope: it goes when the clock goes. */
+NVS_SCHEMA_DECLARE_NS(NVS_NS, "app_clock");
+static const nvs_key_descriptor_t NVS_KEY_INFO_PIN = {
+    .ns = NVS_NS,
+    .key = "info_pin",
+};
+
 static const cyd_ui_screen_owner_t s_clock_settings_screen_owner = { .name = "clock_settings" };
+static bool s_clock_settings_info_pin;
 static const app_shell_app_t *s_clock_settings_return_app;
 static cyd_clock_settings_page_t s_clock_settings_page = CYD_CLOCK_SETTINGS_PAGE_ALARM1;
 static cyd_clock_settings_touch_tracker_t s_clock_settings_touch_tracker;
@@ -186,17 +199,59 @@ static void cyd_clock_settings_fill_scheduler(cyd_clock_settings_view_model_t *m
     }
 }
 
+/* Missing means off: the info screen opens without the PIN unless asked. */
+static bool cyd_clock_settings_load_info_pin(void)
+{
+    nvs_handle_t handle = 0;
+    uint8_t value = 0;
+
+    if (nvs_open_descriptor(NVS_KEY_INFO_PIN.ns, NVS_READONLY, &handle) != ESP_OK) {
+        return false;
+    }
+    esp_err_t err = nvs_get_u8(handle, NVS_KEY_INFO_PIN.key, &value);
+    nvs_close(handle);
+    return err == ESP_OK && value != 0;
+}
+
+static esp_err_t cyd_clock_settings_save_info_pin(bool on)
+{
+    nvs_handle_t handle = 0;
+
+    ESP_RETURN_ON_ERROR(nvs_open_descriptor(NVS_KEY_INFO_PIN.ns, NVS_READWRITE, &handle), TAG, "open NVS failed");
+    esp_err_t err = nvs_set_u8(handle, NVS_KEY_INFO_PIN.key, on ? 1U : 0U);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+static esp_err_t cyd_clock_settings_apply_info_pin(bool on)
+{
+    s_clock_settings_info_pin = on;
+    return settings_pin_guard_app(system_info_app_get_app(), "システム情報", on);
+}
+
+esp_err_t cyd_clock_settings_app_init(void)
+{
+    return cyd_clock_settings_apply_info_pin(cyd_clock_settings_load_info_pin());
+}
+
 static esp_err_t cyd_clock_settings_show(void)
 {
     static const cyd_clock_settings_view_page_t pages[] = {
         [CYD_CLOCK_SETTINGS_PAGE_ALARM1] = CYD_CLOCK_SETTINGS_VIEW_ALARM1,
         [CYD_CLOCK_SETTINGS_PAGE_ALARM2] = CYD_CLOCK_SETTINGS_VIEW_ALARM2,
+        [CYD_CLOCK_SETTINGS_PAGE_INFO] = CYD_CLOCK_SETTINGS_VIEW_INFO,
         [CYD_CLOCK_SETTINGS_PAGE_SCHEDULER] = CYD_CLOCK_SETTINGS_VIEW_SCHEDULER,
     };
     cyd_clock_settings_view_model_t model = { .page = pages[s_clock_settings_page] };
 
     if (s_clock_settings_page == CYD_CLOCK_SETTINGS_PAGE_SCHEDULER) {
         cyd_clock_settings_fill_scheduler(&model);
+    } else if (s_clock_settings_page == CYD_CLOCK_SETTINGS_PAGE_INFO) {
+        model.pin_enabled = settings_pin_is_enabled();
+        model.info_pin = s_clock_settings_info_pin;
     } else {
         cyd_clock_alarm_config_t alarm = { 0 };
         cyd_clock_alarm_id_t id = s_clock_settings_page == CYD_CLOCK_SETTINGS_PAGE_ALARM1 ? CYD_CLOCK_ALARM_1
@@ -356,6 +411,12 @@ static esp_err_t cyd_clock_settings_step(void *ctx)
         if (action_id == CYD_CLOCK_SETTINGS_ACTION_NEXT_PAGE &&
             (size_t)s_clock_settings_page + 1 < CYD_CLOCK_SETTINGS_PAGE_COUNT) {
             s_clock_settings_page = (cyd_clock_settings_page_t)((size_t)s_clock_settings_page + 1U);
+            return cyd_clock_settings_show();
+        }
+        if (action_id == CYD_CLOCK_SETTINGS_ACTION_INFO_PIN && settings_pin_is_enabled()) {
+            const bool on = !s_clock_settings_info_pin;
+            ESP_RETURN_ON_ERROR(cyd_clock_settings_save_info_pin(on), TAG, "saving the info PIN choice failed");
+            ESP_RETURN_ON_ERROR(cyd_clock_settings_apply_info_pin(on), TAG, "guarding the info screen failed");
             return cyd_clock_settings_show();
         }
         if (action_id == CYD_CLOCK_SETTINGS_ACTION_BACK) {

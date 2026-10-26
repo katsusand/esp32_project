@@ -335,6 +335,30 @@ bool cyd_ui_add_button_with_fg_enabled(cyd_display_screen_t *screen,
 esp_err_t cyd_ui_add_stepper_row(cyd_display_screen_t *screen,
                                  const cyd_ui_stepper_row_t *row);
 
+/*
+ * One on/off setting of a settings page: a full-width row with the label on
+ * the left and a switch on the right.
+ *
+ *   rows row..row+4 (40px), cols 1-38   | label                    (==O) |
+ *
+ * The switch shows the state by itself, with no "オン" / "オフ" words: the
+ * knob at the left of a plain track is off, at the right of a filled
+ * (primary) track is on. The whole row is one button, so a tap on the label
+ * flips it too. A disabled row (a setting that depends on another one being
+ * on) is greyed out as a whole, label included, and does not hit-test.
+ *
+ * English contract: the row only draws; the caller flips its value on
+ * `action_id` and builds the screen again. Uses 4 widgets. The label is 16px
+ * bold in 26 columns (208px).
+ */
+#define CYD_UI_SWITCH_ROW_ROWS 5
+bool cyd_ui_add_switch_row(cyd_display_screen_t *screen,
+                           const char *label,
+                           uint8_t row,
+                           bool on,
+                           bool enabled,
+                           uint16_t action_id);
+
 /* Panel / separator / background plate. radius 0 draws square corners. */
 bool cyd_ui_add_rect(cyd_display_screen_t *screen,
                      uint8_t col,

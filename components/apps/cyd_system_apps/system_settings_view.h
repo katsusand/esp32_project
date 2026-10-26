@@ -60,7 +60,7 @@ extern "C" {
 #define CYD_SETTINGS_APP_ACTION_THEME_DOWN 0x2224
 #define CYD_SETTINGS_APP_ACTION_THEME_UP 0x2225
 #define CYD_SETTINGS_APP_ACTION_PIN_TOGGLE 0x2226
-#define CYD_SETTINGS_APP_ACTION_PIN_INFO_TOGGLE 0x2227
+/* 0x2227 was the system info switch; that switch now lives in the app's own settings. */
 #define CYD_SETTINGS_APP_ACTION_PIN_CHANGE 0x2228
 #define CYD_SETTINGS_APP_ACTION_PIN_OFF_CANCEL 0x2229
 #define CYD_SETTINGS_APP_ACTION_PIN_OFF_CONFIRM 0x222a
@@ -165,7 +165,6 @@ typedef struct {
 
     /* SECURITY */
     bool pin_enabled;
-    bool pin_info_lock;    /* system info asks for the PIN too */
     bool pin_has_recovery; /* the product installed another way past a forgotten PIN */
 
     /* APPS: titles of the registered apps' settings screens. */
