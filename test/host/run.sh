@@ -168,6 +168,14 @@ run_case "System settings screens" "${BUILD_DIR}/test_system_settings_view"
 
 run_case "Fixed settings items" "${BUILD_DIR}/test_settings_fix_logic"
 
+# Touch calibration: which two rounds of 4 points may be saved, and the save dialog's hit test
+CYD_INPUT="${PROJECT_ROOT}/components/platform/cyd_input"
+"${CC}" "${CFLAGS[@]}" -I"${CYD_INPUT}" \
+    "${CYD_INPUT}/touch_calibration_logic.c" "${SCRIPT_DIR}/test_touch_calibration_logic.c" \
+    -o "${BUILD_DIR}/test_touch_calibration_logic"
+
+run_case "Touch calibration checks" "${BUILD_DIR}/test_touch_calibration_logic"
+
 # Settings PIN: digits, the wait after wrong PINs, typing it twice, the stored hash
 "${CC}" "${CFLAGS[@]}" -I"${SYSTEM_APPS}" \
     "${SYSTEM_APPS}/settings_pin_logic.c" "${SCRIPT_DIR}/test_settings_pin_logic.c" \

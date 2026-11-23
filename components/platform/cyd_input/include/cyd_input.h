@@ -79,6 +79,19 @@ esp_err_t cyd_input_discard_pending_events(void);
 esp_err_t cyd_input_run_touch_calibration(void);
 esp_err_t cyd_input_clear_touch_calibration(void);
 
+/*
+ * Called on the input task when the BOOT button has been held for exactly
+ * the registered number of seconds (once per press).
+ *
+ * English contract: the handler runs on the input task with no lock held and
+ * must only post work elsewhere (for example app_shell_switch_to()). It must
+ * not block, draw, or call cyd_input_run_touch_calibration(), which pauses
+ * this very task. NULL `fn` unregisters. ESP_ERR_NOT_SUPPORTED when the BOOT
+ * button is disabled in Kconfig. `seconds` is 1..CYD_BOOT_BUTTON_LONG_PRESS_MAX_SECONDS.
+ */
+typedef void (*cyd_input_boot_button_hold_fn)(void *ctx);
+esp_err_t cyd_input_set_boot_button_hold_handler(uint8_t seconds, cyd_input_boot_button_hold_fn fn, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

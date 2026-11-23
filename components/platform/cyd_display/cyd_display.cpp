@@ -962,7 +962,7 @@ extern "C" esp_err_t cyd_display_log_scroll(int delta)
     return cyd_display_submit_log_cmd(&cmd);
 }
 
-extern "C" esp_err_t cyd_display_show_touch_calibration_screen(void)
+extern "C" esp_err_t cyd_display_show_touch_calibration_screen(const char *title_text, const char *body_text)
 {
     ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
     ESP_RETURN_ON_ERROR(cyd_display_check_owner(), TAG, "display owner required");
@@ -973,8 +973,12 @@ extern "C" esp_err_t cyd_display_show_touch_calibration_screen(void)
     static const uint16_t black = TFT_BLACK;
     const cyd_ui_font_t *title = cyd_display_font_table(CYD_DISPLAY_FONT_TITLE);
     const cyd_ui_font_t *body = cyd_display_font_table(CYD_DISPLAY_FONT_BODY);
-    const char *title_text = "タッチ位置の補正";
-    const char *body_text = "四隅の印を順にタッチしてください";
+    if (title_text == nullptr) {
+        title_text = "タッチ位置の補正";
+    }
+    if (body_text == nullptr) {
+        body_text = "四隅の印を順にタッチしてください";
+    }
 
     s_display.fillScreen(TFT_BLACK);
     s_display.startWrite();
@@ -984,6 +988,60 @@ extern "C" esp_err_t cyd_display_show_touch_calibration_screen(void)
     cyd_display_draw_aa_text(s_display, *body, body_text,
                              (s_display.width() - cyd_ui_font_text_width(body, body_text)) / 2,
                              s_display.height() / 2 + 8, TFT_WHITE, &black);
+    s_display.endWrite();
+    return ESP_OK;
+}
+
+static void cyd_display_draw_touch_calibration_button(const cyd_display_pixel_rect_t &rect,
+                                                      const char *label,
+                                                      uint16_t fill)
+{
+    const cyd_ui_font_t *font = cyd_display_font_table(CYD_DISPLAY_FONT_BODY_BOLD);
+    s_display.fillRoundRect(rect.x, rect.y, rect.w, rect.h, 6, fill);
+    s_display.drawRoundRect(rect.x, rect.y, rect.w, rect.h, 6, TFT_WHITE);
+    cyd_display_draw_aa_text(s_display, *font, label,
+                             rect.x + (rect.w - cyd_ui_font_text_width(font, label)) / 2,
+                             rect.y + (rect.h - font->line_height) / 2, TFT_WHITE, &fill);
+}
+
+extern "C" esp_err_t cyd_display_show_touch_calibration_confirm(cyd_display_pixel_rect_t *save_rect,
+                                                                cyd_display_pixel_rect_t *retry_rect)
+{
+    ESP_RETURN_ON_ERROR(cyd_display_check_ready(), TAG, "display unavailable");
+    ESP_RETURN_ON_ERROR(cyd_display_check_owner(), TAG, "display owner required");
+    ESP_RETURN_ON_FALSE(save_rect != nullptr && retry_rect != nullptr, ESP_ERR_INVALID_ARG, TAG, "rects required");
+
+    /* Settings-type screen: 16px only. The buttons are large because the tap
+       is mapped by the calibration being confirmed; one that is a little off
+       should still hit, one that is wrong should miss both. */
+    static const uint16_t black = TFT_BLACK;
+    static const uint16_t save_fill = 0x03E0;  /* dark green */
+    static const uint16_t retry_fill = 0x4208; /* dark grey */
+    const cyd_ui_font_t *title = cyd_display_font_table(CYD_DISPLAY_FONT_BODY_BOLD);
+    const cyd_ui_font_t *body = cyd_display_font_table(CYD_DISPLAY_FONT_BODY);
+    const char *title_text = "補正を保存します";
+    const char *body_text = "保存を押せたら補正は合っています";
+    const int32_t width = s_display.width();
+    const int32_t height = s_display.height();
+    const int32_t margin = 20;
+    const int32_t gap = 20;
+    const int32_t button_w = (width - margin * 2 - gap) / 2;
+    const int32_t button_h = 56;
+    const int32_t button_y = height / 2 + 20;
+
+    *retry_rect = { margin, button_y, button_w, button_h };
+    *save_rect = { margin + button_w + gap, button_y, button_w, button_h };
+
+    s_display.fillScreen(TFT_BLACK);
+    s_display.startWrite();
+    cyd_display_draw_aa_text(s_display, *title, title_text,
+                             (width - cyd_ui_font_text_width(title, title_text)) / 2,
+                             height / 2 - 64, TFT_YELLOW, &black);
+    cyd_display_draw_aa_text(s_display, *body, body_text,
+                             (width - cyd_ui_font_text_width(body, body_text)) / 2,
+                             height / 2 - 32, TFT_WHITE, &black);
+    cyd_display_draw_touch_calibration_button(*retry_rect, "やり直し", retry_fill);
+    cyd_display_draw_touch_calibration_button(*save_rect, "保存", save_fill);
     s_display.endWrite();
     return ESP_OK;
 }
