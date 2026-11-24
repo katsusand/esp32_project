@@ -214,6 +214,10 @@ ESP32 の GPIO0 は strapping pin です。通常利用時の注意点は以下�
 
 English supplement: Treat BOOT as a user button only after firmware has started. Do not design application behavior that requires BOOT to be held during reset or power-on.
 
+長押しをイベントキューで受ける app が無くても動くように、`cyd_input_set_boot_button_hold_handler(seconds, fn, ctx)` で「ちょうど `seconds` 秒押された」ときに 1 回呼ぶ関数を登録できます。時計製品は 5 秒でタッチ補正を開きます（[CYD Clock Composition](cyd_clock_composition.md#boot-button)）。
+
+English contract: `fn` runs on the input task, once per press, with no lock held. It must only post work (for example `app_shell_switch_to()`); it must not block, draw, or run calibration, which pauses the input task.
+
 ## Calibration
 
 タッチ補正は `cyd_input` が実行します。raw 読み取りは `xpt2046_softspi`、ターゲット描画は `cyd_display` を使います。`CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION` が有効な場合、補正値は NVS に保存されます。
@@ -224,6 +228,26 @@ English supplement: Treat BOOT as a user button only after firmware has started.
 - NVS key: `touch_cal`
 
 `CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT` が有効で、保存済み補正値がない場合は、起動時に補正フローを実行します。
+
+### Calibration Flow
+
+`cyd_input_run_touch_calibration()` は、確かめた補正しか保存しません。
+
+1. 四隅の印を 1 回目としてタッチしてもらう
+2. 「もう一度、同じ順にタッチしてください」で 2 回目をタッチしてもらう
+3. 2 回を検査する。だめなら「やり直します」を約 1.5 秒出して 1 回目へ戻る
+4. 2 回の平均を候補にして、保存ダイアログ（「補正を保存します」、「やり直し」「保存」）を出す
+5. ダイアログのタップは **候補の補正** で座標にして判定する。「保存」に当たれば候補を使い始めて NVS に保存する。「やり直し」か、20 秒どちらにも当たらなければ 1 回目へ戻る
+
+検査（`touch_calibration_logic.c`、ホストテストあり）:
+
+- 各回が既存の検査（raw の範囲、広がり、三角形の面積）を通ること
+- 各回の向きが、`CONFIG_CYD_TOUCH_X_MIN/X_MAX/Y_MIN/Y_MAX` の既定の変換と同じこと。左右・上下の反転や縦横の入れ替えになる組は弾く。既定値が基板に合っていない場合だけ `CONFIG_CYD_TOUCH_CAL_CHECK_ORIENTATION` を切る
+- 片方の回の 4 点を、もう片方の回の補正で座標にしたとき、どれも印から `TOUCH_CAL_AGREE_TOLERANCE_PX`（16px）以内にあること
+
+ダイアログは最後の検査です。補正がずれていればボタンに当たらないので、保存されずに時間切れでやり直しになります。
+
+English contract: the running mapping and NVS are untouched until 保存 is hit through the candidate mapping. Every failure path starts over from the first round; the flow ends only on 保存 or on a read/draw error. A single round used to be saved at once, and careless corners that passed the spread/area check left the unit with no reachable button.
 
 保存済み補正値は versioned blob として保存します。blob サイズ、version/header、または raw 座標が異常な場合は、その値を信用せず「すべて初期化」(`Initialize NVS`) を要求する warning 対象として扱います。
 

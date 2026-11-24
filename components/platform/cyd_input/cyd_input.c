@@ -16,6 +16,7 @@
 #include "app_stack_monitor.h"
 #include "cyd_display.h"
 #include "cyd_input.h"
+#include "touch_calibration_logic.h"
 #include "xpt2046_softspi.h"
 
 /* This component owns this data, so the namespace is declared here.
@@ -71,6 +72,9 @@ static const nvs_key_descriptor_t NVS_KEY_CYD_DISPLAY_TOUCH_CAL = {
 #ifndef CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT
 #define CONFIG_CYD_TOUCH_RUN_CALIBRATION_ON_BOOT 0
 #endif
+#ifndef CONFIG_CYD_TOUCH_CAL_CHECK_ORIENTATION
+#define CONFIG_CYD_TOUCH_CAL_CHECK_ORIENTATION 0
+#endif
 #ifndef CONFIG_CYD_INPUT_BINARY_STABLE_COUNT
 #define CONFIG_CYD_INPUT_BINARY_STABLE_COUNT 2
 #endif
@@ -115,10 +119,13 @@ typedef struct {
     TickType_t boot_button_release_tick;
     int16_t last_touch_x;
     int16_t last_touch_y;
-    float touch_affine[6];
+    touch_cal_affine_t touch_affine;
     cyd_input_touch_state_t touch_state;
     TickType_t last_activity_tick;
     volatile bool pause_requested;
+    cyd_input_boot_button_hold_fn boot_button_hold_fn;
+    void *boot_button_hold_ctx;
+    uint8_t boot_button_hold_seconds;
     SemaphoreHandle_t mutex;
     SemaphoreHandle_t pause_ack;
     QueueHandle_t event_queue;
@@ -127,9 +134,6 @@ typedef struct {
 
 static const char *TAG = "cyd_input";
 static const uint32_t TOUCH_CAL_VERSION = 1U;
-static const uint16_t TOUCH_CAL_RAW_MAX = 4095;
-static const uint16_t TOUCH_CAL_MIN_SPAN = 100;
-static const int32_t TOUCH_CAL_MIN_AREA = 10000;
 
 static cyd_input_state_t s_input = {
     .initialized = false,
@@ -151,7 +155,7 @@ static cyd_input_state_t s_input = {
     .boot_button_release_tick = 0,
     .last_touch_x = 0,
     .last_touch_y = 0,
-    .touch_affine = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f },
+    .touch_affine = { .m = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f } },
     .touch_state = {
         .pressed = false,
         .x = 0,
@@ -160,6 +164,9 @@ static cyd_input_state_t s_input = {
     },
     .last_activity_tick = 0,
     .pause_requested = false,
+    .boot_button_hold_fn = NULL,
+    .boot_button_hold_ctx = NULL,
+    .boot_button_hold_seconds = 0,
     .mutex = NULL,
     .pause_ack = NULL,
     .event_queue = NULL,
@@ -167,6 +174,8 @@ static cyd_input_state_t s_input = {
 };
 
 #define CYD_INPUT_PAUSE_ACK_TIMEOUT_MS 1000
+
+static portMUX_TYPE s_input_hold_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static esp_err_t cyd_input_check_ready(void)
 {
@@ -181,16 +190,6 @@ static void cyd_input_delay_ms(uint32_t delay_ms)
 {
     TickType_t ticks = pdMS_TO_TICKS(delay_ms);
     vTaskDelay(ticks > 0 ? ticks : 1);
-}
-
-static uint16_t cyd_input_u16_min(uint16_t lhs, uint16_t rhs)
-{
-    return lhs < rhs ? lhs : rhs;
-}
-
-static uint16_t cyd_input_u16_max(uint16_t lhs, uint16_t rhs)
-{
-    return lhs > rhs ? lhs : rhs;
 }
 
 static int32_t cyd_input_abs_i32(int32_t value)
@@ -315,98 +314,47 @@ static void cyd_input_touch_calibration_default_params(uint16_t *params)
     params[7] = CONFIG_CYD_TOUCH_Y_MAX;
 }
 
+static esp_err_t cyd_input_touch_calibration_solve(const uint16_t *params, touch_cal_affine_t *affine)
+{
+    ESP_RETURN_ON_FALSE(params != NULL && affine != NULL, ESP_ERR_INVALID_ARG, TAG, "touch params required");
+    ESP_RETURN_ON_FALSE(touch_cal_solve(params,
+                                        cyd_input_touch_calibration_width(),
+                                        cyd_input_touch_calibration_height(),
+                                        affine),
+                        ESP_ERR_INVALID_ARG,
+                        TAG,
+                        "touch calibration matrix is singular");
+    return ESP_OK;
+}
+
 static esp_err_t cyd_input_touch_calibration_set_runtime(const uint16_t *params)
 {
-    ESP_RETURN_ON_FALSE(params != NULL, ESP_ERR_INVALID_ARG, TAG, "touch params required");
-
-    uint32_t vect[6] = { 0, 0, 0, 0, 0, 0 };
-    float mat[3][3] = {
-        { 0.0f, 0.0f, 0.0f },
-        { 0.0f, 0.0f, 0.0f },
-        { 0.0f, 0.0f, 0.0f },
-    };
-    int32_t width = cyd_input_touch_calibration_width();
-    int32_t height = cyd_input_touch_calibration_height();
-
-    for (int i = 0; i < 4; ++i) {
-        int32_t tx = (i & 2) ? (width - 1) : 0;
-        int32_t ty = (i & 1) ? (height - 1) : 0;
-        int32_t px = params[i * 2];
-        int32_t py = params[i * 2 + 1];
-        float a = (float)(px * px);
-        mat[0][0] += a;
-        a = (float)(px * py);
-        mat[0][1] += a;
-        mat[1][0] += a;
-        a = (float)px;
-        mat[0][2] += a;
-        mat[2][0] += a;
-        a = (float)(py * py);
-        mat[1][1] += a;
-        a = (float)py;
-        mat[1][2] += a;
-        mat[2][1] += a;
-        mat[2][2] += 1.0f;
-
-        vect[0] += (uint32_t)(px * tx);
-        vect[1] += (uint32_t)(py * tx);
-        vect[2] += (uint32_t)tx;
-        vect[3] += (uint32_t)(px * ty);
-        vect[4] += (uint32_t)(py * ty);
-        vect[5] += (uint32_t)ty;
-    }
-
-    for (int k = 0; k < 3; ++k) {
-        float t = mat[k][k];
-        ESP_RETURN_ON_FALSE(t != 0.0f, ESP_ERR_INVALID_ARG, TAG, "touch calibration matrix is singular");
-
-        for (int i = 0; i < 3; ++i) {
-            mat[k][i] /= t;
-        }
-
-        mat[k][k] = 1.0f / t;
-        for (int j = 0; j < 3; ++j) {
-            if (j == k) {
-                continue;
-            }
-
-            float u = mat[j][k];
-            for (int i = 0; i < 3; ++i) {
-                if (i != k) {
-                    mat[j][i] -= mat[k][i] * u;
-                } else {
-                    mat[j][i] = -u / t;
-                }
-            }
-        }
-    }
-
-    float v0 = (float)vect[0];
-    float v1 = (float)vect[1];
-    float v2 = (float)vect[2];
-    s_input.touch_affine[0] = mat[0][0] * v0 + mat[0][1] * v1 + mat[0][2] * v2;
-    s_input.touch_affine[1] = mat[1][0] * v0 + mat[1][1] * v1 + mat[1][2] * v2;
-    s_input.touch_affine[2] = mat[2][0] * v0 + mat[2][1] * v1 + mat[2][2] * v2;
-
-    float v3 = (float)vect[3];
-    float v4 = (float)vect[4];
-    float v5 = (float)vect[5];
-    s_input.touch_affine[3] = mat[0][0] * v3 + mat[0][1] * v4 + mat[0][2] * v5;
-    s_input.touch_affine[4] = mat[1][0] * v3 + mat[1][1] * v4 + mat[1][2] * v5;
-    s_input.touch_affine[5] = mat[2][0] * v3 + mat[2][1] * v4 + mat[2][2] * v5;
+    touch_cal_affine_t affine;
+    ESP_RETURN_ON_ERROR(cyd_input_touch_calibration_solve(params, &affine), TAG, "solve touch calibration failed");
+    s_input.touch_affine = affine;
     return ESP_OK;
+}
+
+/* raw -> touch calibration frame (affine) -> runtime rotation/flip -> UI. */
+static void cyd_input_touch_map_raw(const touch_cal_affine_t *affine, int32_t raw_x, int32_t raw_y, int32_t *x, int32_t *y)
+{
+    int32_t tx = 0;
+    int32_t ty = 0;
+    touch_cal_map(affine, raw_x, raw_y, &tx, &ty);
+    cyd_input_touch_apply_runtime_rotation(&tx, &ty);
+    if (x != NULL) {
+        *x = tx;
+    }
+    if (y != NULL) {
+        *y = ty;
+    }
 }
 
 static void cyd_input_touch_transform_raw(int16_t raw_x, int16_t raw_y, int16_t *x, int16_t *y)
 {
-    int32_t tx = (int32_t)(s_input.touch_affine[0] * (float)raw_x +
-                           s_input.touch_affine[1] * (float)raw_y) +
-                 (int32_t)s_input.touch_affine[2];
-    int32_t ty = (int32_t)(s_input.touch_affine[3] * (float)raw_x +
-                           s_input.touch_affine[4] * (float)raw_y) +
-                 (int32_t)s_input.touch_affine[5];
-
-    cyd_input_touch_apply_runtime_rotation(&tx, &ty);
+    int32_t tx = 0;
+    int32_t ty = 0;
+    cyd_input_touch_map_raw(&s_input.touch_affine, raw_x, raw_y, &tx, &ty);
 
     if (x != NULL) {
         *x = (int16_t)tx;
@@ -414,58 +362,6 @@ static void cyd_input_touch_transform_raw(int16_t raw_x, int16_t raw_y, int16_t 
     if (y != NULL) {
         *y = (int16_t)ty;
     }
-}
-
-static int32_t cyd_input_touch_calibration_triangle_area2(const uint16_t *params, size_t a, size_t b, size_t c)
-{
-    int32_t ax = params[a * 2];
-    int32_t ay = params[a * 2 + 1];
-    int32_t bx = params[b * 2];
-    int32_t by = params[b * 2 + 1];
-    int32_t cx = params[c * 2];
-    int32_t cy = params[c * 2 + 1];
-
-    return cyd_input_abs_i32((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
-}
-
-static bool cyd_input_touch_calibration_params_valid(const uint16_t *params)
-{
-    if (params == NULL) {
-        return false;
-    }
-
-    uint16_t min_x = UINT16_MAX;
-    uint16_t min_y = UINT16_MAX;
-    uint16_t max_x = 0;
-    uint16_t max_y = 0;
-
-    for (size_t i = 0; i < 4; ++i) {
-        uint16_t x = params[i * 2];
-        uint16_t y = params[i * 2 + 1];
-        if (x > TOUCH_CAL_RAW_MAX || y > TOUCH_CAL_RAW_MAX) {
-            return false;
-        }
-        min_x = cyd_input_u16_min(min_x, x);
-        min_y = cyd_input_u16_min(min_y, y);
-        max_x = cyd_input_u16_max(max_x, x);
-        max_y = cyd_input_u16_max(max_y, y);
-    }
-
-    if ((max_x - min_x) < TOUCH_CAL_MIN_SPAN || (max_y - min_y) < TOUCH_CAL_MIN_SPAN) {
-        return false;
-    }
-
-    for (size_t a = 0; a < 2; ++a) {
-        for (size_t b = a + 1; b < 3; ++b) {
-            for (size_t c = b + 1; c < 4; ++c) {
-                if (cyd_input_touch_calibration_triangle_area2(params, a, b, c) >= TOUCH_CAL_MIN_AREA) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
 }
 
 static esp_err_t cyd_input_touch_calibration_apply_default(void)
@@ -790,6 +686,21 @@ static void cyd_input_emit_touch_event(cyd_input_touch_action_t action,
     cyd_input_queue_touch_event(action, pressed, x, y, hold_ticks, tick);
 }
 
+/* Runs on the input task, once per press, when the hold reaches the registered length. */
+static void cyd_input_notify_boot_button_hold(uint8_t hold_seconds)
+{
+    portENTER_CRITICAL(&s_input_hold_lock);
+    cyd_input_boot_button_hold_fn fn = s_input.boot_button_hold_fn;
+    void *ctx = s_input.boot_button_hold_ctx;
+    uint8_t seconds = s_input.boot_button_hold_seconds;
+    portEXIT_CRITICAL(&s_input_hold_lock);
+
+    if (fn != NULL && hold_seconds == seconds) {
+        ESP_LOGI(TAG, "boot button held %u s: running hold handler", (unsigned)hold_seconds);
+        fn(ctx);
+    }
+}
+
 static void cyd_input_handle_boot_button_short_release(TickType_t now)
 {
     if (s_input.boot_button_click_pending) {
@@ -982,6 +893,7 @@ static void cyd_input_handle_boot_button_sample(TickType_t now)
     s_input.boot_button_long_press_seconds = hold_seconds;
     cyd_input_flush_boot_button_click(now);
     cyd_input_emit_boot_button_event(CYD_INPUT_BUTTON_ACTION_LONG_PRESS, true, hold_seconds, now);
+    cyd_input_notify_boot_button_hold(hold_seconds);
 }
 
 static esp_err_t cyd_input_touch_read_sample(int16_t *x, int16_t *y, bool *pressed)
@@ -1304,7 +1216,7 @@ static esp_err_t cyd_input_touch_calibration_load_from_nvs(void)
         ESP_LOGW(TAG, "touch calibration header mismatch: 0x%08lx", (unsigned long)blob.version);
         return cyd_input_touch_calibration_recover_invalid_nvs("version mismatch");
     }
-    if (!cyd_input_touch_calibration_params_valid(blob.params)) {
+    if (!touch_cal_params_valid(blob.params)) {
         ESP_LOGW(TAG,
                  "touch calibration params invalid: [%u,%u] [%u,%u] [%u,%u] [%u,%u]",
                  blob.params[0],
@@ -1528,18 +1440,30 @@ esp_err_t cyd_input_discard_pending_events(void)
 }
 
 #if CONFIG_CYD_TOUCH_ENABLED
+/* How long the save dialog waits for a tap before starting over. */
+#define CYD_INPUT_TOUCH_CAL_CONFIRM_TIMEOUT_MS 20000
+/* How long the "starting over" notice stays up. */
+#define CYD_INPUT_TOUCH_CAL_NOTICE_MS 1500
+
+typedef enum {
+    CYD_INPUT_TOUCH_CAL_CHOICE_SAVE = 0,
+    CYD_INPUT_TOUCH_CAL_CHOICE_RETRY,
+    CYD_INPUT_TOUCH_CAL_CHOICE_TIMEOUT,
+} cyd_input_touch_cal_choice_t;
+
 /* Shows the four targets and collects one raw point per target. */
 static esp_err_t cyd_input_touch_collect_calibration_set(const int32_t *target_x,
                                                          const int32_t *target_y,
+                                                         const char *body_text,
                                                          uint16_t *params)
 {
     static const uint8_t CAL_RADIUS = 14;
 
-    esp_err_t err = cyd_display_show_touch_calibration_screen();
+    esp_err_t err = cyd_display_show_touch_calibration_screen(NULL, body_text);
     if (err == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(800));
     }
-    for (size_t i = 0; err == ESP_OK && i < 4; ++i) {
+    for (size_t i = 0; err == ESP_OK && i < TOUCH_CAL_POINT_COUNT; ++i) {
         err = cyd_display_draw_touch_calibration_target(target_x[i], target_y[i], CAL_RADIUS, true);
         if (err != ESP_OK) {
             break;
@@ -1559,16 +1483,155 @@ static esp_err_t cyd_input_touch_collect_calibration_set(const int32_t *target_x
     }
     return err;
 }
+
+/*
+ * The affine that says which way round the panel is: the Kconfig default
+ * mapping, which is what the unit runs on before it is calibrated. NULL when
+ * the check is turned off or the defaults do not solve.
+ */
+static const touch_cal_affine_t *cyd_input_touch_calibration_reference(touch_cal_affine_t *storage)
+{
+#if CONFIG_CYD_TOUCH_CAL_CHECK_ORIENTATION
+    uint16_t defaults[TOUCH_CAL_PARAM_COUNT] = { 0 };
+    cyd_input_touch_calibration_default_params(defaults);
+    if (cyd_input_touch_calibration_solve(defaults, storage) == ESP_OK) {
+        return storage;
+    }
+    ESP_LOGW(TAG, "default touch range does not solve; orientation check skipped");
+#else
+    (void)storage;
+#endif
+    return NULL;
+}
+
+static void cyd_input_touch_log_set(const char *what, const uint16_t *params)
+{
+    ESP_LOGW(TAG,
+             "%s: [%u,%u] [%u,%u] [%u,%u] [%u,%u]",
+             what,
+             params[0],
+             params[1],
+             params[2],
+             params[3],
+             params[4],
+             params[5],
+             params[6],
+             params[7]);
+}
+
+/*
+ * Follows one press until the finger leaves and averages it. Unlike
+ * cyd_input_touch_collect_calibration_point() it never waits for a further
+ * press, so a quick tap cannot hold the dialog past its timeout.
+ */
+static esp_err_t cyd_input_touch_read_tap(int32_t *raw_x, int32_t *raw_y, bool *tapped)
+{
+    static const int MIN_SAMPLES = 3;
+    static const int RELEASE_SAMPLES = 5;
+    int32_t sum_x = 0;
+    int32_t sum_y = 0;
+    int samples = 0;
+    int released = 0;
+
+    while (released < RELEASE_SAMPLES) {
+        int16_t x = 0;
+        int16_t y = 0;
+        bool pressed = false;
+        cyd_input_delay_ms(10);
+        ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(&x, &y, &pressed), TAG, "touch raw read failed");
+        if (pressed) {
+            sum_x += x;
+            sum_y += y;
+            ++samples;
+            released = 0;
+        } else {
+            ++released;
+        }
+    }
+
+    *tapped = samples >= MIN_SAMPLES;
+    if (*tapped) {
+        *raw_x = sum_x / samples;
+        *raw_y = sum_y / samples;
+    }
+    return ESP_OK;
+}
+
+/*
+ * Waits for one tap on the save dialog and hit-tests it through `candidate`,
+ * the calibration being confirmed. Only reaching a button through that
+ * mapping counts, which is the last check that the mapping works. A tap that
+ * misses both buttons is ignored; the timeout counts from the dialog, not
+ * from the last tap, so a mapping that misses everything still ends.
+ */
+static esp_err_t cyd_input_touch_calibration_confirm(const touch_cal_affine_t *candidate,
+                                                     cyd_input_touch_cal_choice_t *choice)
+{
+    cyd_display_pixel_rect_t save_px = { 0 };
+    cyd_display_pixel_rect_t retry_px = { 0 };
+    ESP_RETURN_ON_ERROR(cyd_display_show_touch_calibration_confirm(&save_px, &retry_px), TAG, "confirm screen failed");
+    const touch_cal_rect_t save_rect = { save_px.x, save_px.y, save_px.w, save_px.h };
+    const touch_cal_rect_t retry_rect = { retry_px.x, retry_px.y, retry_px.w, retry_px.h };
+
+    TickType_t start = xTaskGetTickCount();
+    TickType_t timeout = pdMS_TO_TICKS(CYD_INPUT_TOUCH_CAL_CONFIRM_TIMEOUT_MS);
+    while ((xTaskGetTickCount() - start) < timeout) {
+        bool pressed = false;
+        cyd_input_delay_ms(10);
+        ESP_RETURN_ON_ERROR(xpt2046_softspi_get_raw(NULL, NULL, &pressed), TAG, "touch raw read failed");
+        if (!pressed) {
+            continue;
+        }
+
+        int32_t raw_x = 0;
+        int32_t raw_y = 0;
+        bool tapped = false;
+        ESP_RETURN_ON_ERROR(cyd_input_touch_read_tap(&raw_x, &raw_y, &tapped), TAG, "confirm tap failed");
+        if (!tapped) {
+            continue;
+        }
+
+        int32_t x = 0;
+        int32_t y = 0;
+        cyd_input_touch_map_raw(candidate, raw_x, raw_y, &x, &y);
+        if (touch_cal_rect_contains(&save_rect, x, y)) {
+            *choice = CYD_INPUT_TOUCH_CAL_CHOICE_SAVE;
+            return ESP_OK;
+        }
+        if (touch_cal_rect_contains(&retry_rect, x, y)) {
+            *choice = CYD_INPUT_TOUCH_CAL_CHOICE_RETRY;
+            return ESP_OK;
+        }
+        ESP_LOGI(TAG, "confirm tap at (%ld,%ld) missed both buttons", (long)x, (long)y);
+    }
+
+    *choice = CYD_INPUT_TOUCH_CAL_CHOICE_TIMEOUT;
+    return ESP_OK;
+}
+
+static esp_err_t cyd_input_touch_calibration_notice(const char *body_text)
+{
+    esp_err_t err = cyd_display_show_touch_calibration_screen("やり直します", body_text);
+    vTaskDelay(pdMS_TO_TICKS(CYD_INPUT_TOUCH_CAL_NOTICE_MS));
+    return err;
+}
 #endif
 
 esp_err_t cyd_input_run_touch_calibration(void)
 {
 #if CONFIG_CYD_TOUCH_ENABLED
-    uint16_t params[8] = { 0 };
-    int32_t target_x[4] = { 0 };
-    int32_t target_y[4] = { 0 };
+    uint16_t first[TOUCH_CAL_PARAM_COUNT] = { 0 };
+    uint16_t second[TOUCH_CAL_PARAM_COUNT] = { 0 };
+    uint16_t params[TOUCH_CAL_PARAM_COUNT] = { 0 };
+    int32_t target_x[TOUCH_CAL_POINT_COUNT] = { 0 };
+    int32_t target_y[TOUCH_CAL_POINT_COUNT] = { 0 };
+    touch_cal_affine_t reference_storage;
+    touch_cal_affine_t candidate;
+    const touch_cal_affine_t *reference = cyd_input_touch_calibration_reference(&reference_storage);
+    const int32_t frame_w = cyd_input_touch_calibration_width();
+    const int32_t frame_h = cyd_input_touch_calibration_height();
 
-    for (size_t i = 0; i < 4; ++i) {
+    for (size_t i = 0; i < TOUCH_CAL_POINT_COUNT; ++i) {
         cyd_input_touch_get_calibration_target(i, &target_x[i], &target_y[i]);
     }
 
@@ -1578,32 +1641,59 @@ esp_err_t cyd_input_run_touch_calibration(void)
     }
 
     /*
-     * The set is validated before it is applied or saved, and a bad one is
-     * simply asked for again. Validation used to run only on load, so a
-     * degenerate set (the same spot tapped four times) was saved, left the
-     * running session with an unusable mapping, and on the next boot tripped
-     * the forced Initialize NVS flow.
+     * Two rounds of 4 points, then a save dialog tapped through the new
+     * calibration. Nothing is applied or saved until 保存 is hit.
+     *
+     * English contract: the running mapping (s_input.touch_affine) and NVS
+     * stay untouched until the user hits 保存 through the candidate mapping.
+     * A single valid-looking round used to be saved at once: corners tapped
+     * carelessly passed the spread/area check, left every button unreachable,
+     * and the boot long press then opened a settings screen nobody could
+     * operate. Every failure path starts over from the first round; the flow
+     * only ends on 保存 or on a read/draw error.
      */
     esp_err_t err = ESP_OK;
     while (true) {
-        err = cyd_input_touch_collect_calibration_set(target_x, target_y, params);
+        err = cyd_input_touch_collect_calibration_set(target_x, target_y, NULL, first);
         if (err != ESP_OK) {
             break;
         }
-        if (cyd_input_touch_calibration_params_valid(params) &&
-            cyd_input_touch_calibration_set_runtime(params) == ESP_OK) {
+        err = cyd_input_touch_collect_calibration_set(target_x, target_y,
+                                                      "もう一度、同じ順にタッチしてください", second);
+        if (err != ESP_OK) {
             break;
         }
-        ESP_LOGW(TAG,
-                 "touch calibration rejected: [%u,%u] [%u,%u] [%u,%u] [%u,%u]; asking again",
-                 params[0],
-                 params[1],
-                 params[2],
-                 params[3],
-                 params[4],
-                 params[5],
-                 params[6],
-                 params[7]);
+
+        touch_cal_check_t check = touch_cal_check_pair(first, second, reference, frame_w, frame_h,
+                                                       params, &candidate);
+        if (check != TOUCH_CAL_CHECK_OK) {
+            ESP_LOGW(TAG, "touch calibration rejected (%s); asking again", touch_cal_check_name(check));
+            cyd_input_touch_log_set("first round", first);
+            cyd_input_touch_log_set("second round", second);
+            err = cyd_input_touch_calibration_notice(check == TOUCH_CAL_CHECK_MISMATCH
+                                                         ? "1回目と2回目の位置が合いません"
+                                                         : "印の中心をタッチしてください");
+            if (err != ESP_OK) {
+                break;
+            }
+            continue;
+        }
+
+        cyd_input_touch_cal_choice_t choice = CYD_INPUT_TOUCH_CAL_CHOICE_TIMEOUT;
+        err = cyd_input_touch_calibration_confirm(&candidate, &choice);
+        if (err != ESP_OK) {
+            break;
+        }
+        if (choice == CYD_INPUT_TOUCH_CAL_CHOICE_SAVE) {
+            break;
+        }
+        ESP_LOGW(TAG, "touch calibration not saved (%s); asking again",
+                 choice == CYD_INPUT_TOUCH_CAL_CHOICE_RETRY ? "retry" : "timeout");
+    }
+
+    if (err == ESP_OK) {
+        s_input.touch_affine = candidate;
+        s_input.touch_calibration_loaded = true;
     }
     (void)cyd_display_invalidate();
     cyd_input_reset_touch_runtime_state();
@@ -1611,6 +1701,27 @@ esp_err_t cyd_input_run_touch_calibration(void)
     ESP_RETURN_ON_ERROR(err, TAG, "touch calibration failed");
     return cyd_input_touch_calibration_save_to_nvs(params);
 #else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t cyd_input_set_boot_button_hold_handler(uint8_t seconds, cyd_input_boot_button_hold_fn fn, void *ctx)
+{
+#if CONFIG_CYD_BOOT_BUTTON_ENABLED
+    ESP_RETURN_ON_FALSE(fn == NULL || (seconds >= 1 && seconds <= CONFIG_CYD_BOOT_BUTTON_LONG_PRESS_MAX_SECONDS),
+                        ESP_ERR_INVALID_ARG,
+                        TAG,
+                        "hold seconds out of range");
+    portENTER_CRITICAL(&s_input_hold_lock);
+    s_input.boot_button_hold_fn = fn;
+    s_input.boot_button_hold_ctx = ctx;
+    s_input.boot_button_hold_seconds = seconds;
+    portEXIT_CRITICAL(&s_input_hold_lock);
+    return ESP_OK;
+#else
+    (void)seconds;
+    (void)fn;
+    (void)ctx;
     return ESP_ERR_NOT_SUPPORTED;
 #endif
 }

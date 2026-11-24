@@ -110,6 +110,18 @@ menu "CYD Input"
         default n
         depends on CYD_TOUCH_USE_NVS_CALIBRATION
 
+    config CYD_TOUCH_CAL_CHECK_ORIENTATION
+        bool "Reject touch calibration that is mirrored or rotated"
+        default y
+        depends on CYD_TOUCH_ENABLED
+        help
+            補正の 4 点が、CYD_TOUCH_X_MIN/X_MAX/Y_MIN/Y_MAX と
+            CYD_TOUCH_OFFSET_ROTATION で決まる既定の向きと違う (左右・上下が
+            逆、縦横が入れ替わっている) ときは保存せず、やり直させます。
+            English supplement: the default raw range defines the expected
+            orientation. Turn this off only for a board whose defaults do not
+            match its panel; otherwise calibration could never be saved there.
+
     config CYD_INPUT_EVENT_QUEUE_LENGTH
         int "CYD input event queue length"
         default 16

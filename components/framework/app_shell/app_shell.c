@@ -37,6 +37,8 @@ static const app_shell_app_t *s_app_shell_pending_app;
 /* app_shell_switch_to_from(): what the pending app's enter() receives. */
 static const app_shell_app_t *s_app_shell_pending_from;
 static bool s_app_shell_pending_has_from;
+/* The from_app the active app's enter() received; app_shell_get_active_app_and_from(). */
+static const app_shell_app_t *s_app_shell_active_from;
 static app_shell_enter_guard_fn s_app_shell_enter_guard;
 static void *s_app_shell_enter_guard_ctx;
 static const app_shell_app_t *s_app_shell_home_app;
@@ -341,7 +343,10 @@ static bool app_shell_apply_one_pending_switch(void)
         }
     }
 
+    portENTER_CRITICAL(&s_app_shell_lock);
     s_app_shell_active_app = next_app;
+    s_app_shell_active_from = from_app;
+    portEXIT_CRITICAL(&s_app_shell_lock);
     if (s_app_shell_active_app->enter != NULL) {
         esp_err_t enter_err = s_app_shell_active_app->enter(s_app_shell_active_app->ctx, from_app);
         if (enter_err != ESP_OK) {
@@ -389,7 +394,11 @@ static void app_shell_task(void *arg)
     s_app_shell_home_app = initial_app;
     /* The home app stays the initial app even when the guard puts another
        screen in front of it. */
-    s_app_shell_active_app = app_shell_guarded(initial_app, NULL);
+    const app_shell_app_t *first_app = app_shell_guarded(initial_app, NULL);
+    portENTER_CRITICAL(&s_app_shell_lock);
+    s_app_shell_active_app = first_app;
+    s_app_shell_active_from = NULL;
+    portEXIT_CRITICAL(&s_app_shell_lock);
 
     if (s_app_shell_active_app != NULL && s_app_shell_active_app->enter != NULL) {
         esp_err_t enter_err = s_app_shell_active_app->enter(s_app_shell_active_app->ctx, NULL);
@@ -498,6 +507,20 @@ esp_err_t app_shell_return_to(const app_shell_app_t *return_app)
 const app_shell_app_t *app_shell_get_active_app(void)
 {
     return s_app_shell_active_app;
+}
+
+void app_shell_get_active_app_and_from(const app_shell_app_t **app, const app_shell_app_t **from_app)
+{
+    portENTER_CRITICAL(&s_app_shell_lock);
+    const app_shell_app_t *active = s_app_shell_active_app;
+    const app_shell_app_t *from = s_app_shell_active_from;
+    portEXIT_CRITICAL(&s_app_shell_lock);
+    if (app != NULL) {
+        *app = active;
+    }
+    if (from_app != NULL) {
+        *from_app = from;
+    }
 }
 
 const app_shell_app_t *app_shell_get_home_app(void)

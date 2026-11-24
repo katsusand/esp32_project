@@ -9,6 +9,7 @@
 #include "cyd_clock_app.h"
 #include "cyd_clock_composition.h"
 #include "cyd_display.h"
+#include "cyd_input.h"
 #include "cyd_system_apps.h"
 #include "error_log_store.h"
 #include "sd_card_status.h"
@@ -96,6 +97,25 @@ static void cyd_clock_composition_preflight_nvs_health(void)
  * app registered itself while running, swapping the home app would silently
  * drop entries that the new home never reaches.
  */
+/* How long BOOT must be held to open touch calibration. */
+#define CYD_CLOCK_COMPOSITION_BOOT_HOLD_CALIBRATION_SECONDS 5
+
+/*
+ * Holding BOOT opens touch calibration from any screen.
+ *
+ * English contract: this is the way out when touch is unusable. A saved
+ * calibration that maps taps to the wrong places leaves every button,
+ * including the way to calibration in settings, unreachable; the boot touch
+ * shortcut only opens settings, so it does not help either. BOOT does not go
+ * through touch. Runs on the input task: it only posts the switch, and the
+ * interrupted screen comes back with its own back destination.
+ */
+static void cyd_clock_composition_boot_hold(void *ctx)
+{
+    (void)ctx;
+    (void)system_touch_calibration_open_over_active();
+}
+
 static void cyd_clock_composition_register_apps(void)
 {
     /* Registering the clock also brings its settings screen and its alarms; a
@@ -192,5 +212,11 @@ esp_err_t cyd_clock_composition_start(void)
 
     cyd_clock_composition_register_apps();
     app_shell_set_home_return_allowed_callback(cyd_clock_composition_home_return_allowed, NULL);
+    esp_err_t hold_err = cyd_input_set_boot_button_hold_handler(CYD_CLOCK_COMPOSITION_BOOT_HOLD_CALIBRATION_SECONDS,
+                                                                cyd_clock_composition_boot_hold,
+                                                                NULL);
+    if (hold_err != ESP_OK && hold_err != ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "BOOT hold handler not set: %s", esp_err_to_name(hold_err));
+    }
     return app_shell_start(initial_app);
 }

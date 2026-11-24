@@ -8,7 +8,7 @@
 
 - `info`: firmware / IDF / chip / heap / Wi-Fi 状態を表示する
 - `settings`: 設定系画面への入口を表示する
-- `touch_calibration`: touch calibration を実行して遷移元へ戻る
+- `touch_calibration`: touch calibration を実行して遷移元へ戻る。`system_touch_calibration_open_over_active()` で開いたときは、割り込まれた画面を入ったときと同じ `from_app` で戻す（[App Shell](app_shell.md#interrupting-apps)）
 
 English supplement: These apps are intentionally lightweight shell apps. They should not own background services; they only present UI and switch to domain apps such as `wifi_setup`.
 

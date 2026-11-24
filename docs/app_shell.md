@@ -204,6 +204,14 @@ English contract: prefer `app_shell_return_to()` over `app_shell_switch_to()` fo
 
 戻り先を home 固定にはしていません。`clock -> settings -> wifi_setup -> settings -> <<` が `clock` へ戻る、という「来た道を戻る」挙動が正しいためです。
 
+### Interrupting Apps
+
+どの画面の上にも割り込んで開き、終わったら元の画面へ戻す app（BOOT 長押しのタッチ補正）は、`app_shell_return_to()` で戻してはいけません。戻された app は割り込んだ app を `from_app` として受け取り、それを戻り先として覚え直すので、戻るボタンで割り込んだ app がまた開きます（Wi-Fi 設定の「戻る」で補正が再び始まった）。
+
+`app_shell_get_active_app_and_from()` で、割り込む前の app と、その app が `enter()` で受け取った `from_app` を一緒に読んでおき、終わったら `app_shell_switch_to_from(app, from_app)` で戻します。戻された app は入ったときと同じ `from_app` を受け取るので、戻り先は変わりません。
+
+English contract: an interrupting app restores the interrupted app with the from_app it was originally entered with. Handing it the interrupting app as from_app rewrites its back destination.
+
 ## Current Apps
 
 現時点で shell に載っているアプリは以下です。

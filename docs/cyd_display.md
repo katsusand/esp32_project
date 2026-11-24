@@ -405,7 +405,7 @@ English contract: an app hit-tests the screen buffer it built and last submitted
 
 ```c
 ESP_ERROR_CHECK(cyd_display_claim_owner());
-ESP_ERROR_CHECK(cyd_display_show_touch_calibration_screen());
+ESP_ERROR_CHECK(cyd_display_show_touch_calibration_screen(NULL, NULL));
 ESP_ERROR_CHECK(cyd_display_draw_touch_calibration_target(0, 0, 14, true));
 ESP_ERROR_CHECK(cyd_display_draw_touch_calibration_target(0, 0, 14, false));
 ESP_ERROR_CHECK(cyd_display_invalidate());
@@ -414,7 +414,8 @@ ESP_ERROR_CHECK(cyd_display_release_owner());
 
 補助 API は以下です。
 
-- `cyd_display_show_touch_calibration_screen()`: 補正導入画面を即時描画する
+- `cyd_display_show_touch_calibration_screen(title, body)`: 補正の案内画面を即時描画する。`NULL` は 1 回目の文言
+- `cyd_display_show_touch_calibration_confirm(&save, &retry)`: 保存ダイアログを即時描画し、2 つのボタンの位置（UI の pixel）を返す。当たり判定は呼び出し側（`cyd_input`）が候補の補正で行う
 - `cyd_display_draw_touch_calibration_target()`: 1点ぶんのターゲットを即時描画または消去する
 - `cyd_display_invalidate()`: 次の通常画面を full redraw させる
 - `cyd_display_get_width()` / `cyd_display_get_height()`: 現在の論理表示サイズを返す

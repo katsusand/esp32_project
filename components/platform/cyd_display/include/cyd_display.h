@@ -268,8 +268,28 @@ esp_err_t cyd_display_log_hide(void);
 esp_err_t cyd_display_log_clear(void);
 esp_err_t cyd_display_log_push(const char *line);
 esp_err_t cyd_display_log_scroll(int delta);
-esp_err_t cyd_display_show_touch_calibration_screen(void);
+/*
+ * Touch calibration screens. Only cyd_input calls these, from inside
+ * cyd_input_run_touch_calibration(): they draw straight onto the panel while
+ * the input task is paused, and touch is mapped by a calibration that is not
+ * the running one yet.
+ */
+typedef struct {
+    int32_t x;
+    int32_t y;
+    int32_t w;
+    int32_t h;
+} cyd_display_pixel_rect_t;
+
+/* Clears the panel and writes a title and one line in the middle. NULL keeps the first round's text. */
+esp_err_t cyd_display_show_touch_calibration_screen(const char *title_text, const char *body_text);
 esp_err_t cyd_display_draw_touch_calibration_target(int32_t x, int32_t y, uint8_t radius, bool visible);
+/*
+ * The save dialog: a title, one line and two buttons. Writes where the
+ * buttons are, in UI pixels, so the caller can hit-test the tap itself.
+ */
+esp_err_t cyd_display_show_touch_calibration_confirm(cyd_display_pixel_rect_t *save_rect,
+                                                     cyd_display_pixel_rect_t *retry_rect);
 esp_err_t cyd_display_invalidate(void);
 int32_t cyd_display_get_width(void);
 int32_t cyd_display_get_height(void);

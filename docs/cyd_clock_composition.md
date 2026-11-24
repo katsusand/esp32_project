@@ -43,6 +43,17 @@ NVS が不正な場合は、この判定より前に settings と「保存デー
 
 設定の PIN がオンのときは、長押しで settings を初期 app にしても、最初に PIN の画面が出ます。`settings_pin_init()` が `app_shell` の enter guard を入れ、初期 app も guard を通るためです。composition は NVS の健全性の確認より前に `settings_pin_init()` を呼びます。読めない PIN の記録も「保存データが読めません」へ回すためです ([Settings PIN](settings_pin.md#integrating-into-a-product))。
 
+### BOOT Button
+
+起動後に BOOT ボタンを 5 秒押し続けると、どの画面からでもタッチ補正が開きます。終わると、押したときの画面へ戻ります。`cyd_input_set_boot_button_hold_handler()` に登録した関数が、`system_touch_calibration_open_over_active()` で補正 app を予約するだけです。戻った画面は入ったときと同じ戻り先を持ちます（[App Shell](app_shell.md#interrupting-apps)）。
+
+タッチが使えなくなった端末の逃げ道です。ずれた補正が保存されていると、設定のボタンも押せず、起動時の長押し（設定を開く）でも補正まで辿り着けません。BOOT はタッチを通らないので、この状態でも届きます。
+
+- 補正 app は PIN で守りません（[Settings PIN](settings_pin.md)）
+- リセット中や電源投入中に BOOT を押していると UART download mode になります。起動した後に押してください
+
+English contract: the handler runs on the input task and only posts the switch. It must never run the calibration itself, which pauses that task.
+
 ## Feature Switches
 
 `APP_WIFI_STA=0` で再構成したビルドでは、composition は Wi-Fi startup 群を起動しません。時刻の取得元が無いことは、composition がエラーログへ `UNAVAILABLE` として知らせます（エラーログが、時刻の答えを待たずに書き始められるようにするためです）。対象は `wifi_connection`、`radio_manager`、`time_sync`、`status_indicator` の起動と、Wi-Fi setup 中の home return guard です。
