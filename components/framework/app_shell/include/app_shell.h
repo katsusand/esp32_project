@@ -113,6 +113,17 @@ bool app_shell_has_enter_guard(void);
  */
 esp_err_t app_shell_return_to(const app_shell_app_t *return_app);
 const app_shell_app_t *app_shell_get_active_app(void);
+/*
+ * The active app and the from_app its enter() received (NULL for the first
+ * app), read together. Safe from any task.
+ *
+ * English contract: for an app that interrupts whatever is on screen and then
+ * puts it back. Re-entering the interrupted app with app_shell_switch_to_from()
+ * and this from_app lets it keep its own back destination; plain
+ * app_shell_return_to() would hand it the interrupting app as from_app, and
+ * an app that remembers from_app as its back destination would go back there.
+ */
+void app_shell_get_active_app_and_from(const app_shell_app_t **app, const app_shell_app_t **from_app);
 const app_shell_app_t *app_shell_get_home_app(void);
 void app_shell_set_home_return_allowed_callback(app_shell_home_return_allowed_fn callback, void *ctx);
 uint16_t app_shell_get_idle_return_timeout_seconds(void);

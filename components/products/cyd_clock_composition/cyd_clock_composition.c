@@ -107,18 +107,13 @@ static void cyd_clock_composition_preflight_nvs_health(void)
  * calibration that maps taps to the wrong places leaves every button,
  * including the way to calibration in settings, unreachable; the boot touch
  * shortcut only opens settings, so it does not help either. BOOT does not go
- * through touch. Runs on the input task: it only posts the switch.
+ * through touch. Runs on the input task: it only posts the switch, and the
+ * interrupted screen comes back with its own back destination.
  */
 static void cyd_clock_composition_boot_hold(void *ctx)
 {
     (void)ctx;
-
-    const app_shell_app_t *calibration = system_touch_calibration_app_get_app();
-    const app_shell_app_t *active = app_shell_get_active_app();
-    if (active == calibration) {
-        return;
-    }
-    (void)app_shell_switch_to_from(calibration, active);
+    (void)system_touch_calibration_open_over_active();
 }
 
 static void cyd_clock_composition_register_apps(void)

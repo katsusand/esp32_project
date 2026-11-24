@@ -45,7 +45,7 @@ NVS が不正な場合は、この判定より前に settings と「保存デー
 
 ### BOOT Button
 
-起動後に BOOT ボタンを 5 秒押し続けると、どの画面からでもタッチ補正が開きます。終わると、押したときの画面へ戻ります。`cyd_input_set_boot_button_hold_handler()` に登録した関数が、`app_shell_switch_to_from()` で補正 app を予約するだけです。
+起動後に BOOT ボタンを 5 秒押し続けると、どの画面からでもタッチ補正が開きます。終わると、押したときの画面へ戻ります。`cyd_input_set_boot_button_hold_handler()` に登録した関数が、`system_touch_calibration_open_over_active()` で補正 app を予約するだけです。戻った画面は入ったときと同じ戻り先を持ちます（[App Shell](app_shell.md#interrupting-apps)）。
 
 タッチが使えなくなった端末の逃げ道です。ずれた補正が保存されていると、設定のボタンも押せず、起動時の長押し（設定を開く）でも補正まで辿り着けません。BOOT はタッチを通らないので、この状態でも届きます。
 
