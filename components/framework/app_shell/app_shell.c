@@ -443,6 +443,14 @@ esp_err_t app_shell_start(const app_shell_app_t *initial_app)
         return ESP_OK;
     }
 
+    if (cyd_input_boot_button_hold_missing()) {
+        /* Not an error: a product may leave BOOT unused. But a saved
+           calibration that maps taps wrongly then has no way out. */
+        ESP_LOGW(TAG,
+                 "BOOT hold has no handler: touch calibration is reachable only by touch "
+                 "(see system_touch_calibration_install_boot_hold())");
+    }
+
     BaseType_t task_ok = xTaskCreate(app_shell_task,
                                      "app_shell",
                                      CONFIG_APP_SHELL_TASK_STACK_SIZE,

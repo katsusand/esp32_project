@@ -1,5 +1,6 @@
 #include "esp_check.h"
 #include "freertos/FreeRTOS.h"
+#include "sdkconfig.h"
 
 #include "app_shell.h"
 #include "cyd_input.h"
@@ -68,6 +69,23 @@ esp_err_t system_touch_calibration_open_over_active(void)
     s_touch_calibration_over_from = active_from;
     portEXIT_CRITICAL(&s_touch_calibration_lock);
     return app_shell_switch_to_from(&s_cyd_touch_calibration_shell_app, active);
+}
+
+/* Runs on the input task: it only posts the switch. */
+static void cyd_touch_calibration_boot_hold(void *ctx)
+{
+    (void)ctx;
+    (void)system_touch_calibration_open_over_active();
+}
+
+esp_err_t system_touch_calibration_install_boot_hold(uint8_t seconds)
+{
+#if CONFIG_CYD_TOUCH_ENABLED
+    return cyd_input_set_boot_button_hold_handler(seconds, cyd_touch_calibration_boot_hold, NULL);
+#else
+    (void)seconds;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 static const app_shell_app_t s_cyd_touch_calibration_shell_app = {

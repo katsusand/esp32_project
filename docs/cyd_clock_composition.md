@@ -45,14 +45,14 @@ NVS が不正な場合は、この判定より前に settings と「保存デー
 
 ### BOOT Button
 
-起動後に BOOT ボタンを 5 秒押し続けると、どの画面からでもタッチ補正が開きます。終わると、押したときの画面へ戻ります。`cyd_input_set_boot_button_hold_handler()` に登録した関数が、`system_touch_calibration_open_over_active()` で補正 app を予約するだけです。戻った画面は入ったときと同じ戻り先を持ちます（[App Shell](app_shell.md#interrupting-apps)）。
+起動後に BOOT ボタンを 5 秒押し続けると、どの画面からでもタッチ補正が開きます。終わると、押したときの画面へ戻ります。composition は `app_shell_start()` の前に `system_touch_calibration_install_boot_hold(SYSTEM_TOUCH_CALIBRATION_BOOT_HOLD_SECONDS)` を 1 回呼ぶだけです（[CYD System Apps](cyd_system_apps.md#boot-button-shortcut)）。戻った画面は入ったときと同じ戻り先を持ちます（[App Shell](app_shell.md#interrupting-apps)）。
 
 タッチが使えなくなった端末の逃げ道です。ずれた補正が保存されていると、設定のボタンも押せず、起動時の長押し（設定を開く）でも補正まで辿り着けません。BOOT はタッチを通らないので、この状態でも届きます。
 
 - 補正 app は PIN で守りません（[Settings PIN](settings_pin.md)）
 - リセット中や電源投入中に BOOT を押していると UART download mode になります。起動した後に押してください
 
-English contract: the handler runs on the input task and only posts the switch. It must never run the calibration itself, which pauses that task.
+BOOT の意味は製品が決めるので、登録するかどうかも composition の判断です。ただしタッチのある製品は、別の用途に BOOT を使うのでなければ必ず呼びます。
 
 ## Feature Switches
 

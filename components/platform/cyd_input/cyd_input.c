@@ -1726,6 +1726,18 @@ esp_err_t cyd_input_set_boot_button_hold_handler(uint8_t seconds, cyd_input_boot
 #endif
 }
 
+bool cyd_input_boot_button_hold_missing(void)
+{
+#if CONFIG_CYD_TOUCH_ENABLED && CONFIG_CYD_BOOT_BUTTON_ENABLED
+    portENTER_CRITICAL(&s_input_hold_lock);
+    bool missing = s_input.boot_button_hold_fn == NULL;
+    portEXIT_CRITICAL(&s_input_hold_lock);
+    return missing;
+#else
+    return false;
+#endif
+}
+
 esp_err_t cyd_input_clear_touch_calibration(void)
 {
 #if CONFIG_CYD_TOUCH_USE_NVS_CALIBRATION
