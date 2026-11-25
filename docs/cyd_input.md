@@ -214,7 +214,9 @@ ESP32 の GPIO0 は strapping pin です。通常利用時の注意点は以下�
 
 English supplement: Treat BOOT as a user button only after firmware has started. Do not design application behavior that requires BOOT to be held during reset or power-on.
 
-長押しをイベントキューで受ける app が無くても動くように、`cyd_input_set_boot_button_hold_handler(seconds, fn, ctx)` で「ちょうど `seconds` 秒押された」ときに 1 回呼ぶ関数を登録できます。時計製品は 5 秒でタッチ補正を開きます（[CYD Clock Composition](cyd_clock_composition.md#boot-button)）。
+長押しをイベントキューで受ける app が無くても動くように、`cyd_input_set_boot_button_hold_handler(seconds, fn, ctx)` で「ちょうど `seconds` 秒押された」ときに 1 回呼ぶ関数を登録できます。タッチ補正を開く登録は `system_touch_calibration_install_boot_hold()` が行います（[CYD System Apps](cyd_system_apps.md#boot-button-shortcut)）。
+
+タッチと BOOT ボタンがどちらも有効なのに何も登録されていないと、`app_shell_start()` が警告を 1 行出します（`cyd_input_boot_button_hold_missing()`）。タッチの無いビルドでは出ません。
 
 English contract: `fn` runs on the input task, once per press, with no lock held. It must only post work (for example `app_shell_switch_to()`); it must not block, draw, or run calibration, which pauses the input task.
 

@@ -91,6 +91,12 @@ esp_err_t cyd_input_clear_touch_calibration(void);
  */
 typedef void (*cyd_input_boot_button_hold_fn)(void *ctx);
 esp_err_t cyd_input_set_boot_button_hold_handler(uint8_t seconds, cyd_input_boot_button_hold_fn fn, void *ctx);
+/*
+ * True when touch and the BOOT button are both enabled but no hold handler is
+ * registered: the build has a touch panel and no way into calibration that
+ * does not go through touch. app_shell_start() logs a warning for it.
+ */
+bool cyd_input_boot_button_hold_missing(void);
 
 #ifdef __cplusplus
 }

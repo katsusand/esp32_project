@@ -26,6 +26,24 @@ const app_shell_app_t *system_touch_calibration_app_get_app(void);
  */
 esp_err_t system_touch_calibration_open_over_active(void);
 
+/* The hold length products are expected to use, so every product feels the same. */
+#define SYSTEM_TOUCH_CALIBRATION_BOOT_HOLD_SECONDS 5
+
+/*
+ * Makes holding the BOOT button for `seconds` open touch calibration from any
+ * screen (system_touch_calibration_open_over_active()). Call it once from the
+ * product composition, before app_shell_start().
+ *
+ * English contract: this is the way out when touch is unusable: a saved
+ * calibration that maps taps to the wrong places leaves every button,
+ * including the way to calibration in settings, unreachable, and BOOT does
+ * not go through touch. It is the product's call because the product decides
+ * what BOOT means; a product without a touch panel gets
+ * ESP_ERR_NOT_SUPPORTED and needs nothing. A touch build that skips it gets a
+ * warning from app_shell_start().
+ */
+esp_err_t system_touch_calibration_install_boot_hold(uint8_t seconds);
+
 void system_settings_open_stored_ssids(void);
 void system_settings_open_clear_touch_calib_confirm(void);
 void system_settings_open_clear_nvs_confirm(void);

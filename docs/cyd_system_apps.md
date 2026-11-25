@@ -83,6 +83,27 @@ ESP_ERROR_CHECK(app_shell_switch_to(system_settings_app_get_app()));
 
 English supplement: Direct-view selection is one-shot and thread-safe; callers still request the shell transition explicitly.
 
+### BOOT Button Shortcut
+
+タッチのある製品は、composition（派生プロジェクトでは `main/`）で `app_shell_start()` の前に 1 回呼びます。
+
+```c
+esp_err_t err = system_touch_calibration_install_boot_hold(SYSTEM_TOUCH_CALIBRATION_BOOT_HOLD_SECONDS);
+if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) {
+    ESP_LOGW(TAG, "BOOT hold handler not set: %s", esp_err_to_name(err));
+}
+```
+
+- BOOT を 5 秒押すと、どの画面からでもタッチ補正が開き、終わると押したときの画面へ戻る（`system_touch_calibration_open_over_active()`）
+- ずれた補正が保存されてタッチでは何も押せなくなった端末の逃げ道。BOOT はタッチを通らない
+- 秒数は製品をそろえるため `SYSTEM_TOUCH_CALIBRATION_BOOT_HOLD_SECONDS`（5）を使う
+- タッチの無いビルドでは `ESP_ERR_NOT_SUPPORTED` を返し、何もしない。BOOT ボタンを無効にしたビルドも同じ
+- 呼び忘れたタッチのビルドでは、`app_shell_start()` が警告を 1 行出す。BOOT を別の用途に使う製品は、自分の関数を `cyd_input_set_boot_button_hold_handler()` に登録すれば警告は出ない
+
+English contract: whether BOOT opens calibration is the product's decision, so nothing installs it implicitly. A touch product that leaves BOOT unused should install it; a product without touch needs nothing.
+
+派生プロジェクトへ取り込むときは、`settings_pin_init()` と並べてこの呼び出しを `main/` に足します。
+
 ## Info App
 
 `info app` は参照用の情報画面です。見出しと項目名は日本語、値と専門用語 (heap のバイト数、RSSI、NVS の namespace 名、エラー名) は英語のままです。
