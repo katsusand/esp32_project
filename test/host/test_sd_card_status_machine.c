@@ -118,7 +118,9 @@ BaseType_t xTaskCreate(void (*task)(void *),
     (void)stack_size;
     (void)arg;
     (void)priority;
-    (void)out_handle;
+    if (out_handle != NULL) {
+        *out_handle = (TaskHandle_t)1;
+    }
     return pdPASS;
 }
 
@@ -325,6 +327,11 @@ static void reset_world(void)
     g_level_set_calls = 0;
     s_mounted_since_tick = 0;
     g_now = 1000000;
+    /* A lock left taken by the last scenario would block this one. The tasks
+       are not started unless a scenario does it: without a lock the status task
+       does not wait for anybody. */
+    s_task = NULL;
+    s_card_lock = NULL;
 }
 
 /* One round of the task, then wait as long as it asked. */
@@ -708,6 +715,47 @@ static void test_state_before_start_is_quiet(void)
     check(!sd_card_status_state_is_problem(state()), "and no icon");
 }
 
+/* ---- holding the card ---- */
+
+static void test_holding_the_card(void)
+{
+    reset_world();
+    check(sd_card_status_acquire(0) == ESP_ERR_INVALID_STATE, "not started: acquire refuses");
+    check(sd_card_status_start() == ESP_OK && s_card_lock != NULL, "start creates the lock");
+    check(sd_card_status_acquire(0) == ESP_ERR_INVALID_STATE, "started but not mounted yet: acquire refuses");
+    check(sd_card_status_acquire(0) == ESP_ERR_INVALID_STATE, "and it did not keep the lock after refusing");
+
+    (void)round_trip();
+    check(state() == SD_CARD_STATUS_OK, "mounted");
+    check(sd_card_status_acquire(0) == ESP_OK, "OK card: acquire succeeds");
+    check(sd_card_status_acquire(0) == ESP_ERR_TIMEOUT, "a second hold times out (not recursive)");
+
+    /* The card goes away while held: the status task must not unmount yet. */
+    card.probe_result = ESP_ERR_TIMEOUT;
+    (void)round_trip();
+    check(card.deinit_calls == 0 && card.mounted, "held: the card is not unmounted underneath the holder");
+    check(state() == SD_CARD_STATUS_OK, "held: the state is not changed either");
+
+    sd_card_status_release();
+    (void)round_trip();
+    check(state() == SD_CARD_STATUS_NO_CARD && card.deinit_calls == 1, "after the release it is torn down");
+    check(sd_card_status_acquire(0) == ESP_ERR_INVALID_STATE, "no card: acquire refuses");
+    check(sd_card_status_acquire(0) == ESP_ERR_INVALID_STATE, "and does not keep the lock when it refuses");
+
+    /* Put back; a held lock also delays a mount. */
+    card.probe_result = ESP_OK;
+    check(sd_card_status_acquire(0) == ESP_ERR_INVALID_STATE, "still no card");
+    (void)round_trip();
+    check(state() == SD_CARD_STATUS_OK && sd_card_status_acquire(0) == ESP_OK, "mounted again and held");
+    sd_card_status_release();
+
+    /* FULL is mounted but not OK: a writer must not be let in. */
+    card.free_bytes = 0;
+    (void)round_trip();
+    check(state() == SD_CARD_STATUS_FULL, "card filled up");
+    check(sd_card_status_acquire(0) == ESP_ERR_INVALID_STATE, "FULL: acquire refuses");
+}
+
 int main(void)
 {
     test_state_before_start_is_quiet();
@@ -731,6 +779,7 @@ int main(void)
     test_log_stream_failure();
     test_writer_cannot_start();
     test_space_cannot_be_read();
+    test_holding_the_card();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

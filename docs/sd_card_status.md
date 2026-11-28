@@ -84,12 +84,32 @@ English supplement: the first mount is deliberately silent (serial only). Only a
 - `sd_card_status_get_info(info)`
 - `sd_card_status_state_name(state)`
 - `sd_card_status_state_is_problem(state)`
+- `sd_card_status_acquire(wait_ms)` / `sd_card_status_release()`（[Holding The Card](#holding-the-card)）
 
 `sd_card_status_start()` はすぐに戻ります。最初のマウントはこのコンポーネントのタスクが行うので、カードの無い個体でも起動は待たされません。戻り値のエラーはタスクを作れなかったときだけで、カードの問題は状態として読みます。
 
 `sd_card_status_get_revision()` は状態が変わるたびに増えます。画面は、描いたときの revision を覚えておき、違っていれば描き直します。
 
 English contract: call `sd_card_status_start()` once, after system boot and before anything whose errors should reach the card (Wi-Fi, time sync). Nothing else may call `sd_card_storage_init()` or `error_log_store_start()`: this component is the single owner of the card, and two owners would unmount each other's card.
+
+## Holding The Card
+
+別のタスクが SD カードのファイルを読み書きするときは、`sd_card_status_acquire()` で「いまカードを外さないで」と押さえます。このコンポーネントのタスクは、ポーリングの途中でも、カードが応答しなくなればアンマウントします。押さえていないタスクが `fopen` や `rename` の最中だと、足元でマウントが消えます。
+
+```c
+if (sd_card_status_acquire(1000) == ESP_OK) {
+    /* 数回のファイル操作だけ: open / write / rename / unlink */
+    sd_card_status_release();
+}
+```
+
+- `ESP_OK`: 状態が `OK`（マウント済みで書ける）で、押さえられた。必ず `sd_card_status_release()` で返す
+- `ESP_ERR_TIMEOUT`: `wait_ms` 以内に押さえられなかった。何も持っていない
+- `ESP_ERR_INVALID_STATE`: 起動前、またはカードが `OK` でない（`NO_CARD`、`FULL`、`FAULT` など）。何も持っていない
+
+押さえている間、状態タスクはアンマウント・再マウント・`OK` と `FULL` の切り替えを待ちます。待つのは最長 10 秒で、それを過ぎたら、その回は見送って次のポーリングでやり直します。ですから、押さえる時間は短く（ファイル操作を数回、ネットワークや人の操作は挟まない）してください。カードを抜かれた場合、押さえている間のファイル操作は単に失敗します。状態タスクは、手放された後で片付けます。
+
+English contract: hold it for a few file operations only (no network, no waiting for a user). Not recursive; never call it from the `sd_card_status` task or from an ISR; release from the task that acquired it. The status task takes the same mutex around every unmount and around every mount-and-publish (and the OK/FULL switch), so a holder never sees the card disappear. When a holder keeps it longer than 10 s the status task skips that poll rather than hang. A failed acquire holds nothing: do not release. Best-effort reads that tolerate a failure need no hold.
 
 ## Configuration
 
@@ -126,7 +146,7 @@ bash test/host/run.sh
 ```
 
 - `test_sd_card_status_logic.c`: マウントエラーの分類、書き込み結果の分類、満杯の判定、再試行間隔
-- `test_sd_card_status_machine.c`: 実際の `sd_card_status.c` を、偽のカード・偽のエラーログ・手で進める時計で動かします。起動時にカードなし、未フォーマット、抜き差し、満杯、書き込み不可、ログの失敗、間隔の伸び方、を通します
+- `test_sd_card_status_machine.c`: 実際の `sd_card_status.c` を、偽のカード・偽のエラーログ・手で進める時計で動かします。起動時にカードなし、未フォーマット、抜き差し、満杯、書き込み不可、ログの失敗、間隔の伸び方、`acquire` 中に抜かれたカードがアンマウントされないこと、を通します
 - `test_sd_card_status_icon_art.c`: アイコンの絵の形（16 行 × 16 文字、未定義の記号が無いこと、種類ごとに違うこと）
 
 English supplement: these cover the decisions and the state machine. What they cannot cover is the card itself: the SDSPI driver, a real card's response when it is pulled, and the display. Check those on a unit.
