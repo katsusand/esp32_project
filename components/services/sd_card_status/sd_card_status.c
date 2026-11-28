@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -47,11 +48,24 @@
  * bad card cannot turn this task into a mount loop.
  */
 #define SD_CARD_STATUS_STABLE_MS 60000U
+/*
+ * How long the status task waits for a holder (sd_card_status_acquire) before it
+ * skips this round and tries again at the next poll. Holders keep it for a few
+ * file operations, so this is far longer than they need; it only bounds the
+ * damage of a holder that never lets go.
+ */
+#define SD_CARD_STATUS_LOCK_WAIT_MS 10000U
 #define SD_CARD_STATUS_MIN_FREE_BYTES ((uint64_t)CONFIG_SD_CARD_STATUS_MIN_FREE_KB * 1024U)
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static sd_card_status_info_t s_info = { .state = SD_CARD_STATUS_DISABLED, .last_error = ESP_OK };
 static TaskHandle_t s_task;
+/*
+ * Held by anyone who needs /sdcard to stay mounted (sd_card_status_acquire), and
+ * by the status task around everything that changes whether it is mounted.
+ * Created in sd_card_status_start() and never deleted. NULL until then.
+ */
+static SemaphoreHandle_t s_card_lock;
 
 /* Monitor task only, from here on. */
 static bool s_logging;
@@ -163,6 +177,26 @@ static void sd_card_status_quiet_end(const sd_card_status_log_guard_t *guard)
     }
 }
 
+/* Status task only. False after SD_CARD_STATUS_LOCK_WAIT_MS: skip the round. */
+static bool sd_card_status_lock_take(void)
+{
+    if (s_card_lock == NULL) {
+        return true;
+    }
+    if (xSemaphoreTake(s_card_lock, pdMS_TO_TICKS(SD_CARD_STATUS_LOCK_WAIT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "card is held for too long; trying again at the next poll");
+        return false;
+    }
+    return true;
+}
+
+static void sd_card_status_lock_give(void)
+{
+    if (s_card_lock != NULL) {
+        (void)xSemaphoreGive(s_card_lock);
+    }
+}
+
 /* Closes the log and releases the card, so the next mount starts clean. */
 static void sd_card_status_teardown(void)
 {
@@ -213,6 +247,21 @@ static void sd_card_status_enter_problem(sd_card_status_state_t state, esp_err_t
 }
 
 /*
+ * A mounted card has failed: release it and publish the problem as one step, so
+ * a holder never sees OK on a card that is already gone. Takes the lock itself;
+ * if a holder will not let go, the card stays as it is until the next poll.
+ */
+static void sd_card_status_fail_mounted(sd_card_status_state_t state, esp_err_t err, const char *detail)
+{
+    if (!sd_card_status_lock_take()) {
+        return;
+    }
+    sd_card_status_teardown();
+    sd_card_status_enter_problem(state, err, detail);
+    sd_card_status_lock_give();
+}
+
+/*
  * Proves the card takes a write before it is trusted. A write-protected, worn
  * or full card mounts without complaint and only fails on its first real write,
  * which would otherwise be the first error line - long after anyone is looking.
@@ -251,7 +300,7 @@ static sd_card_status_state_t sd_card_status_selftest_write(void)
     return result;
 }
 
-static void sd_card_status_try_mount(void)
+static void sd_card_status_try_mount_locked(void)
 {
     /* A repeat of a failure that is already on screen and in the log. */
     bool repeat = s_info.state == SD_CARD_STATUS_NO_CARD || s_info.state == SD_CARD_STATUS_NO_FILESYSTEM;
@@ -307,6 +356,21 @@ static void sd_card_status_try_mount(void)
     sd_card_status_note(previous, SD_CARD_STATUS_OK, "mounted, logging");
 }
 
+/*
+ * Mount and publish under the lock, so a holder either sees no card or a card
+ * that is fully set up, never one in between. The mount itself can take a
+ * while; holders that arrive meanwhile wait for it (and get
+ * ESP_ERR_INVALID_STATE if it failed).
+ */
+static void sd_card_status_try_mount(void)
+{
+    if (!sd_card_status_lock_take()) {
+        return;
+    }
+    sd_card_status_try_mount_locked();
+    sd_card_status_lock_give();
+}
+
 /* The card is mounted: is it still there, still writable, still roomy? */
 static void sd_card_status_check_mounted(void)
 {
@@ -319,13 +383,11 @@ static void sd_card_status_check_mounted(void)
     if (err != ESP_OK) {
         char detail[64];
         snprintf(detail, sizeof(detail), "card stopped answering (%s)", esp_err_to_name(err));
-        sd_card_status_teardown();
-        sd_card_status_enter_problem(SD_CARD_STATUS_NO_CARD, err, detail);
+        sd_card_status_fail_mounted(SD_CARD_STATUS_NO_CARD, err, detail);
         return;
     }
     if (s_logging && error_log_store_is_failed()) {
-        sd_card_status_teardown();
-        sd_card_status_enter_problem(SD_CARD_STATUS_FAULT, ESP_FAIL, "writing to the card failed");
+        sd_card_status_fail_mounted(SD_CARD_STATUS_FAULT, ESP_FAIL, "writing to the card failed");
         return;
     }
 
@@ -333,8 +395,7 @@ static void sd_card_status_check_mounted(void)
     uint64_t free_bytes = 0;
     err = sd_card_storage_get_space(&total_bytes, &free_bytes);
     if (err != ESP_OK) {
-        sd_card_status_teardown();
-        sd_card_status_enter_problem(SD_CARD_STATUS_FAULT, err, "could not read the free space");
+        sd_card_status_fail_mounted(SD_CARD_STATUS_FAULT, err, "could not read the free space");
         return;
     }
     sd_card_status_publish_space(total_bytes, free_bytes);
@@ -342,6 +403,13 @@ static void sd_card_status_check_mounted(void)
     bool full = s_no_room_for_test_write ||
                 sd_card_status_is_full(free_bytes, SD_CARD_STATUS_MIN_FREE_BYTES);
     sd_card_status_state_t state = s_info.state;
+    if (full == (state == SD_CARD_STATUS_FULL)) {
+        return;
+    }
+    /* OK <-> FULL changes what a holder may do and starts or stops the log. */
+    if (!sd_card_status_lock_take()) {
+        return;
+    }
     if (full && state == SD_CARD_STATUS_OK) {
         /* Say so while the log still works, then stop it before it runs into a
            write error. The card stays mounted so it can be read in place. */
@@ -356,12 +424,13 @@ static void sd_card_status_check_mounted(void)
         if (err != ESP_OK) {
             sd_card_status_teardown();
             sd_card_status_enter_problem(SD_CARD_STATUS_FAULT, err, "could not restart the error log");
-            return;
+        } else {
+            s_logging = true;
+            sd_card_status_publish(SD_CARD_STATUS_OK, ESP_OK);
+            sd_card_status_note(SD_CARD_STATUS_FULL, SD_CARD_STATUS_OK, "space available again, logging");
         }
-        s_logging = true;
-        sd_card_status_publish(SD_CARD_STATUS_OK, ESP_OK);
-        sd_card_status_note(SD_CARD_STATUS_FULL, SD_CARD_STATUS_OK, "space available again, logging");
     }
+    sd_card_status_lock_give();
 }
 
 /* OK and FULL both mean "the card is mounted". */
@@ -408,6 +477,13 @@ esp_err_t sd_card_status_start(void)
     if (s_task != NULL) {
         return ESP_OK;
     }
+    if (s_card_lock == NULL) {
+        s_card_lock = xSemaphoreCreateMutex();
+        if (s_card_lock == NULL) {
+            ESP_LOGE(TAG, "mutex create failed");
+            return ESP_ERR_NO_MEM;
+        }
+    }
     BaseType_t task_ok = xTaskCreate(sd_card_status_task,
                                      "sd_card_status",
                                      CONFIG_SD_CARD_STATUS_TASK_STACK_SIZE,
@@ -449,4 +525,26 @@ void sd_card_status_get_info(sd_card_status_info_t *info)
     portENTER_CRITICAL(&s_lock);
     *info = s_info;
     portEXIT_CRITICAL(&s_lock);
+}
+
+esp_err_t sd_card_status_acquire(uint32_t wait_ms)
+{
+    if (s_card_lock == NULL || s_task == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_card_lock, pdMS_TO_TICKS(wait_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (sd_card_status_get_state() != SD_CARD_STATUS_OK) {
+        (void)xSemaphoreGive(s_card_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_OK;
+}
+
+void sd_card_status_release(void)
+{
+    if (s_card_lock != NULL) {
+        (void)xSemaphoreGive(s_card_lock);
+    }
 }

@@ -64,6 +64,32 @@ sd_card_status_state_t sd_card_status_get_state(void);
 uint32_t sd_card_status_get_revision(void);
 void sd_card_status_get_info(sd_card_status_info_t *info);
 
+/*
+ * Keeps the card mounted for a short stretch of file operations on another task.
+ *
+ * Returns ESP_OK only if the state is SD_CARD_STATUS_OK (mounted, writable)
+ * while the hold is taken; the caller must then call sd_card_status_release().
+ * Any other return means nothing is held and nothing must be released:
+ *  - ESP_ERR_TIMEOUT: the hold could not be taken within wait_ms.
+ *  - ESP_ERR_INVALID_STATE: not started (or built without SD support), or the
+ *    state is not OK (no card, FULL, FAULT, ...).
+ *
+ * English contract:
+ *  - While held, the status task does not unmount or remount, so /sdcard stays
+ *    valid for the holder. The status task waits for the hold (bounded, 10 s,
+ *    then it skips that poll), so keep it short: a few file operations (open,
+ *    write, rename, unlink), no network, no user waits, no long sleeps.
+ *  - Not recursive: do not acquire again while holding.
+ *  - Never call from the sd_card_status task itself or from an ISR.
+ *  - Release from the task that acquired it.
+ *  - If the card is physically pulled while held, the file operations simply
+ *    fail; the status task notices and tears the card down after the release.
+ *  - Reading files that tolerate a failure (best-effort) needs no hold.
+ */
+esp_err_t sd_card_status_acquire(uint32_t wait_ms);
+/* Gives the hold back. Only after sd_card_status_acquire() returned ESP_OK. */
+void sd_card_status_release(void);
+
 /* "OK", "NO_CARD", ... for logs. */
 const char *sd_card_status_state_name(sd_card_status_state_t state);
 /* True for the states that deserve an icon. */

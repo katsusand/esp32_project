@@ -13,5 +13,7 @@ typedef int portMUX_TYPE;
 #define portTICK_PERIOD_MS 1U
 #define pdMS_TO_TICKS(ms) ((TickType_t)(ms))
 #define pdPASS 1
+#define pdTRUE 1
+#define pdFALSE 0
 /* From esp_bit_defs.h, which the real FreeRTOS.h brings in. */
 #define BIT0 0x00000001
