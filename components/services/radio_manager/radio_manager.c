@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -97,6 +98,20 @@ static QueueHandle_t s_control_queue;
  * client already gave up on is recognised and dropped.
  */
 static QueueHandle_t s_response_queues[RADIO_MANAGER_CLIENT_COUNT];
+/*
+ * One acquire at a time per client, so tasks that share a client (the reply
+ * slot above is per client, not per task) do not share a reply either.
+ *
+ * English contract: acquire() holds its client's mutex from before the request
+ * is queued until the reply is read or the wait is given up, never while the
+ * lease is held. release() and the manager task never touch it. Without it, a
+ * second acquirer's queue reset (or its read of the reply) could drop the
+ * first one's grant: the first then waited out its whole timeout, or forever
+ * with portMAX_DELAY, while the manager kept the lease. Statically allocated
+ * (no heap).
+ */
+static StaticSemaphore_t s_acquire_mutex_storage[RADIO_MANAGER_CLIENT_COUNT];
+static SemaphoreHandle_t s_acquire_mutexes[RADIO_MANAGER_CLIENT_COUNT];
 static TaskHandle_t s_task_handle;
 static uint32_t s_next_request_id = 1;
 static portMUX_TYPE s_request_id_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -463,6 +478,12 @@ esp_err_t radio_manager_start(void)
             ESP_RETURN_ON_FALSE(s_response_queues[i] != NULL, ESP_ERR_NO_MEM, TAG, "response queue alloc failed");
         }
     }
+    for (size_t i = 0; i < RADIO_MANAGER_CLIENT_COUNT; ++i) {
+        if (s_acquire_mutexes[i] == NULL) {
+            s_acquire_mutexes[i] = xSemaphoreCreateMutexStatic(&s_acquire_mutex_storage[i]);
+            ESP_RETURN_ON_FALSE(s_acquire_mutexes[i] != NULL, ESP_ERR_NO_MEM, TAG, "acquire mutex create failed");
+        }
+    }
     if (s_task_handle != NULL) {
         return ESP_OK;
     }
@@ -527,27 +548,24 @@ static radio_manager_failure_t radio_manager_timeout_failure(uint32_t request_id
     return preparing ? RADIO_MANAGER_FAILURE_WIFI_CONNECT_TIMEOUT : RADIO_MANAGER_FAILURE_RADIO_BUSY;
 }
 
-esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
-                                radio_manager_lease_t *lease,
-                                TickType_t wait_ticks)
+/* What is left of the caller's wait budget, counted from started_at. */
+static TickType_t radio_manager_remaining_ticks(TickType_t started_at, TickType_t wait_ticks)
 {
-    ESP_RETURN_ON_FALSE(lease != NULL, ESP_ERR_INVALID_ARG, TAG, "lease is null");
-    if (request == NULL) {
-        ESP_LOGE(TAG, "request is null");
-        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_ARG, RADIO_MANAGER_FAILURE_INVALID_REQUEST, 0);
+    if (wait_ticks == portMAX_DELAY) {
+        return portMAX_DELAY;
     }
-    if (s_request_queue == NULL) {
-        ESP_LOGE(TAG, "manager not started");
-        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_STATE, RADIO_MANAGER_FAILURE_NOT_STARTED, 0);
-    }
-    QueueHandle_t response_queue = radio_manager_response_queue(request->client);
-    if (request->required == 0 || response_queue == NULL) {
-        ESP_LOGE(TAG, "%s", request->required == 0 ? "required capability is empty" : "unknown client");
-        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_ARG, RADIO_MANAGER_FAILURE_INVALID_REQUEST, 0);
-    }
+    TickType_t elapsed = xTaskGetTickCount() - started_at;
+    return elapsed < wait_ticks ? wait_ticks - elapsed : 0;
+}
 
+/* Runs with the client's acquire mutex held. */
+static esp_err_t radio_manager_acquire_locked(const radio_manager_request_t *request,
+                                              radio_manager_lease_t *lease,
+                                              TickType_t wait_ticks,
+                                              TickType_t started_at,
+                                              QueueHandle_t response_queue)
+{
     uint32_t request_id = radio_manager_next_request_id();
-    TickType_t started_at = xTaskGetTickCount();
     radio_manager_pending_request_t pending = {
         .request = *request,
         .request_id = request_id,
@@ -555,20 +573,17 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
         .expires_at = started_at + wait_ticks,
     };
 
-    /* An answer to an earlier, abandoned request may still be sitting here. */
+    /* An answer to an earlier, abandoned request may still be sitting here.
+       Safe now: no other acquirer of this client can have a reply in it. */
     (void)xQueueReset(response_queue);
 
-    if (xQueueSend(s_request_queue, &pending, wait_ticks) != pdTRUE) {
+    if (xQueueSend(s_request_queue, &pending, radio_manager_remaining_ticks(started_at, wait_ticks)) != pdTRUE) {
         return radio_manager_acquire_finish(lease, ESP_ERR_TIMEOUT, RADIO_MANAGER_FAILURE_QUEUE_FULL, 0);
     }
 
     radio_manager_response_t response = { 0 };
     while (true) {
-        TickType_t remaining = portMAX_DELAY;
-        if (pending.has_deadline) {
-            TickType_t elapsed = xTaskGetTickCount() - started_at;
-            remaining = elapsed < wait_ticks ? wait_ticks - elapsed : 0;
-        }
+        TickType_t remaining = radio_manager_remaining_ticks(started_at, wait_ticks);
 
         if (xQueueReceive(response_queue, &response, remaining) != pdTRUE) {
             radio_manager_control_msg_t cancel = {
@@ -598,6 +613,37 @@ esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
     lease->client = request->client;
     lease->token = request_id;
     return radio_manager_acquire_finish(lease, ESP_OK, RADIO_MANAGER_FAILURE_NONE, 0);
+}
+
+esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
+                                radio_manager_lease_t *lease,
+                                TickType_t wait_ticks)
+{
+    ESP_RETURN_ON_FALSE(lease != NULL, ESP_ERR_INVALID_ARG, TAG, "lease is null");
+    if (request == NULL) {
+        ESP_LOGE(TAG, "request is null");
+        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_ARG, RADIO_MANAGER_FAILURE_INVALID_REQUEST, 0);
+    }
+    if (s_request_queue == NULL) {
+        ESP_LOGE(TAG, "manager not started");
+        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_STATE, RADIO_MANAGER_FAILURE_NOT_STARTED, 0);
+    }
+    QueueHandle_t response_queue = radio_manager_response_queue(request->client);
+    if (request->required == 0 || response_queue == NULL) {
+        ESP_LOGE(TAG, "%s", request->required == 0 ? "required capability is empty" : "unknown client");
+        return radio_manager_acquire_finish(lease, ESP_ERR_INVALID_ARG, RADIO_MANAGER_FAILURE_INVALID_REQUEST, 0);
+    }
+
+    /* The wait budget starts here, so time spent queuing behind another task
+       of the same client counts against it. */
+    TickType_t started_at = xTaskGetTickCount();
+    SemaphoreHandle_t mutex = s_acquire_mutexes[request->client];
+    if (xSemaphoreTake(mutex, wait_ticks) != pdTRUE) {
+        return radio_manager_acquire_finish(lease, ESP_ERR_TIMEOUT, RADIO_MANAGER_FAILURE_RADIO_BUSY, 0);
+    }
+    esp_err_t err = radio_manager_acquire_locked(request, lease, wait_ticks, started_at, response_queue);
+    xSemaphoreGive(mutex);
+    return err;
 }
 
 esp_err_t radio_manager_release(const radio_manager_lease_t *lease)

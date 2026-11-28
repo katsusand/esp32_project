@@ -37,6 +37,10 @@ grant / reject の応答は client ごとの応答 queue で返し、呼び出�
 
 English supplement: acquire replies travel through a per-client reply queue keyed by request id, never through the caller's task notification. Client tasks may therefore use their own task notifications for wake-ups. Adding a client means adding an enumerator before `RADIO_MANAGER_CLIENT_COUNT`.
 
+応答の置き場（応答 queue）は task ごとではなく client ごとに 1 つです。そのため、同じ client を複数の task が使うと（例: 同じ `DEVICE_API` client で、ヘルスチェックの task と打刻の task が同時に acquire する）、後から来た task が応答 queue を空にした時に、先の task の grant を消してしまうことがありました。先の task は timeout まで待って cancel し、`portMAX_DELAY` なら待ち続け、その間 manager は lease を持ったままでした。今は client ごとの mutex（静的確保）で `radio_manager_acquire()` を 1 本ずつに直列化しています。mutex を持つのは「要求を出してから応答を読む（または諦める）まで」だけで、lease を持っている間は持ちません。`radio_manager_release()` と manager task は mutex を使わないので、release が待たされることも、デッドロックすることもありません。
+
+English contract: concurrent `radio_manager_acquire()` calls for the same client are serialised by a per-client mutex held only while the request is in flight, never while the lease is held. `wait_ticks` covers the time spent waiting for that mutex too (timeout: `ESP_ERR_TIMEOUT` with `RADIO_BUSY`), so the caller's total wait budget still holds. Different clients do not block each other. `radio_manager_release()` is safe from any task at any time.
+
 現在は Internet 利用の調停だけが責務です。ESP-NOW channel 管理、peer 管理、送受信 queue、payload 保持などは未実装です。
 
 ## Why It Exists
