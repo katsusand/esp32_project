@@ -65,6 +65,9 @@ esp_err_t radio_manager_start(void);
  * Wi-Fi setup has paused the connection: not a failure, try again after
  * setup. Other errors are real failures (no connection, timeout); the lease
  * then says why (radio_manager_lease_failure_text()).
+ *
+ * English contract: tasks may acquire the same client concurrently; they are
+ * served one at a time, and wait_ticks includes that queuing.
  */
 esp_err_t radio_manager_acquire(const radio_manager_request_t *request,
                                 radio_manager_lease_t *lease,
